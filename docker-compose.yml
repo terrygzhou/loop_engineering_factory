@@ -1,30 +1,63 @@
 services:
   chromadb:
     image: chromadb/chroma:latest
-    ports:
-      - "8000:8000"
+    # Internal-only — no host port binding (port 8000 often in use)
+    # Accessible via CHROMA_URL=http://chromadb:8000 inside container network
     volumes:
       - chroma_data:/chroma/chroma
     restart: unless-stopped
 
   orchestrator:
     build: .
-    orchestrator:
-      build: .
-      # CLI tool — no port needed. LLM runs externally (vLLM on host).
-      extra_hosts:
-        - "host.docker.internal:host-gateway"
-      environment:
-        - LLM_BASE_URL=http://host.docker.internal:8080/v1
-        - CHROMA_URL=http://chromadb:8000
-        - HIL_MODE=cli
-        - SKILLS_DIR=/root/.hermes/skills
-      volumes:
-        - skills_data:/root/.hermes/skills
-      depends_on:
-        - chromadb
-      restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - LLM_BASE_URL=http://host.docker.internal:8080/v1
+      - CHROMA_URL=http://chromadb:8000
+      - HIL_MODE=cli
+      - SKILLS_DIR=/root/.hermes/skills
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
+      - OTEL_SERVICE_NAME=loop-orchestrator
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+    volumes:
+      - skills_data:/root/.hermes/skills
+      - build_data:/app/build
+      - skill_data:/app/skills
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    depends_on:
+      - chromadb
+      - otel-collector
+    restart: unless-stopped
+
+  # ── Observability Stack ──
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector/config.yaml"]
+    # No host port bindings — shares collector with other projects on 4317/4318
+    # Use OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4317/v1/traces
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector/config.yaml:ro
+    restart: unless-stopped
+
+  phoenix:
+    image: phoenixArizeAI/phoenix:latest
+    ports:
+      - "6006:6006"
+    environment:
+      - PHOENIX_DATABASE_URI=/var/lib/phoenix/phoenix.db
+      - PHOENIX_HOST=0.0.0.0
+    volumes:
+      - phoenix_data:/var/lib/phoenix
+    restart: unless-stopped
 
 volumes:
   chroma_data:
   skills_data:
+  phoenix_data:
+  build_data:
+  skill_data:

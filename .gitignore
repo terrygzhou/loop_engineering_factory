@@ -36,3 +36,9 @@ graph/__pycache__/
 *.pyc
 # Local config overrides
 config/config.local.yaml
+
+# Cron setup scripts (contain local paths)
+cron/
+
+# UAT test runner (contains personal test data)
+tests/uat_runner.py

@@ -39,4 +39,5 @@ VOLUME /loop_engineering
 EXPOSE 80 8011
 
 # Start nginx and uvicorn backend
-CMD sh -c "nginx -g 'daemon off;' & uvicorn backend.app:app --host 0.0.0.0 --port 8011"
+# PYTHONPATH added via environment in docker-compose.yml
+CMD ["sh", "-c", "nginx -g 'daemon off;' & uvicorn backend.app:app --host 0.0.0.0 --port 8011 --app-dir /app"]

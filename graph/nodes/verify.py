@@ -115,9 +115,10 @@ def verify_node(state: dict) -> dict:
         phase_1_note = "SKIP" if skip_rebuild else "REQUIRED"
         phase_4_note = "SKIP (BUILD ran pytest)" if skip_pytest else "REQUIRED"
 
+        _base_url = os.getenv("PRODUCT_URL", "http://localhost:8010")
         task = (
             f"Run full UAT tests for project: {project_path}\n"
-            f"Base URL: http://localhost:8010\n\n"
+            f"Base URL: {_base_url}\n\n"
             "=== UAT EXECUTION ORDER ===\n"
             "Phase 0: Playwright setup (verify installed, chromium available)\n"
             f"Phase 1: Docker rebuild + health check ({phase_1_note})\n"
@@ -155,7 +156,7 @@ def verify_node(state: dict) -> dict:
         )
 
         result = invoke_skill(uat_skill["content"], task,
-                             "Project: " + project_path + "\nBase URL: http://localhost:8010",
+                             "Project: " + project_path + f"\nBase URL: {_base_url}",
                              llm=None)
         state["artifacts"]["uat_results"] = result
         feedback.append({"skill": "uat-workflow", "output": result[:500]})
@@ -218,7 +219,7 @@ def verify_node(state: dict) -> dict:
     state["phase"] = "VERIFY"
     state["feedback"] = state.get("feedback", []) + feedback
     state["next_phase"] = "SHIP"
-    state["human_approval_required"] = True
+    state["human_approval_required"] = False
 
     print(f"  Done: uat_pass_rate={uat_pass}, endpoints_checked={len(api_endpoints)}, pages_checked={len(page_routes)}")
     return state

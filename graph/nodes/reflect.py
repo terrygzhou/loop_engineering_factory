@@ -8,6 +8,8 @@ import json
 import yaml
 from tools.loader import build_skill_registry
 from tools.llm import get_llm, invoke_skill
+from tools.context_manager import prepare_context_for_llm
+from tools.audit_logger import AuditLog
 from feedback.aggregator import FeedbackAggregator
 from feedback.diff_engine import generate_config_diffs, dry_run_validation
 from feedback.chroma_client import get_chroma_client, store_pattern, query_patterns
@@ -112,38 +114,38 @@ def reflect_node(state: dict) -> dict:
             print(f"  {i}. [{c.get('risk_level', 'high')}] {c.get('skill', '?')}: {c.get('change', '?')}")
             print(f"     Rationale: {c.get('rationale', 'N/A')}")
 
-        hil_mode = os.getenv("HIL_MODE", "cli")
-        if hil_mode == "cli":
-            try:
-                approved = input("\n  Apply changes? [y/N]: ").strip().lower() in ('y', 'yes')
-            except (EOFError, KeyboardInterrupt):
-                approved = False
+        from api.input_manager import InputManager
+        im = InputManager()
+        request_id = im.request_input(
+            label="Apply config changes?",
+            prompt=f"Proposed {len(changes)} change(s). Apply? [y/N]",
+            timeout=300
+        )
+        response = im.wait_for_response(request_id)
+        approved = (response and response.strip().lower() in ('y', 'yes'))
 
-            if approved:
-                print("  ✓ Changes approved — applying config diffs...")
-                from feedback.diff_engine import apply_yaml_diff
-                apply_yaml_diff(guardrails_path, diffs)
+        if approved:
+            print("  ✓ Changes approved — applying config diffs...")
+            from feedback.diff_engine import apply_yaml_diff
+            apply_yaml_diff(guardrails_path, diffs)
 
-                # Commit via git-workflow
-                git_skill = skills.get("git-workflow", {})
-                if git_skill:
-                    print("  → Running git-workflow...")
-                    result = invoke_skill(git_skill["content"],
-                        f"Commit approved config changes for cycle {state['cycle_id']}. "
-                        f"Changes: {json.dumps(diffs, indent=2, default=str)}",
-                        "", llm=get_llm())
-                    state["artifacts"]["git_commit"] = result
-                    feedback.append({"action": "git_committed", "details": result[:200]})
-                else:
-                    print("  ⚠ git-workflow skill not available — manual commit required")
-                    feedback.append({"action": "git_skipped", "reason": "skill not found"})
-                feedback.append({"action": "changes_applied", "count": len(changes)})
+            # Commit via git-workflow
+            git_skill = skills.get("git-workflow", {})
+            if git_skill:
+                print("  → Running git-workflow...")
+                result = invoke_skill(git_skill["content"],
+                    f"Commit approved config changes for cycle {state['cycle_id']}. "
+                    f"Changes: {json.dumps(diffs, indent=2, default=str)}",
+                    "", llm=get_llm())
+                state["artifacts"]["git_commit"] = result
+                feedback.append({"action": "git_committed", "details": result[:200]})
             else:
-                print("  ✗ Changes rejected by human")
-                feedback.append({"action": "changes_rejected", "count": len(changes)})
+                print("  ⚠ git-workflow skill not available — manual commit required")
+                feedback.append({"action": "git_skipped", "reason": "skill not found"})
+            feedback.append({"action": "changes_applied", "count": len(changes)})
         else:
-            print("  ⚠ Telegram HIL mode — would poll for approval (not implemented in this run)")
-            feedback.append({"action": "hil_pending", "mode": hil_mode})
+            print("  ✗ Changes rejected by human")
+            feedback.append({"action": "changes_rejected", "count": len(changes)})
 
     # Step 7: Update config version
     state["config_version"] = f"{state['cycle_id']}-reflected"

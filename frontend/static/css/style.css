@@ -15,6 +15,7 @@
   --color-discover: #3b82f6;    /* blue */
   --color-define: #8b5cf6;      /* purple */
   --color-plan: #10b981;        /* green */
+  --color-arch-review: #f97316; /* orange */
   --color-build: #f59e0b;       /* amber */
   --color-seed: #eab308;        /* yellow */
   --color-verify: #ef4444;      /* red */
@@ -348,6 +349,7 @@ body {
 .log-phase.DISCOVER { color: var(--color-discover); }
 .log-phase.DEFINE { color: var(--color-define); }
 .log-phase.PLAN { color: var(--color-plan); }
+.log-phase.ARCH_REVIEW { color: var(--color-arch-review); }
 .log-phase.BUILD { color: var(--color-build); }
 .log-phase.SEED_DATA { color: var(--color-seed); }
 .log-phase.VERIFY { color: var(--color-verify); }
@@ -679,6 +681,7 @@ body {
 .pipeline-phase[data-phase="DISCOVER"] { --phase-color: var(--color-discover); }
 .pipeline-phase[data-phase="DEFINE"] { --phase-color: var(--color-define); }
 .pipeline-phase[data-phase="PLAN"] { --phase-color: var(--color-plan); }
+.pipeline-phase[data-phase="ARCH_REVIEW"] { --phase-color: var(--color-arch-review); }
 .pipeline-phase[data-phase="BUILD"] { --phase-color: var(--color-build); }
 .pipeline-phase[data-phase="SEED_DATA"] { --phase-color: var(--color-seed); }
 .pipeline-phase[data-phase="VERIFY"] { --phase-color: var(--color-verify); }

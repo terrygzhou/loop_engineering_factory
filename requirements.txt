@@ -8,3 +8,10 @@ typer>=0.25.0
 rich>=13.0
 chromadb>=0.6.0
 httpx>=0.28.0
+
+# Observability
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+opentelemetry-instrumentation-requests
+opentelemetry-instrumentation-asyncio
+prometheus-client

@@ -2,7 +2,9 @@
 SHIP node: Add observability, run pre-launch checklist, deploy, version with git.
 Skills: observability-and-instrumentation → shipping-and-launch → docker-compose-deployment → git-workflow
 """
+import json
 import os
+from datetime import datetime
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 
@@ -74,6 +76,46 @@ def ship_node(state: dict) -> dict:
         state["artifacts"]["git_log"] = result
         state["config_version"] = state["cycle_id"]
         feedback.append({"skill": "git-workflow", "output": result[:300]})
+
+    # ── Write live.json: product delivery record ──
+    # This is the bridge for future --improve cycles:
+    # DISCOVER reads this file to find and health-check the running product.
+    try:
+        from config.loader import config as _cfg
+        _storage_dir = _cfg.paths.storage_dir
+        _project_path = project_path or state.get("project_folder", "")
+        # Derive product_type from DISCOVER scan context if available
+        _ctx = state.get("artifacts", {}).get("project_context", "{}")
+        _product_type = json.loads(_ctx if isinstance(_ctx, str) else "{}").get("project_type", "python-fastapi")
+        _product_url = os.getenv("PRODUCT_URL", "http://localhost:8010")
+        _live = {
+            "version": "1",
+            "product_url": _product_url,
+            "health_endpoint": "/health",
+            "project_path": _project_path,
+            "project_name": state.get("project_name", ""),
+            "cycle_id": state["cycle_id"],
+            "deployed_at": datetime.now().isoformat(),
+            "product_type": _product_type,
+        }
+        _live_path = os.path.join(_storage_dir, "live.json")
+        os.makedirs(_storage_dir, exist_ok=True)
+        with open(_live_path, "w") as _f:
+            json.dump(_live, _f, indent=2)
+        feedback.append({"action": "live_json_written", "path": _live_path})
+        print(f"  ✓ live.json written: {_live_path}")
+
+        # ── Deployment history: append-only record ──
+        _deploy_dir = os.path.join(_storage_dir, "deployments")
+        os.makedirs(_deploy_dir, exist_ok=True)
+        _deploy_path = os.path.join(_deploy_dir, f"{state['cycle_id']}.json")
+        with open(_deploy_path, "w") as _f:
+            json.dump(_live, _f, indent=2)
+        feedback.append({"action": "deployment_recorded", "path": _deploy_path})
+        print(f"  ✓ deployment recorded: {_deploy_path}")
+
+    except Exception as _e:
+        print(f"  ⚠ Could not write live.json or deployment record: {_e}")
 
     # Mark as successfully launched
     state["metrics"] = state["metrics"].model_copy(update={

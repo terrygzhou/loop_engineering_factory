@@ -13,9 +13,9 @@ END_MARKER = END
 # Forward paths for forced progression after max retries (prevents livelock).
 _forward_paths = {
     "DISCOVER": "DEFINE",
-    "DEFINE": "HUMAN_REVIEW",
-    "HUMAN_REVIEW": "PLAN",
-    "PLAN": "BUILD",
+    "DEFINE": "PLAN",
+    "PLAN": "ARCH_REVIEW",
+    "ARCH_REVIEW": "BUILD",
     "BUILD": "SEED_DATA",
     "SEED_DATA": "VERIFY",
     "VERIFY": "SHIP",
@@ -23,57 +23,45 @@ _forward_paths = {
 
 
 def _get_loop_count(state: WorkflowState, phase: str) -> int:
-    """Thread-safe loop counter from state artifacts."""
+    """Read loop counter from state (READ ONLY — edges don't mutate)."""
     counts = state.get("artifacts", {}).get("loop_counts", {})
     return counts.get(phase, 0)
 
 
-def _inc_loop_count(state: WorkflowState, phase: str) -> None:
-    """Increment and persist loop count in state."""
-    counts = state.setdefault("artifacts", {}).setdefault("loop_counts", {})
-    counts[phase] = counts.get(phase, 0) + 1
+def _maybe_increment_loop(state: dict, phase: str) -> bool:
+    """
+    Increment loop counter and return True if max retries exceeded.
+    MUST be called from NODES (not edges) — LangGraph only persists node return values.
+    Usage in nodes:
+        loop_exceeded = _maybe_increment_loop(state, "DEFINE")
+        if loop_exceeded:
+            # force forward, don't loop back
+    NOTE: Must REPLACE state["artifacts"] with new dict for LangGraph shallow merge to see it.
+    """
+    new_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
+    new_counts[phase] = new_counts.get(phase, 0) + 1
+    state.setdefault("artifacts", {})["loop_counts"] = new_counts
+    return new_counts[phase] >= 2
 
 
 def route_phase(state: WorkflowState) -> str:
     """
     Route to the next phase based on current phase and metrics.
-    Implements quality gates that can loop back to earlier phases.
-    Also handles HIL gating — clears the flag and routes forward.
-    Loop counts live in state to avoid cross-cycle bleed.
+    Quality gates use loop counters persisted BY NODES (not edges),
+    since LangGraph doesn't persist edge-side mutations.
     """
     phase = state["phase"]
-
-    # HIL gating: only HUMAN_REVIEW has special HIL handling
-    # Other phases proceed to quality gate checks below
-    if phase == "HUMAN_REVIEW":
-        if not state.get("human_approval_required"):
-            user_input = state.get("artifacts", {}).get("user_input", {})
-            section_feedback = state.get("artifacts", {}).get("human_review_feedback", {})
-            if section_feedback:
-                any_rejected = any(not v.get("approved") for v in section_feedback.values())
-                if any_rejected:
-                    return "DEFINE"
-            elif user_input and not user_input.get("approved"):
-                return "DEFINE"
-            return "PLAN"
-        # HIL still pending — wait for executor to update state
-        return "HUMAN_REVIEW"
-
     m = state["metrics"]
     error = state.get("error")
 
-    loop_count = _get_loop_count(state, phase)
-    if loop_count >= 2:
-        _inc_loop_count(state, phase)  # reset via overwrite below
-        state.setdefault("artifacts", {}).setdefault("loop_counts", {})[phase] = 0
-        return _forward_paths.get(phase, END)
-
-    # If there's an error AND no more retries available, end the workflow
-    if error and loop_count >= 2:
-        return END
-
-    # DISCOVER -> always forward to DEFINE (no quality gate needed)
-    if phase == "DISCOVER":
+    # ARCH_REVIEW: explicit HIL gate — review all Plan outputs before BUILD
+    if phase == "ARCH_REVIEW":
+        if state.get("arch_review_approved"):
+            return "BUILD"
+        # Rejected — loop back to DEFINE with feedback
+        loop_count = _get_loop_count(state, phase)
+        if loop_count >= 2:
+            return "BUILD"  # Force forward after max retries
         return "DEFINE"
 
     # Load thresholds from guardrails (REFLECT can update between cycles)
@@ -83,41 +71,51 @@ def route_phase(state: WorkflowState) -> str:
     max_rev_revisions = get_threshold("max_review_revisions")
     min_uat_pass = get_threshold("uat_pass_rate")
 
-    # DEFINE -> check spec confidence
+    # Loop counters are INCREMENTED BY NODES, not edges.
+    # Nodes persist via model_copy(update={}) which survives LangGraph state updates.
+    # Edges only READ the counter to decide where to route.
+    loop_count = _get_loop_count(state, phase)
+    max_loops = 2
+    if loop_count >= max_loops:
+        return _forward_paths.get(phase, END)
+
+    # If there's an error AND no more retries available, end the workflow
+    if error and loop_count >= max_loops:
+        return END
+
+    # DISCOVER -> always forward to DEFINE (no quality gate needed)
+    if phase == "DISCOVER":
+        return "DEFINE"
+
+    # DEFINE -> check spec confidence (node increments counter on failure)
     if phase == "DEFINE":
         if m.spec_confidence < min_spec_conf:
-            _inc_loop_count(state, phase)
             return "DEFINE"  # Loop back to refine spec
         return "PLAN"
 
     # PLAN -> check architectural uncertainty
     if phase == "PLAN":
         if m.arch_uncertainty > max_arch_uncert:
-            _inc_loop_count(state, phase)
             return "PLAN"  # Loop back to resolve doubts
-        return "BUILD"
+        return "ARCH_REVIEW"
 
     # BUILD -> check security and review gates
     if phase == "BUILD":
         if m.security_findings > max_sec_findings:
-            _inc_loop_count(state, phase)
             return "BUILD"  # Fix security issues first
         if m.review_revisions > max_rev_revisions:
-            _inc_loop_count(state, phase)
             return "BUILD"  # Too many revisions, needs simplification
         return "SEED_DATA"
 
     # SEED_DATA -> check if seed executed successfully
     if phase == "SEED_DATA":
         if state.get("artifacts", {}).get("seed_errors"):
-            _inc_loop_count(state, phase)
             return "BUILD"  # Seed failed, rebuild
         return "VERIFY"
 
     # VERIFY -> check UAT pass rate
     if phase == "VERIFY":
         if m.uat_pass_rate < min_uat_pass:
-            _inc_loop_count(state, phase)
             return "BUILD"  # UAT failed, rebuild
         return "SHIP"
 

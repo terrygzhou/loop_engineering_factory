@@ -8,12 +8,15 @@ services:
       - /etc/localtime:/etc/localtime:ro
       # Mount the parent Loop Engineering project for real workflow imports (read-only)
       - ../:/loop_engineering:ro
-      # Mount skills directory (read-only)
-      - ../skills:/app/skills:ro
-      # Writable project output directory (matches CLI default)
-      - ~/workspace/projects:/workspace/projects
+      # Mount skills directory (read-only, absolute path for reliability)
+      - ${HOME}/workspace/projects/loop_engineering/skills:/app/skills:ro
+      # Writable project output directory
+      - ${HOME}/workspace/projects:/workspace/projects
     environment:
       - SKILLS_DIR=/app/skills
       - LLM_BASE_URL=http://172.17.0.1:8080/v1
-      # Writable project path inside container (matches CLI default)
+      - WORKSPACE_DIR=/workspace/projects
+      # Writable project path inside container
       - PROJECT_PATH=/workspace/projects
+      # Allow importing graph.main, graph.state, etc. from parent project
+      - PYTHONPATH=/loop_engineering:/app
