@@ -44,7 +44,7 @@ EXPOSE 80 8011 8081
 ENV PYTHONPATH=/app
 ENV PROJECT_NAME=loop_test
 ENV SPEC_TEXT="Build a simple REST API health check endpoint"
-ENV AUTO_APPROVE=true
+ENV AUTO_APPROVE=false
 ENV OBSERVABILITY_PORT=8081
 
 # Entrypoint starts: nginx (:80), uvicorn (:8011), health server (:8081)

@@ -41,38 +41,53 @@ def discover_node(state: dict) -> dict:
     state["next_phase"] = "DEFINE"
 
     # ── Pause 1: Project setup ──
-    setup = interrupt({
-        "type": "project_setup",
-        "fields": [
-            {"key": "project_name", "label": "Project name", "required": True},
-            {"key": "project_description", "label": "Project description", "required": True},
-            {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
-        ],
-    })
-    project_name = setup.get("project_name", "") or state.get("project_name", "")
-    project_description = setup.get("project_description", "")
-    context_folder = setup.get("context_folder", "") or state.get("context_folder", "")
+    # Check if project_name is already in state (from previous resume)
+    project_name = state.get("project_name", "") or state.get("project_description", "")
+    if project_name:
+        # Already collected — skip pause 1, use state values
+        project_name = state["project_name"]
+        project_description = state.get("project_description", "")
+        context_folder = state.get("context_folder", "")
+    else:
+        setup = interrupt({
+            "type": "project_setup",
+            "fields": [
+                {"key": "project_name", "label": "Project name", "required": True},
+                {"key": "project_description", "label": "Project description", "required": True},
+                {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
+            ],
+        })
+        project_name = setup.get("project_name", "")
+        project_description = setup.get("project_description", "")
+        context_folder = setup.get("context_folder", "")
+
     state["project_name"] = project_name
     state["project_description"] = project_description
     state["context_folder"] = context_folder
 
     # ── Pause 2: Interview questions ──
-    answers = interrupt({
-        "type": "interview",
-        "phase": "DISCOVER",
-        "questions": [
-            {"key": "core_behavior", "prompt": "What does this feature do?"},
-            {"key": "data_model", "prompt": "What entities and fields are involved?"},
-            {"key": "api_surface", "prompt": "What HTTP methods, paths, and auth requirements?"},
-            {"key": "validation", "prompt": "What input validation rules?"},
-            {"key": "ui_template", "prompt": "Any Jinja2 templates or UI requirements?"},
-            {"key": "integration", "prompt": "External services, databases, or APIs?"},
-            {"key": "deployment", "prompt": "Docker or infrastructure implications?"},
-            {"key": "edge_cases", "prompt": "Known edge cases?"},
-            {"key": "non_functional", "prompt": "Performance, security, or monitoring needs?"},
-        ],
-    })
-    interview_notes = answers.get("interview_notes", "")
+    # Check if interview already completed
+    if state.get("discover_interview_done") or state.get("interview_notes"):
+        # Already collected — skip pause 2
+        interview_notes = state.get("interview_notes", "")
+    else:
+        answers = interrupt({
+            "type": "interview",
+            "phase": "DISCOVER",
+            "questions": [
+                {"key": "core_behavior", "prompt": "What does this feature do?"},
+                {"key": "data_model", "prompt": "What entities and fields are involved?"},
+                {"key": "api_surface", "prompt": "What HTTP methods, paths, and auth requirements?"},
+                {"key": "validation", "prompt": "What input validation rules?"},
+                {"key": "ui_template", "prompt": "Any Jinja2 templates or UI requirements?"},
+                {"key": "integration", "prompt": "External services, databases, or APIs?"},
+                {"key": "deployment", "prompt": "Docker or infrastructure implications?"},
+                {"key": "edge_cases", "prompt": "Known edge cases?"},
+                {"key": "non_functional", "prompt": "Performance, security, or monitoring needs?"},
+            ],
+        })
+        interview_notes = answers.get("interview_notes", "")
+        state["discover_interview_done"] = True
 
     # ── Derive project_folder ──
     project_folder = state.get("project_folder", "")

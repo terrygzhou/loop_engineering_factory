@@ -137,6 +137,7 @@ class WorkflowBridge:
         self._project_name = ""
         self._spec_text = ""
         self._context_folder = ""
+        self._interrupt_counts: Dict[str, int] = {}  # Track interrupt index per phase
 
         # Initialize phase tracking
         for phase in self.PHASES:
@@ -369,6 +370,7 @@ class WorkflowBridge:
         self._seen_artifacts = {}
         self.user_inputs = {}
         self.events = []
+        self._interrupt_counts = {}  # Reset interrupt tracking on abort
 
         # Reset phase tracking
         for phase in self.PHASES:
@@ -626,59 +628,56 @@ class WorkflowBridge:
                 if self._aborted:
                     break
 
-                try:
-                    # Stream execution until interrupt or completion
-                    async for chunk in graph.stream(input_state, stream_mode="values", config=config):
-                        if self._aborted:
-                            break
+                # Stream execution until interrupt or completion
+                interrupted_chunk = None
+                async for chunk in graph.astream(input_state, stream_mode="values", config=config):
+                    if self._aborted:
+                        break
 
-                        phase = chunk.get("phase", "UNKNOWN")
-                        artifacts = chunk.get("artifacts", {})
+                    # Check for interrupt signal in chunk (LangGraph yields __interrupt__ on suspend)
+                    if "__interrupt__" in chunk:
+                        print(f"  → Interrupt detected in chunk: {chunk['__interrupt__']}")
+                        interrupted_chunk = chunk
+                        break
 
-                        # Capture artifacts
-                        if artifacts and phase in self.phase_states:
-                            self.phase_states[phase]["artifacts"].update(artifacts)
+                    phase = chunk.get("phase", "UNKNOWN")
+                    artifacts = chunk.get("artifacts", {})
 
-                        # Deduplicate artifact events
-                        for artifact_name, artifact_value in artifacts.items():
-                            artifact_key = f"{phase}:{artifact_name}"
-                            if artifact_key not in self._seen_artifacts or self._seen_artifacts[artifact_key] != artifact_value:
-                                self._seen_artifacts[artifact_key] = artifact_value
-                                ev = self.add_event(phase, "artifact", f"{artifact_name}: {str(artifact_value)[:200]}", {
-                                    "artifact_name": artifact_name,
-                                    "artifact_value": artifact_value,
-                                })
-                                await self.broadcast(ev)
+                    # Capture artifacts
+                    if artifacts and phase in self.phase_states:
+                        self.phase_states[phase]["artifacts"].update(artifacts)
 
-                        # Detect phase transitions
-                        if phase != self._last_phase:
-                            if self._last_phase is not None:
-                                ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
-                                await self.broadcast(ev)
-                            self.current_phase = phase
-                            ev = self.add_event(phase, "started", f"Entering {phase} phase")
-                            await self.broadcast(ev)
-                            self._last_phase = phase
-
-                            # Skill-driven interview at DEFINE
-                            if phase == "DEFINE":
-                                await self._send_interview(phase)
-                        else:
-                            ev = self.add_event(phase, "progress", f"{phase} processing...")
+                    # Deduplicate artifact events
+                    for artifact_name, artifact_value in artifacts.items():
+                        artifact_key = f"{phase}:{artifact_name}"
+                        if artifact_key not in self._seen_artifacts or self._seen_artifacts[artifact_key] != artifact_value:
+                            self._seen_artifacts[artifact_key] = artifact_value
+                            ev = self.add_event(phase, "artifact", f"{artifact_name}: {str(artifact_value)[:200]}", {
+                                "artifact_name": artifact_name,
+                                "artifact_value": artifact_value,
+                            })
                             await self.broadcast(ev)
 
-                    # Normal completion (stream ended without GraphInterrupt)
-                    if self._last_phase:
-                        ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
+                    # Detect phase transitions
+                    if phase != self._last_phase:
+                        if self._last_phase is not None:
+                            ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
+                            await self.broadcast(ev)
+                        self.current_phase = phase
+                        ev = self.add_event(phase, "started", f"Entering {phase} phase")
                         await self.broadcast(ev)
-                    break
+                        self._last_phase = phase
 
-                except GraphInterrupt as e:
-                    # OOTB: LangGraph interrupted via interrupt() in the node
-                    print(f"  → GraphInterrupt: {e}")
+                        # Skill-driven interview at DEFINE
+                        if phase == "DEFINE":
+                            await self._send_interview(phase)
+                    else:
+                        ev = self.add_event(phase, "progress", f"{phase} processing...")
+                        await self.broadcast(ev)
+
+                # If we hit an interrupt, handle HIL flow
+                if interrupted_chunk is not None:
                     graph_state = await graph.aget_state(config)
-
-                    # Check if this is a true suspension or normal end
                     if not graph_state.next:
                         if self._last_phase:
                             ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
@@ -693,13 +692,35 @@ class WorkflowBridge:
                         or self._last_phase
                         or "UNKNOWN"
                     )
+                    # Determine HIL type using interrupt counter (more reliable than state inspection)
+                    count = self._interrupt_counts.get(interrupted_phase, 0)
+                    self._interrupt_counts[interrupted_phase] = count + 1
+                    print(f"  → HIL pause for: {interrupted_phase}, interrupt_index={count}")
+
+                    if interrupted_phase == "DISCOVER" and count == 0:
+                        hil_type = "project_setup"
+                    elif interrupted_phase == "DISCOVER":
+                        hil_type = "interview"
+                    elif interrupted_phase == "ARCH_REVIEW":
+                        hil_type = "arch_review"
+                    else:
+                        hil_type = "generic"
 
                     # ── Wait for user input (bridge layer) ──
                     self.status = "waiting"
                     self.waiting_for = interrupted_phase
 
-                    # Send interview questions for DISCOVER
-                    if interrupted_phase == "DISCOVER":
+                    # Send appropriate form based on interrupt type
+                    if interrupted_phase == "DISCOVER" and hil_type == "project_setup":
+                        ev = self.add_event(interrupted_phase, "interview",
+                            "DISCOVER: project setup required",
+                            {"type": "project_setup", "fields": [
+                                {"key": "project_name", "label": "Project name", "required": True},
+                                {"key": "project_description", "label": "Project description", "required": True},
+                                {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
+                            ]})
+                        await self.broadcast(ev)
+                    elif interrupted_phase == "DISCOVER" and hil_type == "interview":
                         await self._send_interview(interrupted_phase)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
@@ -721,34 +742,16 @@ class WorkflowBridge:
                         break
 
                     if user_input is None:
-                        # Timeout — auto-approve
                         user_input = {"approved": True, "interview_notes": ""}
                         ev = self.add_event(interrupted_phase, "progress", f"{interrupted_phase} auto-approved (timeout)")
                         await self.broadcast(ev)
 
                     self.waiting_for = None
 
-                    # Build resume payload
+                    # Resume: send user input directly so the node's interrupt() returns it
                     if interrupted_phase == "DISCOVER":
-                        notes = user_input
-                        if isinstance(user_input, dict):
-                            notes = user_input.get("interview_notes") or user_input.get("raw_input") or ""
-                        existing = (current_chunk.get("artifacts") or {}).copy()
-                        existing["user_input"] = user_input
-                        existing["interview_notes"] = notes
-                        existing["discover_interview_done"] = True
-                        existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
-                        resume_data = {
-                            "human_approval_required": False,
-                            "interview_notes": notes or "",
-                            "discover_interview_done": True,
-                            "artifacts": existing,
-                        }
-                        if isinstance(user_input, dict):
-                            if user_input.get("project_name"):
-                                resume_data["project_name"] = user_input["project_name"]
-                            if user_input.get("project_description"):
-                                resume_data["project_description"] = user_input["project_description"]
+                        # Both pauses: pass user input directly as resume value
+                        resume_data = user_input
                     elif interrupted_phase == "ARCH_REVIEW":
                         resume_data = {
                             "human_approval_required": False,
@@ -758,10 +761,15 @@ class WorkflowBridge:
                     else:
                         resume_data = {"human_approval_required": False}
 
-                    # OOTB: resume with Command(resume=...)
                     print(f"  → Resuming {interrupted_phase} with Command(resume=...)")
                     input_state = Command(resume=resume_data)
                     continue
+                else:
+                    # Normal completion (no interrupt)
+                    if self._last_phase:
+                        ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
+                        await self.broadcast(ev)
+                    break
 
             # Mark workflow complete
             if not self._aborted:
