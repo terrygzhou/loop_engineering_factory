@@ -56,6 +56,10 @@ def main():
         spec = input("Brief description (or Enter to skip): ").strip()
 
     context = args.context
+    # Propagate --auto-approve to env so DISCOVER node can read it
+    if args.auto_approve:
+        os.environ["AUTO_APPROVE"] = "true"
+
     if not context and not args.auto_approve:
         context = input("Existing codebase path for discovery (or Enter for greenfield): ").strip()
 

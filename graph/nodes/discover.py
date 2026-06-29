@@ -83,7 +83,9 @@ def discover_node(state: dict) -> dict:
     auto = os.getenv("AUTO_APPROVE", "").lower() in ("true", "1", "yes")
     interrupted = state.get("artifacts", {}).get("discover_interview_done", False)
     existing_notes = state.get("interview_notes") or state.get("artifacts", {}).get("interview_notes")
-    if not auto and not interrupted and not existing_notes:
+    # BUG-FIX: Check auto-approve via state flag as fallback (env var may not persist)
+    auto_approved = state.get("arch_review_approved", False) or state.get("auto_approve", False)
+    if not auto and not interrupted and not existing_notes and not auto_approved:
         # First run, interactive mode — pause for user input
         raise GraphInterrupt(
             interrupts=[
