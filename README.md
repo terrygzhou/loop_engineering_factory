@@ -15,75 +15,28 @@ Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop)
 
 ## Architecture
 
-<table style="width:100%;border-collapse:collapse">
-<tr>
-<td style="vertical-align:top;padding:20px;background:#f8f9fa;border-radius:8px;border:1px solid #dee2e6">
-<h3 align="center">🔄 Loop Engineering - Component Architecture</h3>
-<p align="center">Self-improving AI-driven software development engine</p>
-
-<table style="width:100%;border-collapse:collapse">
-<tr>
-<td style="width:33%;vertical-align:top;padding:10px;border-right:1px solid #dee2e6">
-<h4>📥 CLI &amp; API</h4>
-<table style="width:100%;border-collapse:collapse">
-<tr><td><div style="background:#e8f5e9;padding:8px;border-radius:4px;margin:4px 0"><strong>main.py</strong><br><small>CLI Entry</small></div></td></tr>
-<tr><td><div style="background:#e8f5e9;padding:8px;border-radius:4px;margin:4px 0"><strong>api/app.py</strong><br><small>FastAPI</small></div></td></tr>
-<tr><td><div style="background:#e8f5e9;padding:8px;border-radius:4px;margin:4px 0"><strong>api/routes.py</strong><br><small>Endpoints</small></div></td></tr>
-<tr><td><div style="background:#e8f5e9;padding:8px;border-radius:4px;margin:4px 0"><strong>api/services.py</strong><br><small>Service Layer</small></div></td></tr>
-</table>
-</td>
-<td style="width:33%;vertical-align:top;padding:10px;border-right:1px solid #dee2e6">
-<h4>🔄 LangGraph</h4>
-<table style="width:100%;border-collapse:collapse">
-<tr><td><div style="background:#e3f2fd;padding:8px;border-radius:4px;margin:4px 0"><strong>graph/main.py</strong><br><small>StateGraph</small></div></td></tr>
-<tr><td><div style="background:#e3f2fd;padding:8px;border-radius:4px;margin:4px 0"><strong>graph/executor.py</strong><br><small>WorkflowRunner</small></div></td></tr>
-<tr><td><div style="background:#e3f2fd;padding:8px;border-radius:4px;margin:4px 0"><strong>graph/state.py</strong><br><small>State Mgmt</small></div></td></tr>
-<tr><td><div style="background:#e3f2fd;padding:8px;border-radius:4px;margin:4px 0"><strong>graph/edges.py</strong><br><small>Routing</small></div></td></tr>
-</table>
-</td>
-<td style="width:34%;vertical-align:top;padding:10px">
-<h4>📋 Phase Nodes</h4>
-<table style="width:100%;border-collapse:collapse">
-<tr><td><div style="background:#fff3e0;padding:8px;border-radius:4px;margin:4px 0"><strong>discover.py</strong><br><small>HIL + Scan</small></div></td></tr>
-<tr><td><div style="background:#fff3e0;padding:8px;border-radius:4px;margin:4px 0"><strong>define.py</strong><br><small>Spec Gen</small></div></td></tr>
-<tr><td><div style="background:#fff3e0;padding:8px;border-radius:4px;margin:4px 0"><strong>plan.py</strong><br><small>Architecture</small></div></td></tr>
-<tr><td><div style="background:#ffebee;padding:8px;border-radius:4px;margin:4px 0"><strong>arch_review.py</strong><br><small>HIL Gate</small></div></td></tr>
-<tr><td><div style="background:#fff3e0;padding:8px;border-radius:4px;margin:4px 0"><strong>build.py</strong><br><small>Code Gen</small></div></td></tr>
-</table>
-</td>
-</tr>
-<tr>
-<td style="vertical-align:top;padding:10px;border-right:1px solid #dee2e6">
-<h4>🛠 Tools</h4>
-<table style="width:100%;border-collapse:collapse">
-<tr><td><div style="background:#f3e5f5;padding:8px;border-radius:4px;margin:4px 0"><strong>tools/loader.py</strong><br><small>Skill Registry</small></div></td></tr>
-<tr><td><div style="background:#f3e5f5;padding:8px;border-radius:4px;margin:4px 0"><strong>tools/llm.py</strong><br><small>LLM Client</small></div></td></tr>
-<tr><td><div style="background:#f3e5f5;padding:8px;border-radius:4px;margin:4px 0"><strong>tools/context_manager.py</strong><br><small>Context Mgmt</small></div></td></tr>
-</table>
-</td>
-<td style="vertical-align:top;padding:10px;border-right:1px solid #dee2e6">
-<h4>👤 HIL Frontend</h4>
-<table style="width:100%;border-collapse:collapse">
-<tr><td><div style="background:#fce4ec;padding:8px;border-radius:4px;margin:4px 0"><strong>frontend/backend/app.py</strong><br><small>Frontend API</small></div></td></tr>
-<tr><td><div style="background:#fce4ec;padding:8px;border-radius:4px;margin:4px 0"><strong>workflow_bridge.py</strong><br><small>SSE Bridge</small></div></td></tr>
-<tr><td><div style="background:#fce4ec;padding:8px;border-radius:4px;margin:4px 0"><strong>abort_manager.py</strong><br><small>Abort Mgmt</small></div></td></tr>
-</table>
-</td>
-<td style="vertical-align:top;padding:10px">
-<h4>📊 Feedback</h4>
-<table style="width:100%;border-collapse:collapse">
-<tr><td><div style="background:#e8eaf6;padding:8px;border-radius:4px;margin:4px 0"><strong>feedback/aggregator.py</strong><br><small>Patterns</small></div></td></tr>
-<tr><td><div style="background:#e8eaf6;padding:8px;border-radius:4px;margin:4px 0"><strong>feedback/chroma_client.py</strong><br><small>ChromaDB</small></div></td></tr>
-<tr><td><div style="background:#e8eaf6;padding:8px;border-radius:4px;margin:4px 0"><strong>feedback/diff_engine.py</strong><br><small>Config Diffs</small></div></td></tr>
-</table>
-</td>
-</tr>
-</table>
-</td>
-</tr>
-</table>
+![Loop Engineering Architecture](architecture.png)
 
 ### Data Flow
+
+| Component | Connects To | Description |
+|-----------|-------------|------------|
+| CLI → API Gateway → LangGraph | Workflow Execution | Headless workflow execution |
+| HIL Frontend ↔ LangGraph | Human Review | Interrupt/resume for ARCH_REVIEW |
+| Phase Nodes → Tools | Skill Invocation | LLM-driven code generation |
+| Feedback → ChromaDB | Pattern Storage | Self-improvement loop |
+
+### Quality Gates
+
+| Gate | Condition | Outcome |
+|------|-----------|---------|
+| ARCH_REVIEW | Approved | → BUILD |
+| ARCH_REVIEW | Rejected | → DEFINE |
+| BUILD | Pass | → SEED_DATA |
+| BUILD | Fail | → PLAN |
+| VERIFY | Pass | → SHIP |
+| VERIFY | Fail | → BUILD |
+## Data Flow
 
 | Component | Connects To | Description |
 |-----------|-------------|------------|
