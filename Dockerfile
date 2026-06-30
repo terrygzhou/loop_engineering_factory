@@ -16,16 +16,14 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends nginx \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Chromium system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fonts-liberation libasound2 libatk-bridge2.0-0 libcups2 libdrm2 \
-    libgbm1 libnss3 libx11-6 libxcomposite1 libxcursor1 libxdamage1 \
-    libxfixes3 libxrandr2 libxshmfence1 libxtst6 libpango-1.0-0 \
-    libglib2.0-0 \
+# Install Playwright system deps (libxkbcommon, libglib, etc.)
+RUN apt-get update && apt-get install -y \
+    libxkbcommon-x11-0 libglib2.0-0 libatk-bridge2.0-0 libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Playwright Chromium browser
-RUN python3 -m playwright install chromium
+RUN pip install --no-cache-dir playwright \
+    && python3 -m playwright install chromium
 
 WORKDIR /app
 
