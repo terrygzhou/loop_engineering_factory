@@ -24,7 +24,7 @@ class CycleMetrics(BaseModel):
 class WorkflowState(TypedDict):
     """LangGraph state for the self-improving AI loop."""
     cycle_id: str                          # Unique ID for this cycle
-    phase: str                             # Current phase: DISCOVER/DEFINE/PLAN/ARCH_REVIEW/BUILD/SEED_DATA/VERIFY/SHIP/REFLECT
+    phase: str                             # Current phase: DISCOVER/DEFINE/PLAN/BUILD/SEED_DATA/VERIFY/SHIP/REFLECT
     artifacts: dict[str, str]              # spec.yaml, tasks.md, code diffs, logs, etc.
     metrics: CycleMetrics                  # Collected metrics
     feedback: List[dict]                   # LLM review comments, debug traces, etc.
@@ -51,7 +51,6 @@ class WorkflowState(TypedDict):
     diagrams: dict[str, str]               # Generated diagram file paths
     diagram_status: str                    # "pending" / "approved" / "rejected"
     diagram_feedback: str                  # User feedback on rejection
-    arch_review_approved: bool             # Explicit approval flag
 
     # ── Improve mode: connect factory to running product ──
     improve_mode: bool                       # True when --improve: load live.json, skip interview, use running product as context

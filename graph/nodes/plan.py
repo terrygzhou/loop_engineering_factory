@@ -324,12 +324,13 @@ def plan_node(state: dict) -> dict:
         "task_count": state["metrics"].task_count,
         "arch_uncertainty": arch_uncertainty,
     })
-    audit.log_node_transition("PLAN", "ARCH_REVIEW", "plan generation complete")
+    audit.log_node_transition("PLAN", "BUILD", "plan generation complete")
 
     state["phase"] = "PLAN"
     state["feedback"] = state.get("feedback", []) + feedback
-    state["next_phase"] = "ARCH_REVIEW"
-    state["human_approval_required"] = True
+    state["next_phase"] = "BUILD"
+    state["human_approval_required"] = False
+
 
     print(f"  ✓ task_count={state['metrics'].task_count}, arch_uncertainty={arch_uncertainty:.2f}, diagrams={diagram_count}")
     return state

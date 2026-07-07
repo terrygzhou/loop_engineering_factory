@@ -113,7 +113,7 @@ class WorkflowBridge:
     ]
 
     # Phases where we wait for user input
-    HIL_PHASES = {"DISCOVER", "PLAN", "VERIFY"}
+    HIL_PHASES = {"DISCOVER", "VERIFY"}
 
     # Orchestrator state file path (shared via Docker volume) — legacy, kept for backward compat
     ORCHESTRATOR_STATE_DIR = Path("/app/build")
@@ -695,14 +695,8 @@ class WorkflowBridge:
                             chunk = next_task.result()
                             chunk_count += 1
                         except StopAsyncIteration:
-                            # When arch_review_node calls interrupt(), the stream ends with StopAsyncIteration.
-                            # This IS the interrupt signal — treat it as such when ARCH_REVIEW just ran.
-                            if self.current_phase == "ARCH_REVIEW":
-                                interrupted_chunk = {"__interrupt__": "arch_review", "phase": "ARCH_REVIEW"}
-                                print("[Bridge] Interrupt via StopAsyncIteration at ARCH_REVIEW", flush=True)
-                            else:
-                                print("[Bridge] StopAsyncIteration (no interrupt)", flush=True)
-                            break  # Exit inner loop — prevents infinite loop + allows abort signal
+                            print("[Bridge] StopAsyncIteration (stream ended)", flush=True)
+                            break  # Exit inner loop — stream ended
                     else:
                         # Both completed (rare) — re-loop
                         print("[Bridge] both tasks completed (rare)", flush=True)
@@ -767,9 +761,15 @@ class WorkflowBridge:
                     # Determine HIL type from the actual interrupt value in the stream
                     interrupted_type = None
                     if interrupted_chunk and "__interrupt__" in interrupted_chunk:
-                        for iv in interrupted_chunk["__interrupt__"]:
-                            interrupted_type = iv.value.get("type")
-                            break
+                        raw = interrupted_chunk["__interrupt__"]
+                        # Two shapes: (1) synthetic string sentinel from StopAsyncIteration,
+                        # (2) tuple/list of Interrupt objects from LangGraph native interrupt()
+                        if isinstance(raw, str):
+                            interrupted_type = raw
+                        else:
+                            for iv in raw:
+                                interrupted_type = iv.value.get("type")
+                                break
 
                     print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
 
@@ -777,8 +777,6 @@ class WorkflowBridge:
                         hil_type = "project_setup"
                     elif interrupted_phase == "DISCOVER" and interrupted_type == "interview":
                         hil_type = "interview"
-                    elif interrupted_phase == "ARCH_REVIEW":
-                        hil_type = "arch_review"
                     else:
                         hil_type = "generic"
 
@@ -798,28 +796,6 @@ class WorkflowBridge:
                         await self.broadcast(ev)
                     elif interrupted_phase == "DISCOVER" and hil_type == "interview":
                         await self._send_interview(interrupted_phase)
-                    elif interrupted_phase == "ARCH_REVIEW":
-                        # Gather diagram PNGs from state for UI rendering
-                        diagram_pngs = {}
-                        graph_state = await graph.aget_state(config)
-                        current = graph_state.values or {}
-                        artifacts = current.get("artifacts", {})
-                        # Get PNG paths from diagram_pngs
-                        png_paths = artifacts.get("diagram_pngs", {})
-                        import base64
-                        for dname, png_path_str in png_paths.items():
-                            try:
-                                with open(png_path_str, 'rb') as f:
-                                    png_data = f.read()
-                                    # Base64 encode for inline transfer
-                                    b64 = base64.b64encode(png_data).decode('utf-8')
-                                    diagram_pngs[dname] = f"data:image/png;base64,{b64}"
-                            except Exception:
-                                diagram_pngs[dname] = ""
-                        ev = self.add_event(interrupted_phase, "review",
-                            "Architecture Review required",
-                            {"type": "arch_review", "diagram_pngs": diagram_pngs})
-                        await self.broadcast(ev)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
                         await self.broadcast(ev)
@@ -856,16 +832,6 @@ class WorkflowBridge:
                             resume_data = {"interview_notes": user_input}
                         else:
                             resume_data = {"interview_notes": str(user_input)}
-                    elif interrupted_phase == "ARCH_REVIEW":
-                        # Pass user's approval decision and feedback
-                        approved = user_input.get("approved", True)
-                        feedback = user_input.get("feedback", "")
-                        resume_data = {
-                            "human_approval_required": False,
-                            "arch_review_approved": approved,
-                            "diagram_status": "approved" if approved else "rejected",
-                            "diagram_feedback": feedback,
-                        }
                     else:
                         resume_data = {"human_approval_required": False}
 

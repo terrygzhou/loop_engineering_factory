@@ -14,8 +14,7 @@ END_MARKER = END
 _forward_paths = {
     "DISCOVER": "DEFINE",
     "DEFINE": "PLAN",
-    "PLAN": "ARCH_REVIEW",
-    "ARCH_REVIEW": "BUILD",
+    "PLAN": "BUILD",
     "BUILD": "SEED_DATA",
     "SEED_DATA": "VERIFY",
     "VERIFY": "SHIP",
@@ -54,16 +53,6 @@ def route_phase(state: WorkflowState) -> str:
     m = state["metrics"]
     error = state.get("error")
 
-    # ARCH_REVIEW: explicit HIL gate — review all Plan outputs before BUILD
-    if phase == "ARCH_REVIEW":
-        if state.get("arch_review_approved"):
-            return "BUILD"
-        # Rejected — loop back to DEFINE with feedback
-        loop_count = _get_loop_count(state, phase)
-        if loop_count >= 2:
-            return "BUILD"  # Force forward after max retries
-        return "DEFINE"
-
     # Load thresholds from guardrails (REFLECT can update between cycles)
     min_spec_conf = get_threshold("min_spec_confidence")
     max_arch_uncert = get_threshold("max_arch_uncertainty")
@@ -97,7 +86,7 @@ def route_phase(state: WorkflowState) -> str:
     if phase == "PLAN":
         if m.arch_uncertainty > max_arch_uncert:
             return "PLAN"  # Loop back to resolve doubts
-        return "ARCH_REVIEW"
+        return "BUILD"
 
     # BUILD -> check security and review gates
     if phase == "BUILD":

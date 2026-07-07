@@ -2,7 +2,7 @@
 Graph compilation: wire up the LangGraph workflow with all nodes and edges.
 
 Uses LangGraph OOTB APIs:
-- interrupt_after=["DISCOVER", "ARCH_REVIEW"] for HIL pauses
+- interrupt_after=[] (HIL removed — fully automatic)
 - SQLiteSaver for checkpoint persistence
 """
 from langgraph.graph import StateGraph, START, END
@@ -16,7 +16,6 @@ from graph.nodes.seed_data import seed_data_node
 from graph.nodes.verify import verify_node
 from graph.nodes.ship import ship_node
 from graph.nodes.reflect import reflect_node
-from graph.nodes.arch_review import arch_review_node
 from graph.edges import route_phase
 
 
@@ -24,11 +23,8 @@ def build_graph(checkpointer=None, auto_approve=False):
     """
     Build and compile the LangGraph workflow.
 
-    Flow: DISCOVER -> DEFINE -> PLAN -> ARCH_REVIEW -> BUILD
+    Flow: DISCOVER -> DEFINE -> PLAN -> BUILD
          -> SEED_DATA -> VERIFY -> SHIP -> REFLECT -> END
-
-    OOTB HIL: interrupt_after handles DISCOVER + ARCH_REVIEW pauses.
-    DISCOVER uses interrupt() for double-pause (project setup + interview).
     """
     workflow = StateGraph(WorkflowState)
 
@@ -36,7 +32,6 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow.add_node("DISCOVER", discover_node)
     workflow.add_node("DEFINE", define_node)
     workflow.add_node("PLAN", plan_node)
-    workflow.add_node("ARCH_REVIEW", arch_review_node)
     workflow.add_node("BUILD", build_node)
     workflow.add_node("SEED_DATA", seed_data_node)
     workflow.add_node("VERIFY", verify_node)
@@ -47,20 +42,13 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow.add_edge(START, "DISCOVER")
     workflow.add_edge("DISCOVER", "DEFINE")
     workflow.add_edge("DEFINE", "PLAN")
-    workflow.add_edge("PLAN", "ARCH_REVIEW")
-    workflow.add_conditional_edges("ARCH_REVIEW", route_phase)
+    workflow.add_edge("PLAN", "BUILD")
     workflow.add_conditional_edges("BUILD", route_phase)
     workflow.add_conditional_edges("SEED_DATA", route_phase)
     workflow.add_conditional_edges("VERIFY", route_phase)
     workflow.add_edge("SHIP", "REFLECT")
     workflow.add_edge("REFLECT", END)
 
-    # OOTB: interrupt_after handles HIL pauses
-    # DISCOVER: uses in-node interrupt() for double-pause (no interrupt_after needed)
-    # ARCH_REVIEW: interrupt_after pauses after node returns
-    interrupt_nodes: list[str] = [] if auto_approve else ["ARCH_REVIEW"]
-
     return workflow.compile(
         checkpointer=checkpointer,
-        interrupt_after=interrupt_nodes,
     )

@@ -145,7 +145,6 @@ class WorkflowService:
         log_request("diagram.review", workflow_id=workflow_id, approved=approved)
         if workflow_id in self._workflows:
             state = self._workflows[workflow_id]["state"]
-            state["arch_review_approved"] = approved
             state["diagram_status"] = "approved" if approved else "rejected"
             if not approved:
                 state["diagram_feedback"] = feedback

@@ -93,7 +93,6 @@ def build_executor_state(
         diagrams={},
         diagram_status="pending",
         diagram_feedback="",
-        arch_review_approved=False,
     )
 
 
@@ -152,7 +151,6 @@ class WorkflowRunner:
             improve_mode=improve_mode,
         )
         if auto_approve:
-            state["arch_review_approved"] = True
             state["diagram_status"] = "approved"
 
         log_event(logger, "workflow.run", project=project_name, skip_discover=state.get("skip_discover"))
@@ -276,21 +274,6 @@ class WorkflowRunner:
                         if input_data.get("project_description"):
                             resume_data["project_description"] = input_data["project_description"]
 
-                elif interrupted_phase == "ARCH_REVIEW":
-                    if auto_approve:
-                        resume_data = {
-                            "human_approval_required": False,
-                            "diagram_status": "approved",
-                            "arch_review_approved": True,
-                        }
-                    else:
-                        approved = input_data.get("arch_review_approved", False)
-                        resume_data = {
-                            "human_approval_required": False,
-                            "arch_review_approved": approved,
-                            "diagram_status": "approved" if approved else "rejected",
-                        }
-
                 else:
                     # Generic HIL phase
                     if auto_approve:
@@ -308,7 +291,7 @@ class WorkflowRunner:
                 print(f"  → Stream error: {e}")
                 break
 
-    # ── CLI HIL handlers (unchanged from original) ──
+    # ── CLI HIL handlers ──
 
     async def _hil_cli(self, phase: str, state: WorkflowState) -> Optional[Dict[str, str]]:
         """CLI handler for HIL — collects user input via stdin/stdout."""
@@ -322,8 +305,6 @@ class WorkflowRunner:
 
         if phase == "DISCOVER":
             return self._cli_interview(state)
-        elif phase == "ARCH_REVIEW":
-            return self._cli_arch_review(state)
         else:
             answer = input(f"  Approve {phase}? (y/n): ").strip().lower()
             if answer == "y":
@@ -379,81 +360,4 @@ class WorkflowRunner:
         answers["approved"] = True
         return answers
 
-    def _cli_arch_review(self, state: WorkflowState) -> dict:
-        """Display full Plan outputs for architecture review."""
-        from graph.nodes.review_contract import (
-            format_review_summary_for_cli,
-            format_review_section_for_cli,
-            make_review_result,
-        )
 
-        artifacts = state.get("artifacts", {})
-        diagrams = state.get("diagrams", {})
-
-        review_sections = []
-        if artifacts.get("spec_refined"):
-            review_sections.append({"key": "spec_refined", "label": "Specification", "content": artifacts["spec_refined"]})
-        if artifacts.get("plan"):
-            review_sections.append({"key": "plan", "label": "Implementation Plan", "content": artifacts["plan"]})
-        if artifacts.get("tasks"):
-            review_sections.append({"key": "tasks", "label": "Task Breakdown", "content": artifacts["tasks"]})
-        if diagrams:
-            diagram_content = ""
-            for name, path in diagrams.items():
-                try:
-                    from pathlib import Path
-                    diagram_content += f"\n### {name}\n{Path(path).read_text()}"
-                except Exception:
-                    diagram_content += f"\n### {name}\n(diagram file: {path})"
-            review_sections.append({"key": "diagrams", "label": "Architecture Diagrams", "content": diagram_content})
-
-        print("\n  === Architecture Review ===")
-        print(f"  Sections to review: {len(review_sections)}")
-        print(format_review_summary_for_cli(review_sections))
-
-        section_feedback = {}
-        for sec in review_sections:
-            key = sec["key"]
-            title = sec["label"].upper()
-            content = sec["content"]
-            print(format_review_section_for_cli(title, content))
-
-            answer = input(f"\n  Approve {title}? (y/n/e=edit): ").strip().lower()
-            if answer == "e":
-                edits = []
-                while True:
-                    line = input()
-                    if not line:
-                        break
-                    edits.append(line)
-                if edits:
-                    new_content = "\n".join(edits)
-                    artifacts[key] = new_content
-                    section_feedback[key] = {"approved": True, "edited": True, "content": new_content}
-                else:
-                    section_feedback[key] = {"approved": True, "edited": False}
-            elif answer == "y":
-                section_feedback[key] = {"approved": True}
-            elif answer == "n":
-                comment = input(f"  Feedback for {title}: ").strip()
-                section_feedback[key] = {"approved": False, "comment": comment}
-            else:
-                section_feedback[key] = {"approved": True}
-
-        result = make_review_result(section_feedback)
-        state["artifacts"]["arch_review_feedback"] = section_feedback
-        if diagrams:
-            state["artifacts"]["diagrams"] = diagrams
-            state["diagrams"] = diagrams
-
-        if result.approved:
-            return {"approved": True, "arch_review_approved": True, "section_feedback": section_feedback}
-        else:
-            feedback_text = "; ".join(
-                fb.get("comment", "") for fb in section_feedback.values() if not fb.get("approved", True)
-            )
-            return {
-                "approved": False, "feedback": feedback_text,
-                "arch_review_approved": False,
-                "diagram_feedback": feedback_text, "section_feedback": section_feedback,
-            }
