@@ -128,29 +128,36 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
 
 
 def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
-    """Convert .mmd diagrams to PNG for UI rendering (single browser session)."""
+    """Convert .mmd diagrams to PNG for UI rendering (single browser session).
+
+    Returns dict[str, str] mapping dtype → first PNG path (backward-compatible).
+    If a .mmd file contains multiple mermaid blocks, only the first block is rendered.
+    Additional PNGs are stored in state["diagram_extra_pngs"] as dict[str, list[str]].
+    """
     import asyncio
     import os
     import sys as _sys
     from pathlib import Path as _Path
 
     _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent))
-    from tools.convert_diagrams import extract_mermaid, make_html
+    from tools.convert_diagrams import extract_mermaid, extract_mermaids, make_html
 
-    # Collect all (type, html_path, png_path) tuples first
-    conversions = []
+    # Collect all (type, html_path, png_path, is_primary) tuples
+    conversions: list[tuple[str, _Path, _Path, bool]] = []
     for dtype, mmd_path_str in diagrams.items():
         mmd_path = Path(mmd_path_str)
         if not mmd_path.exists():
             continue
-        png_path = _Path(str(mmd_path.parent) + "/" + mmd_path.stem + ".png")
-        try:
-            content = mmd_path.read_text()
-            mermaid_content = extract_mermaid(content)
-            tmp_html_path = make_html(mermaid_content)
-            conversions.append((dtype, mmd_path, _Path(tmp_html_path), png_path))
-        except Exception as e:
-            print(f"  ⚠ Failed to prepare {dtype}: {e}")
+        blocks = extract_mermaids(mmd_path.read_text())
+        for idx, block in enumerate(blocks, 1):
+            is_primary = (idx == 1)
+            name = f"{mmd_path.stem}.png" if len(blocks) <= 1 else f"{mmd_path.stem}-{idx}.png"
+            png_path = _Path(str(mmd_path.parent) + "/" + name)
+            try:
+                tmp_html_path = make_html(block)
+                conversions.append((dtype, _Path(tmp_html_path), png_path, is_primary))
+            except Exception as e:
+                print(f"  ⚠ Failed to prepare {dtype} block {idx}: {e}")
 
     if not conversions:
         return {}
@@ -160,28 +167,32 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(viewport={"width": 1400, "height": 1000})
-            results = {}
-            for dtype, mmd_path, tmp_html, png_path in convs:
+            results: dict[str, str] = {}
+            extra: dict[str, list[str]] = {}
+            for dtype, tmp_html, png_path, is_primary in convs:
                 try:
                     await page.goto(f"file://{tmp_html.resolve()}")
                     await page.wait_for_timeout(5000)
                     await page.screenshot(path=str(png_path), full_page=False)
-                    results[dtype] = str(png_path)
-                    print(f"  ✓ {mmd_path.name} → {png_path.name}")
+                    if is_primary:
+                        results[dtype] = str(png_path)
+                    else:
+                        extra.setdefault(dtype, []).append(str(png_path))
+                    print(f"  ✓ {tmp_html.name} → {png_path.name}")
                 except Exception as e:
                     print(f"  ⚠ Failed to convert {dtype}: {e}")
             await browser.close()
-            return results
+            return results, extra
 
-    png_paths = asyncio.run(_batch_convert(conversions))
+    result, extra_pngs = asyncio.run(_batch_convert(conversions))
 
     # Clean up temp HTML files
-    for _, _, tmp_html, _ in conversions:
+    for _, tmp_html, _, _ in conversions:
         try:
             os.unlink(str(tmp_html))
         except OSError:
             pass
-    return png_paths
+    return result
 
 
 def plan_node(state: dict) -> dict:
