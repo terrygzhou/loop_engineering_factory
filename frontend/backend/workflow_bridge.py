@@ -457,6 +457,7 @@ class WorkflowBridge:
             if _rc_path:
                 _spec = importlib.util.spec_from_file_location("review_contract", _rc_path)
                 _mod = importlib.util.module_from_spec(_spec)
+                sys.modules["review_contract"] = _mod
                 _spec.loader.exec_module(_mod)
                 self._review_contract = _mod
         if self._review_contract:
