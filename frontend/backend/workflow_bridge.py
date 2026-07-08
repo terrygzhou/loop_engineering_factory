@@ -840,9 +840,10 @@ class WorkflowBridge:
                         await self.broadcast(ev)
                     elif interrupted_phase == "DISCOVER" and hil_type == "interview":
                         await self._send_interview(interrupted_phase)
-                    elif interrupted_phase == "REVIEW":
-                        # Pass graph_state.values (accumulated artifacts from PLAN) —
-                        # NOT interrupted_chunk (which only has __interrupt__ marker)
+                    elif interrupted_phase == "REVIEW" or interrupted_type == "review":
+                        # REVIEW may still show phase="PLAN" in checkpoint because REVIEW's
+                        # state["phase"]="REVIEW" isn't visible in aget_state() until resume.
+                        # interrupted_type carries the real interrupt type ("review") from the payload.
                         await self._send_review_plan(interrupted_phase, current_chunk)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
