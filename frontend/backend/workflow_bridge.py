@@ -108,12 +108,12 @@ class WorkflowBridge:
 
     # Phases in order
     PHASES = [
-        "DISCOVER", "DEFINE", "PLAN", "BUILD",
+        "DISCOVER", "DEFINE", "PLAN", "REVIEW", "BUILD",
         "SEED_DATA", "VERIFY", "SHIP", "REFLECT",
     ]
 
     # Phases where we wait for user input
-    HIL_PHASES = {"DISCOVER", "VERIFY"}
+    HIL_PHASES = {"DISCOVER", "REVIEW", "VERIFY"}
 
     # Orchestrator state file path (shared via Docker volume) — legacy, kept for backward compat
     ORCHESTRATOR_STATE_DIR = Path("/app/build")
@@ -425,6 +425,50 @@ class WorkflowBridge:
         await self.broadcast(ev)
 
     _review_contract: Optional[Any] = None  # type: ignore[misc]
+
+    async def _send_review_plan(self, phase: str, chunk: dict):
+        """Send PLAN artifacts to the UI for architecture review."""
+        artifacts = chunk.get("artifacts", {})
+        diagrams = artifacts.get("diagrams", {})
+        diagram_pngs = artifacts.get("diagram_pngs", {})
+
+        # Build diagram display info
+        diagram_display = {}
+        for dtype, mmd_path in diagrams.items():
+            diagram_display[dtype] = {
+                "mermaid": mmd_path,
+                "png": diagram_pngs.get(dtype, ""),
+                "label": dtype.replace("_", " ").title(),
+            }
+
+        metrics = chunk.get("metrics")
+        arch_uncertainty = getattr(metrics, "arch_uncertainty", 0.0) if metrics else 0.0
+        task_count = getattr(metrics, "task_count", 0) if metrics else 0
+        diagram_count = getattr(metrics, "diagram_count", 0) if metrics else 0
+
+        ev = self.add_event(
+            phase, "review",
+            f"REVIEW: architecture & plan review — {task_count} tasks, {diagram_count} diagrams",
+            {
+                "type": "human_review",
+                "label": "Architecture & Plan Review",
+                "spec_refined": artifacts.get("spec_refined", ""),
+                "plan": artifacts.get("plan", ""),
+                "tasks": artifacts.get("tasks", ""),
+                "analysis": artifacts.get("analysis", ""),
+                "doubt_resolution": artifacts.get("doubt_resolution", ""),
+                "checklist": artifacts.get("checklist", ""),
+                "api_contract": artifacts.get("api_contract", ""),
+                "interview_notes": artifacts.get("interview_notes", ""),
+                "diagrams": diagram_display,
+                "metrics": {
+                    "arch_uncertainty": round(arch_uncertainty, 2),
+                    "task_count": task_count,
+                    "diagram_count": diagram_count,
+                },
+            },
+        )
+        await self.broadcast(ev)
 
     async def _send_review(self, phase: str, chunk: dict):
         """Send full DEFINE output to the UI for human review.
@@ -796,6 +840,10 @@ class WorkflowBridge:
                         await self.broadcast(ev)
                     elif interrupted_phase == "DISCOVER" and hil_type == "interview":
                         await self._send_interview(interrupted_phase)
+                    elif interrupted_phase == "REVIEW":
+                        # Pass graph_state.values (accumulated artifacts from PLAN) —
+                        # NOT interrupted_chunk (which only has __interrupt__ marker)
+                        await self._send_review_plan(interrupted_phase, current_chunk)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
                         await self.broadcast(ev)
@@ -832,6 +880,12 @@ class WorkflowBridge:
                             resume_data = {"interview_notes": user_input}
                         else:
                             resume_data = {"interview_notes": str(user_input)}
+                    elif interrupted_phase == "REVIEW":
+                        # REVIEW: pass approved + feedback for the review node
+                        resume_data = {
+                            "approved": bool(user_input.get("approved", True)),
+                            "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
+                        }
                     else:
                         resume_data = {"human_approval_required": False}
 

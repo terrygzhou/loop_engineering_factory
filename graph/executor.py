@@ -274,6 +274,33 @@ class WorkflowRunner:
                         if input_data.get("project_description"):
                             resume_data["project_description"] = input_data["project_description"]
 
+                elif interrupted_phase == "REVIEW":
+                    # REVIEW: approve → BUILD, reject with comments → back to PLAN
+                    if isinstance(input_data, str):
+                        answer = input_data.strip().lower()
+                    elif isinstance(input_data, dict):
+                        answer = input_data.get("approved", True)
+                        if isinstance(answer, bool):
+                            resume_data = {
+                                "approved": answer,
+                                "feedback": input_data.get("feedback", input_data.get("user_review_comments", "")),
+                            }
+                            print(f"  → REVIEW resumed: approved={answer}")
+                            input_state = Command(resume=[resume_data])
+                            continue
+                        answer = str(answer).lower()
+                    else:
+                        answer = str(input_data).lower()
+
+                    approved = answer in ("y", "yes", True)
+                    resume_data = {
+                        "approved": approved,
+                        "feedback": input_data.get("feedback", "") if isinstance(input_data, dict) else "",
+                    }
+                    print(f"  → REVIEW resumed: approved={approved}")
+                    input_state = Command(resume=[resume_data])
+                    continue
+
                 else:
                     # Generic HIL phase
                     if auto_approve:
@@ -293,26 +320,64 @@ class WorkflowRunner:
 
     # ── CLI HIL handlers ──
 
-    async def _hil_cli(self, phase: str, state: WorkflowState) -> Optional[Dict[str, str]]:
+    async def _hil_cli(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """CLI handler for HIL — collects user input via stdin/stdout."""
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self._hil_cli_sync, phase, state)
         return result
 
-    def _hil_cli_sync(self, phase: str, state: WorkflowState) -> Optional[Dict[str, str]]:
+    def _hil_cli_sync(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """Synchronous part that actually blocks on input()."""
         print(f"\n  === {phase}: Human Input Required ===")
 
         if phase == "DISCOVER":
             return self._cli_interview(state)
-        else:
-            answer = input(f"  Approve {phase}? (y/n): ").strip().lower()
-            if answer == "y":
-                return {"approved": True}
-            elif answer == "n":
-                feedback = input("  Feedback: ").strip()
-                return {"approved": False, "feedback": feedback}
+
+        if phase == "REVIEW":
+            return self._cli_review(state)
+
+        answer = input(f"  Approve {phase}? (y/n): ").strip().lower()
+        if answer == "y":
             return {"approved": True}
+        elif answer == "n":
+            feedback = input("  Feedback: ").strip()
+            return {"approved": False, "feedback": feedback}
+        return {"approved": True}
+
+    def _cli_review(self, state) -> dict:
+        """CLI handler for REVIEW phase — render artifacts for human review."""
+        artifacts = (state or {}).get("artifacts", {})
+        diagrams = artifacts.get("diagrams", {})
+        diagram_pngs = artifacts.get("diagram_pngs", {})
+
+        # Render plan summary
+        plan = artifacts.get("plan", "")[:500]
+        tasks = artifacts.get("tasks", "")[:500]
+        analysis = artifacts.get("analysis", "")[:300]
+
+        print("\n  ┌─ ARCHITECTURE & PLAN REVIEW ──────────────────────────────")
+        print(f"  │ Spec: {len(artifacts.get('spec_refined', ''))} chars")
+        print(f"  │ Plan: {len(plan)} chars preview → {plan[:120]}...")
+        print(f"  │ Tasks: {len(tasks)} chars")
+        if analysis:
+            print(f"  │ Analysis: {analysis[:120]}...")
+
+        # Show diagram availability
+        if diagrams:
+            print(f"  │ Diagrams: {', '.join(diagrams.keys())}")
+            for dtype, png_path in diagram_pngs.items():
+                status = "✓ rendered" if png_path else "✗ no PNG"
+                print(f"  │   - {dtype}: {status}")
+
+        print(f"  └────────────────────────────────────────────────────────────\n")
+
+        answer = input("  Approve architecture & plan? (y/n): ").strip().lower()
+        if answer == "y":
+            return {"approved": True, "feedback": ""}
+        elif answer == "n":
+            feedback = input("  Feedback for PLAN (will be sent back for regeneration): ").strip()
+            return {"approved": False, "feedback": feedback}
+        return {"approved": True, "feedback": ""}
 
     def _cli_interview(self, state=None) -> Dict[str, str]:
         """Ask for project name, description, and interview questions."""

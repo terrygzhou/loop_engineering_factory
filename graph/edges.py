@@ -14,7 +14,8 @@ END_MARKER = END
 _forward_paths = {
     "DISCOVER": "DEFINE",
     "DEFINE": "PLAN",
-    "PLAN": "BUILD",
+    "PLAN": "REVIEW",
+    "REVIEW": "BUILD",
     "BUILD": "SEED_DATA",
     "SEED_DATA": "VERIFY",
     "VERIFY": "SHIP",
@@ -86,7 +87,13 @@ def route_phase(state: WorkflowState) -> str:
     if phase == "PLAN":
         if m.arch_uncertainty > max_arch_uncert:
             return "PLAN"  # Loop back to resolve doubts
-        return "BUILD"
+        return "REVIEW"
+
+    # REVIEW -> human gate: approve → BUILD, reject → back to PLAN
+    if phase == "REVIEW":
+        if state.get("artifacts", {}).get("review_approved"):
+            return "BUILD"
+        return "PLAN"
 
     # BUILD -> check security and review gates
     if phase == "BUILD":

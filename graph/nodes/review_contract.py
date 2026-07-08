@@ -14,6 +14,11 @@ REVIEW_SECTIONS: List[Dict[str, str]] = [
     {"key": "spec_refined", "label": "Specification"},
     {"key": "api_contract", "label": "API Contract"},
     {"key": "interview_notes", "label": "Interview Notes"},
+    {"key": "plan", "label": "Implementation Plan"},
+    {"key": "tasks", "label": "Task Breakdown"},
+    {"key": "analysis", "label": "Cross-Artifact Analysis"},
+    {"key": "doubt_resolution", "label": "Doubt Resolution"},
+    {"key": "checklist", "label": "Feature Checklist"},
 ]
 
 
