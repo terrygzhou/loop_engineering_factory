@@ -455,9 +455,9 @@ class WorkflowBridge:
             ]
             _rc_path = next((c for c in _rc_candidates if c.exists()), None)
             if _rc_path:
-                _spec = importlib.util.spec_from_file_location("review_contract", _rc_path)
+                _spec = importlib.util.spec_from_file_location("graph.nodes.review_contract", _rc_path)
                 _mod = importlib.util.module_from_spec(_spec)
-                sys.modules["review_contract"] = _mod
+                sys.modules["graph.nodes.review_contract"] = _mod
                 _spec.loader.exec_module(_mod)
                 self._review_contract = _mod
         if self._review_contract:
