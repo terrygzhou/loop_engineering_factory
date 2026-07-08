@@ -69,7 +69,8 @@ async def startup():
         print("✓ Real workflow available — will use actual LangGraph nodes")
     else:
         print("⚠ Real workflow unavailable — will use simulated mode")
-    await bridge._recover_workflow()
+    # Recover workflow if checkpoint exists from a previous session
+    asyncio.create_task(bridge._recover_workflow())
 
 
 @app.get("/", response_class=HTMLResponse)

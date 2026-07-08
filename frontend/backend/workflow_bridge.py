@@ -146,8 +146,8 @@ class WorkflowBridge:
         self._spec_text = ""
         self._context_folder = ""
         self._interrupt_counts: Dict[str, int] = {}  # Track interrupt index per phase
-        self._thread_id: Optional[str] = None          # Current LangGraph thread (for abort cleanup)
-        self._checkpointer = None                      # Current checkpointer instance
+        self._thread_id: Optional[str] = self._load_persisted_inputs().get("_thread_id")
+        self._checkpointer = None
 
         # Initialize phase tracking
         for phase in self.PHASES:
@@ -171,11 +171,18 @@ class WorkflowBridge:
         return {}
 
     def _save_persisted_inputs(self):
-        """Save user inputs to disk so they survive restarts."""
+        """Save user inputs + context to disk so they survive restarts."""
         try:
             self._user_inputs_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                **self.user_inputs,
+                "_thread_id": self._thread_id,
+                "_project_name": self._project_name,
+                "_context_folder": self._context_folder,
+                "_spec_text": self._spec_text,
+            }
             with open(self._user_inputs_path, "w") as f:
-                json.dump(self.user_inputs, f)
+                json.dump(payload, f)
         except Exception:
             pass
 
@@ -279,24 +286,32 @@ class WorkflowBridge:
         }
 
     async def _recover_workflow(self):
-        """On startup: detect active checkpoint + persisted input, auto-resume."""
-        cp = self._load_checkpoint_status()
-        if not cp or cp.get("status") == "idle":
+        """On startup: if persisted inputs for HIL phases exist, auto-resume."""
+        # Check if we have any persisted inputs that match a HIL phase
+        persisted = self._load_persisted_inputs()
+        thread_id = persisted.get("_thread_id")
+        if not thread_id:
             return
 
-        phase = cp.get("phase")
-        if phase and phase in self.HIL_PHASES:
+        # Check for HIL phase inputs
+        hil_phase = None
+        for phase in self.HIL_PHASES:
             if phase in self.user_inputs:
-                self.status = "running"
-                self.current_phase = phase
-                self.waiting_for = phase
-                self._project_name = cp.get("project_name", "")
-                self._context_folder = cp.get("context_folder", "")
-                self._spec_text = cp.get("spec_text", "")
-                if cp.get("cycle"):
-                    self.cycle = cp["cycle"]
-                print(f"[Bridge] Recovering workflow from checkpoint: {phase}", flush=True)
-                self._run_task = asyncio.create_task(self.run_real())
+                hil_phase = phase
+                break
+        if not hil_phase:
+            return
+
+        # Restore all context from persisted data
+        self._thread_id = thread_id
+        self._project_name = persisted.get("_project_name", "")
+        self._context_folder = persisted.get("_context_folder", "")
+        self._spec_text = persisted.get("_spec_text", "")
+        self.status = "running"
+        self.current_phase = hil_phase
+        self.waiting_for = hil_phase
+        print(f"[Bridge] Recovering workflow from checkpoint: {hil_phase} thread={thread_id}", flush=True)
+        self._run_task = asyncio.create_task(self.run_real())
 
     def _try_import_real(self):
         """Attempt to import the real workflow modules."""
@@ -705,7 +720,10 @@ class WorkflowBridge:
                 return
 
         self.status = "running"
-        self.cycle += 1
+        # On recovery (thread_id was pre-set by _recover_workflow), don't increment cycle
+        is_recovery = bool(self._thread_id)
+        if not is_recovery:
+            self.cycle += 1
         self.waiting_for = None
         self._last_phase = None
 
@@ -721,9 +739,14 @@ class WorkflowBridge:
 
         # Fresh checkpointer for this run — store for abort cleanup
         checkpointer = _get_checkpointer()
-        thread_id = str(_uuid.uuid4())
+        # Reuse existing thread_id if set (recovery), otherwise create fresh
+        if not self._thread_id:
+            thread_id = str(_uuid.uuid4())
+        else:
+            thread_id = self._thread_id
         self._checkpointer = checkpointer
         self._thread_id = thread_id
+        self._save_persisted_inputs()  # Persist thread_id for recovery on restart
         config = {"configurable": {"thread_id": thread_id}}
 
         # Build state via shared executor — guarantees identical state for both modes
@@ -746,7 +769,8 @@ class WorkflowBridge:
             from graph.main import build_graph
             graph = build_graph(checkpointer=checkpointer, auto_approve=self._auto_approve)
 
-            input_state = state
+            # On recovery: pass None to resume from checkpoint; fresh run: pass input_state
+            input_state = None if is_recovery else state
             abort_mgr = AbortManager.get()
             while not self._aborted and not completed:
                 if self._aborted:
