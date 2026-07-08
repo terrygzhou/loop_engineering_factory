@@ -64,12 +64,12 @@ bridge = WorkflowBridge()
 @app.on_event("startup")
 async def startup():
     print("✓ Loop Engineering UI backend started")
-    # Try to import real workflow on startup
     bridge._try_import_real()
     if bridge._use_real_workflow:
         print("✓ Real workflow available — will use actual LangGraph nodes")
     else:
         print("⚠ Real workflow unavailable — will use simulated mode")
+    await bridge._recover_workflow()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -195,6 +195,7 @@ async def abort_workflow():
 async def submit_input(user_input: UserInput):
     """Submit user input for a waiting phase."""
     bridge.user_inputs[user_input.phase] = user_input.value
+    bridge._save_persisted_inputs()
     return {"status": "received", "phase": user_input.phase}
 
 

@@ -129,7 +129,8 @@ class WorkflowBridge:
         self.phase_states: Dict[str, dict] = {}
         self.waiting_for: Optional[str] = None
         self.websocket_clients: List[WebSocket] = []
-        self.user_inputs: Dict[str, Any] = {}
+        self._user_inputs_path = Path("/app/build/user_inputs.json")
+        self.user_inputs: Dict[str, Any] = self._load_persisted_inputs()
         self._lock = asyncio.Lock()
         self._run_task: Optional[asyncio.Task] = None
         self._aborted = False
@@ -158,6 +159,25 @@ class WorkflowBridge:
                 "artifacts": {},
                 "messages": [],
             }
+
+    def _load_persisted_inputs(self) -> Dict[str, Any]:
+        """Load persisted user inputs from disk (survives restarts)."""
+        if self._user_inputs_path.exists():
+            try:
+                with open(self._user_inputs_path) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_persisted_inputs(self):
+        """Save user inputs to disk so they survive restarts."""
+        try:
+            self._user_inputs_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._user_inputs_path, "w") as f:
+                json.dump(self.user_inputs, f)
+        except Exception:
+            pass
 
     def _load_checkpoint_status(self) -> Dict[str, Any]:
         """Read workflow state from the SQLite checkpoint DB.
@@ -257,6 +277,26 @@ class WorkflowBridge:
             "project_name": project_name,
             "error": error,
         }
+
+    async def _recover_workflow(self):
+        """On startup: detect active checkpoint + persisted input, auto-resume."""
+        cp = self._load_checkpoint_status()
+        if not cp or cp.get("status") == "idle":
+            return
+
+        phase = cp.get("phase")
+        if phase and phase in self.HIL_PHASES:
+            if phase in self.user_inputs:
+                self.status = "running"
+                self.current_phase = phase
+                self.waiting_for = phase
+                self._project_name = cp.get("project_name", "")
+                self._context_folder = cp.get("context_folder", "")
+                self._spec_text = cp.get("spec_text", "")
+                if cp.get("cycle"):
+                    self.cycle = cp["cycle"]
+                print(f"[Bridge] Recovering workflow from checkpoint: {phase}", flush=True)
+                self._run_task = asyncio.create_task(self.run_real())
 
     def _try_import_real(self):
         """Attempt to import the real workflow modules."""
@@ -879,6 +919,7 @@ class WorkflowBridge:
                         await asyncio.sleep(1)
                         if interrupted_phase in self.user_inputs:
                             user_input = self.user_inputs.pop(interrupted_phase)
+                            self._save_persisted_inputs()
                             ev = self.add_event(interrupted_phase, "progress", "User input received")
                             await self.broadcast(ev)
                             break
