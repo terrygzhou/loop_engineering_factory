@@ -71,7 +71,7 @@ class SectionFeedback:
     approved: bool = True
     edited: bool = False
     comment: str = ""
-    content: Optional[str] = None
+    content: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
