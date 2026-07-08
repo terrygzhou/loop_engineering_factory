@@ -877,17 +877,41 @@ function renderReview(phase, data) {
     dom.detailContent.innerHTML = '<p class="detail-placeholder">All sections approved. The workflow will continue to PLAN...</p>';
   });
 
-  // Reject all
+  // Show a feedback modal before rejecting all
+  function showReviewRejectModal(sectionFeedback) {
+    dom.modalTitle.textContent = `${phase} — Reject All`;
+    dom.modalBody.innerHTML = `
+      <p>Please provide feedback explaining why you are rejecting all sections. This is <strong>required</strong>.</p>
+      <textarea id="review-reject-text" class="form-textarea" rows="5"
+                placeholder="Explain your feedback for rejecting all sections..."></textarea>
+    `;
+    dom.modalOverlay.style.display = 'flex';
+
+    dom.btnSubmit.onclick = () => {
+      const textarea = document.getElementById('review-reject-text');
+      const comments = textarea.value.trim();
+      if (!comments) {
+        alert('Feedback is required to reject all sections.');
+        textarea.focus();
+        return;
+      }
+      submitInput(phase, 'human_review', {approved: false, feedback: {comments, sectionFeedback}});
+      finishReview();
+      dom.detailTitle.textContent = `${phase} — Rejected`;
+      dom.detailContent.innerHTML = '<p class="detail-placeholder">Workflow will loop back to DEFINE for revisions.</p>';
+    };
+
+    setTimeout(() => document.getElementById('review-reject-text')?.focus(), 100);
+  }
+
+  // Reject all — show modal first
   document.getElementById('review-cancel').addEventListener('click', () => {
     const allSections = sections.map(s => s.key);
     const sectionFeedback = {};
     for (const key of allSections) {
       sectionFeedback[key] = reviewState[key] || {approved: false, comment: 'Rejected (no comment)'};
     }
-    submitInput(phase, 'human_review', {approved: false, section_feedback: sectionFeedback});
-    finishReview();
-    dom.detailTitle.textContent = `${phase} — Rejected`;
-    dom.detailContent.innerHTML = '<p class="detail-placeholder">Workflow will loop back to DEFINE for revisions.</p>';
+    showReviewRejectModal(sectionFeedback);
   });
 
   function finishReview() {

@@ -108,12 +108,12 @@ class WorkflowBridge:
 
     # Phases in order
     PHASES = [
-        "DISCOVER", "DEFINE", "PLAN", "REVIEW", "BUILD",
+        "DISCOVER", "DEFINE", "PLAN", "ARCH_REVIEW", "BUILD",
         "SEED_DATA", "VERIFY", "SHIP", "REFLECT",
     ]
 
     # Phases where we wait for user input
-    HIL_PHASES = {"DISCOVER", "REVIEW", "VERIFY"}
+    HIL_PHASES = {"DISCOVER", "ARCH_REVIEW", "VERIFY"}
 
     # Orchestrator state file path (shared via Docker volume) — legacy, kept for backward compat
     ORCHESTRATOR_STATE_DIR = Path("/app/build")
@@ -446,9 +446,27 @@ class WorkflowBridge:
         task_count = getattr(metrics, "task_count", 0) if metrics else 0
         diagram_count = getattr(metrics, "diagram_count", 0) if metrics else 0
 
+        # Lazy-load review_contract module (shared with _send_review)
+        if self._review_contract is None:
+            import importlib.util
+            _rc_candidates = [
+                Path(__file__).resolve().parent.parent.parent / "graph" / "nodes" / "review_contract.py",
+                Path("/loop_factory/graph/nodes/review_contract.py"),
+            ]
+            _rc_path = next((c for c in _rc_candidates if c.exists()), None)
+            if _rc_path:
+                _spec = importlib.util.spec_from_file_location("review_contract", _rc_path)
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                self._review_contract = _mod
+        if self._review_contract:
+            sections = self._review_contract.build_review_sections(artifacts)
+        else:
+            sections = []
+
         ev = self.add_event(
             phase, "review",
-            f"REVIEW: architecture & plan review — {task_count} tasks, {diagram_count} diagrams",
+            f"ARCH_REVIEW: architecture & plan review — {task_count} tasks, {diagram_count} diagrams",
             {
                 "type": "human_review",
                 "label": "Architecture & Plan Review",
@@ -460,7 +478,9 @@ class WorkflowBridge:
                 "checklist": artifacts.get("checklist", ""),
                 "api_contract": artifacts.get("api_contract", ""),
                 "interview_notes": artifacts.get("interview_notes", ""),
+                "sections": sections,
                 "diagrams": diagram_display,
+                "diagram_pngs": diagram_pngs,
                 "metrics": {
                     "arch_uncertainty": round(arch_uncertainty, 2),
                     "task_count": task_count,
@@ -840,12 +860,12 @@ class WorkflowBridge:
                         await self.broadcast(ev)
                     elif interrupted_phase == "DISCOVER" and hil_type == "interview":
                         await self._send_interview(interrupted_phase)
-                    elif interrupted_phase == "REVIEW" or interrupted_type == "review":
-                        # REVIEW may still show phase="PLAN" in checkpoint because REVIEW's
-                        # state["phase"]="REVIEW" isn't visible in aget_state() until resume.
+                    elif interrupted_phase == "ARCH_REVIEW" or interrupted_type == "review":
+                        # ARCH_REVIEW may still show phase="PLAN" in checkpoint because ARCH_REVIEW's
+                        # state["phase"]="ARCH_REVIEW" isn't visible in aget_state() until resume.
                         # interrupted_type carries the real interrupt type ("review") from the payload.
-                        print(f"  → REVIEW HIL detected (phase={interrupted_phase}, type={interrupted_type})", flush=True)
-                        await self._send_review_plan("REVIEW", current_chunk)
+                        print(f"  → ARCH_REVIEW HIL detected (phase={interrupted_phase}, type={interrupted_type})", flush=True)
+                        await self._send_review_plan("ARCH_REVIEW", current_chunk)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
                         await self.broadcast(ev)
@@ -882,8 +902,8 @@ class WorkflowBridge:
                             resume_data = {"interview_notes": user_input}
                         else:
                             resume_data = {"interview_notes": str(user_input)}
-                    elif interrupted_phase == "REVIEW" or interrupted_type == "review":
-                        # REVIEW may still show phase="PLAN" in checkpoint — use interrupted_type.
+                    elif interrupted_phase == "ARCH_REVIEW" or interrupted_type == "review":
+                        # ARCH_REVIEW may still show phase="PLAN" in checkpoint — use interrupted_type.
                         resume_data = {
                             "approved": bool(user_input.get("approved", True)),
                             "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
