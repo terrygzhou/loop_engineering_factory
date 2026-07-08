@@ -844,7 +844,8 @@ class WorkflowBridge:
                         # REVIEW may still show phase="PLAN" in checkpoint because REVIEW's
                         # state["phase"]="REVIEW" isn't visible in aget_state() until resume.
                         # interrupted_type carries the real interrupt type ("review") from the payload.
-                        await self._send_review_plan(interrupted_phase, current_chunk)
+                        print(f"  → REVIEW HIL detected (phase={interrupted_phase}, type={interrupted_type})", flush=True)
+                        await self._send_review_plan("REVIEW", current_chunk)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
                         await self.broadcast(ev)
@@ -881,8 +882,8 @@ class WorkflowBridge:
                             resume_data = {"interview_notes": user_input}
                         else:
                             resume_data = {"interview_notes": str(user_input)}
-                    elif interrupted_phase == "REVIEW":
-                        # REVIEW: pass approved + feedback for the review node
+                    elif interrupted_phase == "REVIEW" or interrupted_type == "review":
+                        # REVIEW may still show phase="PLAN" in checkpoint — use interrupted_type.
                         resume_data = {
                             "approved": bool(user_input.get("approved", True)),
                             "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
