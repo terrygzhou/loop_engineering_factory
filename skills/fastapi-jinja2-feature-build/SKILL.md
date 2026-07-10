@@ -20,38 +20,192 @@ Build features in this order — each step depends on the previous:
 3. **Service** — Business logic (CRUD, validation, auto-create).
 4. **Router** — API endpoints, connected to service layer.
 
-### Phase 2: Frontend
-5. **Template** — Jinja2 HTML extending `base.html`.
-6. **JS** — Module (`static/js/<feature>.js`) that calls API and renders content.
-7. **CSS** — Feature-specific styles in `static/css/<feature>.css` or existing `static/css/style.css`.
+### Phase 2: Frontend (Tailwind CSS)
 
-### Phase 3: Wiring
-8. **Web route** — Add `@app.get(\"/<feature>\")` in `main.py` serving the template.
-9. **Navigation** — Add link to nav/header if new top-level feature.
-10. **Dashboard** — Add card to `dashboard.html` if the feature is user-scoped.
+**All templates use Tailwind CSS via CDN.** No separate `.css` files unless the feature requires truly custom animations or vendor-specific overrides.
+
+5. **Template** — Jinja2 HTML extending `base.html` (which loads Tailwind CDN + custom theme).
+6. **JS** — Module (`static/js/<feature>.js`) that calls API and renders content.
+7. **Tailwind Utilities** — Use utility classes for layout, spacing, typography, responsive design. No feature-specific CSS unless absolutely necessary.
+
+**Responsive Breakpoints (mobile-first):**
+| Breakpoint | Class Prefix | Width |
+|------------|-------------|-------|
+| Small | `sm:` | ≥640px |
+| Medium | `md:` | ≥768px |
+| Large | `lg:` | ≥1024px |
+| Extra Large | `xl:` | ≥1280px |
 
 ## Template Structure
 
+### base.html — Tailwind CDN + Theme Config
+
 ```html
-{% extends \"base.html\" %}
-{% block title %}<Page Title> - Glory EV{% endblock %}
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}App{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: { 50: '#eff6ff', 100: '#dbeafe', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8' },
+            success: '#22c55e',
+            warning: '#f59e0b',
+            danger: '#ef4444',
+            dark: { bg: '#0f1117', card: '#161b22', border: '#30363d' },
+          }
+        }
+      }
+    }
+  </script>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-dark-bg text-gray-100 min-h-screen">
+  {% block content %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>
+```
+
+### Feature Template — Extend base.html
+
+```html
+{% extends "base.html" %}
+{% block title %}<Page Title> - App{% endblock %}
 {% block head %}
-<link rel=\"stylesheet\" href=\"/static/css/<feature>.css\">
+<!-- Only add feature-specific CSS if Tailwind utilities aren't enough -->
 {% endblock %}
 {% block content %}
-<section class=\"container <feature-page>\">
-    <h1><Page Title></h1>
-    <div class=\"<feature-content>\">
-        <!-- Feature-specific content -->
+<section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
+        <h1 class="text-2xl font-bold text-white">{{ title }}</h1>
+        {% block actions %}{% endblock %}
+    </div>
+    <div class="space-y-6">
+        <!-- Feature content -->
     </div>
 </section>
 {% endblock %}
 {% block scripts %}
-<script src=\"/static/js/<feature>.js\"></script>
+<script src="/static/js/<feature>.js"></script>
 {% endblock %}
 ```
 
-**Rule:** Templates should extend `base.html` and rely on `style.css` for layout, cards, buttons, badges, and forms. Page-specific CSS should only cover truly unique features (tabs, ratings, galleries). Self-contained CSS blocks are a sign the page was built in isolation and needs standardization.
+**Rule:** Templates extend `base.html` and use Tailwind utility classes for all styling. Custom CSS files are only for features that require vendor-specific CSS (e.g., animations beyond Tailwind's scope, print styles, or complex transitions). Self-contained CSS blocks are a sign the page was built in isolation and needs standardization.
+
+## Common UI Components (Tailwind)
+
+### Card
+
+```html
+<div class="bg-dark-card border border-dark-border rounded-lg p-6 shadow-sm hover:shadow-md transition-shadow">
+    <div class="flex items-center justify-between mb-4">
+        <h3 class="text-lg font-semibold text-white">{{ item.name }}</h3>
+        <span class="px-2 py-1 text-xs font-medium rounded-full bg-primary-500/20 text-primary-500">{{ item.status }}</span>
+    </div>
+    <p class="text-gray-400 text-sm">{{ item.description }}</p>
+</div>
+```
+
+### Form
+
+```html
+<form id="form-{{ feature }}" class="space-y-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {% for field in form_fields %}
+        <div class="flex flex-col space-y-2">
+            <label for="{{ field.id }}" class="text-sm font-medium text-gray-300">{{ field.label }}</label>
+            <input type="{{ field.type }}" id="{{ field.id }}" name="{{ field.name }}"
+                class="bg-dark-bg border border-dark-border rounded-md px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                placeholder="{{ field.placeholder }}" {% if field.required %}required{% endif %}>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="flex justify-end space-x-4">
+        <button type="button" class="px-4 py-2 text-gray-300 bg-transparent border border-dark-border rounded-md hover:bg-dark-border transition-colors">Cancel</button>
+        <button type="submit" class="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 transition-colors">Submit</button>
+    </div>
+</form>
+```
+
+### Data Table
+
+```html
+<div class="overflow-x-auto">
+    <table class="w-full text-left text-sm">
+        <thead class="text-xs uppercase bg-dark-bg border-b border-dark-border">
+            <tr>
+                {% for col in columns %}
+                <th class="px-4 py-3 font-medium text-gray-300">{{ col }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-dark-border">
+            {% for row in data %}
+            <tr class="hover:bg-dark-card transition-colors">
+                {% for cell in row %}
+                <td class="px-4 py-3 text-gray-200">{{ cell }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+```
+
+### Alert / Toast
+
+```html
+<!-- Success -->
+<div class="flex items-center gap-3 p-4 bg-success/10 border border-success/30 rounded-lg text-success">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 9"></path></svg>
+    <span>{{ message }}</span>
+</div>
+
+<!-- Error -->
+<div class="flex items-center gap-3 p-4 bg-danger/10 border border-danger/30 rounded-lg text-danger">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+    <span>{{ error }}</span>
+</div>
+```
+
+### Navigation Bar
+
+```html
+<nav class="bg-dark-card border-b border-dark-border px-6 py-4">
+    <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-8">
+            <a href="/" class="text-xl font-bold text-white">App</a>
+            {% for item in nav_items %}
+            <a href="{{ item.url }}" class="text-gray-300 hover:text-white transition-colors {{ 'text-white font-medium' if item.active else '' }}">{{ item.label }}</a>
+            {% endfor %}
+        </div>
+        <div class="flex items-center space-x-4">
+            <button class="text-gray-300 hover:text-white">🔔</button>
+            <div class="w-8 h-8 rounded-full bg-primary-500 flex items-center justify-center text-sm font-medium text-white">U</div>
+        </div>
+    </div>
+</nav>
+```
+
+### Responsive Grid Layout
+
+```html
+<!-- 1 col → 2 col → 3 col -->
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+    {% for item in items %}
+    <div class="bg-dark-card border border-dark-border rounded-lg p-6 shadow-sm">
+        <!-- item content -->
+    </div>
+    {% endfor %}
+</div>
+```
 
 ## ORM & SQLAlchemy Patterns
 
