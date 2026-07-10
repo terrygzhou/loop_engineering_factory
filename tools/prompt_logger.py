@@ -12,7 +12,9 @@ from typing import Optional
 from log.logging import setup_logger, log_event
 
 logger = setup_logger("prompt_logger")
-PROMPT_LOG_DIR = Path(os.getenv("PROMPT_LOG_DIR", "build/prompt_logs"))
+from config.loader import config
+
+PROMPT_LOG_DIR = Path(config.paths.prompt_log_dir)
 
 
 def log_llm_call(

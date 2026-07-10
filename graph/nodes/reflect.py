@@ -6,6 +6,7 @@ Skills: meta-agent-reflection (internal) → git-workflow (commit approved diffs
 import os
 import json
 import yaml
+from config.loader import config
 from tools.loader import build_skill_registry
 from tools.llm import get_llm, invoke_skill
 from tools.context_manager import prepare_context_for_llm
@@ -25,13 +26,13 @@ def reflect_node(state: dict) -> dict:
     skills = state.get("artifacts", {}).get("skill_registry")
     if skills is None:
         print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(os.getenv("SKILLS_DIR", "~/.hermes/skills"))
+        skills = build_skill_registry(config.workflow.skill_registry_path)
         state.setdefault("artifacts", {})["skill_registry"] = skills
     feedback = []
 
     # Step 1: Record cycle data
     print("  → Recording cycle data...")
-    aggregator = FeedbackAggregator(storage_dir=os.getenv("STORAGE_DIR", "./storage"))
+    aggregator = FeedbackAggregator(storage_dir=config.paths.storage_dir)
     aggregator.record_cycle(
         cycle_id=state["cycle_id"],
         phase="COMPLETE",
@@ -43,7 +44,7 @@ def reflect_node(state: dict) -> dict:
 
     # Step 2: Load guardrails
     print("  → Loading guardrails...")
-    guardrails_path = os.getenv("GUARDRAILS_PATH", "./config/guardrails.yaml")
+    guardrails_path = config.paths.guardrails_path
     try:
         with open(guardrails_path, 'r') as f:
             guardrails = yaml.safe_load(f)

@@ -59,10 +59,11 @@ class HealthHandler(BaseHTTPRequestHandler):
     def _ready(self):
         """Check dependencies — chromadb + OTel collector."""
         import httpx
+        from config.loader import config as _cfg
         ok = True
         deps = {}
         try:
-            r = httpx.get(os.getenv("CHROMA_URL", "http://localhost:8000") + "/api/v1/heartbeat", timeout=3)
+            r = httpx.get(_cfg.services.chroma.url + "/api/v1/heartbeat", timeout=3)
             deps["chromadb"] = r.status_code == 200
         except Exception:
             deps["chromadb"] = False
@@ -91,7 +92,8 @@ def start_health_server(port: int = 0):
     """Start health server in a background thread."""
     global health_server
     if port == 0:
-        port = int(os.getenv("OBSERVABILITY_PORT", "8081"))
+        from config.loader import config
+        port = int(config.services.observability.port)
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     health_server = server
     thread = Thread(target=server.serve_forever, daemon=True)

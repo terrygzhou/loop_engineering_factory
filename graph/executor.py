@@ -39,9 +39,9 @@ logger = setup_logger("executor")
 def get_skills_dir() -> str:
     """Resolve skills directory — config > Docker mount > local default."""
     sd = config.paths.skills_dir
-    if Path("/app/skills").exists():
-        return "/app/skills"
-    return sd
+    if Path(sd).exists():
+        return sd
+    return config.paths.project_path
 
 
 def get_project_path() -> str:
@@ -103,7 +103,9 @@ def get_graph(checkpointer=None, auto_approve=False):
 
 def _get_checkpointer():
     """Create a SQLiteSaver checkpointer with configurable DB path."""
-    db_path = os.environ.get("CHECKPOINT_DB", "/app/build/checkpoints.db")
+    from config.loader import config as _cfg
+    build_dir = _cfg.paths.build_dir
+    db_path = os.environ.get("CHECKPOINT_DB", os.path.join(build_dir, "checkpoints.db"))
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)

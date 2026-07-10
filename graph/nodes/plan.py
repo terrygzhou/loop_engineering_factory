@@ -9,6 +9,7 @@ import json
 import os
 import re
 from pathlib import Path
+from config.loader import config as _cfg
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.context_manager import prepare_context_for_llm
@@ -34,11 +35,7 @@ def _load_feedback_context(state: dict) -> str:
         parts.append("\n== End Historical Lessons ==")
         return "\n".join(parts)
     except Exception as e:
-        import os
-        if os.environ.get("CHROMA_URL"):
-            print(f"  ⚠ Could not load historical feedback: {e}")
         return ""
-
 
 def _estimate_arch_uncertainty(artifacts: dict) -> float:
     """
@@ -223,7 +220,7 @@ def plan_node(state: dict) -> dict:
     skills = state.get("artifacts", {}).get("skill_registry")
     if skills is None:
         print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(os.getenv("SKILLS_DIR", "~/.hermes/skills"))
+        skills = build_skill_registry(_cfg.workflow.skill_registry_path)
         state.setdefault("artifacts", {})["skill_registry"] = skills
     feedback = []
 
@@ -239,22 +236,22 @@ def plan_node(state: dict) -> dict:
         context = spec
         if feedback_context:
             context += f"\n\n{feedback_context}\n"
-        # Context optimization
-        optimized = prepare_context_for_llm({"context": context}, max_tokens=16000)
-        task = f"Create implementation plan for: {state.get('spec_path', '')}"
+        # Context optimization — tight budget: skill+task take ~2K tokens
+        optimized = prepare_context_for_llm({"context": context}, max_tokens=10000)
+        task = f"Create implementation plan for: {state.get('spec_path', '')}. Keep it concise — focus on file structure, key components, and task breakdown. Max 3000 words."
         result = invoke_skill(plan_skill["content"], task, optimized["context"], llm=None)
-        state["artifacts"]["plan"] = result
+        state["artifacts"]["plan"] = result[:40000]
         feedback.append({"skill": "writing-plans", "output": result[:300]})
 
     # ── Step 2: Break into tasks ──
     tasks_skill = skills.get("speckit-tasks", {})
     if tasks_skill:
         print("  → Running speckit-tasks...")
-        task = "Break the plan into actionable, dependency-ordered tasks"
+        task = "Break the plan into actionable, dependency-ordered tasks. Be concise — 1-2 lines per task."
         result = invoke_skill(tasks_skill["content"], task,
-                             state.get("artifacts", {}).get("plan", ""),
+                             state.get("artifacts", {}).get("plan", "")[:15000],
                              llm=None)
-        state["artifacts"]["tasks"] = result
+        state["artifacts"]["tasks"] = result[:20000]
         task_count = result.count("- [") + result.count("1.") + result.count("2.") + result.count("3.")
         state["metrics"] = state["metrics"].model_copy(update={
             "task_count": max(task_count, 1),
@@ -265,22 +262,22 @@ def plan_node(state: dict) -> dict:
     analyze_skill = skills.get("speckit-analyze", {})
     if analyze_skill:
         print("  → Running speckit-analyze...")
-        task = "Analyze consistency between spec, plan, and tasks"
+        task = "Analyze consistency between spec, plan, and tasks. Be concise — focus on critical gaps only."
         result = invoke_skill(analyze_skill["content"], task,
-                             state.get("artifacts", {}).get("plan", ""),
+                             state.get("artifacts", {}).get("plan", "")[:10000],
                              llm=None)
-        state["artifacts"]["analysis"] = result
+        state["artifacts"]["analysis"] = result[:15000]
         feedback.append({"skill": "speckit-analyze", "output": result[:300]})
 
     # ── Step 4: Doubt-driven development (challenge assumptions) ──
     doubt_skill = skills.get("doubt-driven-development", {})
     if doubt_skill:
         print("  → Running doubt-driven-development...")
-        task = "Challenge the architectural assumptions in the plan"
+        task = "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only."
         result = invoke_skill(doubt_skill["content"], task,
-                             state.get("artifacts", {}).get("plan", ""),
+                             state.get("artifacts", {}).get("plan", "")[:10000],
                              llm=None)
-        state["artifacts"]["doubt_resolution"] = result
+        state["artifacts"]["doubt_resolution"] = result[:15000]
         feedback.append({"skill": "doubt-driven-development", "output": result[:300]})
 
     # ── Step 5: Generate checklist ──

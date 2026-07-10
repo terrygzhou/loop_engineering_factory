@@ -39,5 +39,6 @@ async def health():
 # Allow running as main
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("API_PORT", "8010"))
+    from config.loader import config
+    port = int(config.services.loop_api.port)
     uvicorn.run(app, host="0.0.0.0", port=port)

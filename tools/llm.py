@@ -19,23 +19,26 @@ except ImportError as e:
     SystemMessage = None
 
 
+from config.loader import config
+
 def get_llm(model: str = None, base_url: str = None):
     """Get a configured LLM instance. Returns None if langchain_openai unavailable."""
+    from config.loader import config as _cfg
     if ChatOpenAI is None:
         print(f"WARNING: langchain_openai not installed ({_import_error}). Running in dry-run mode.")
         return None
 
     if not model:
-        model = os.getenv("LLM_MODEL", "Qwen3.6-27B")
+        model = config.services.llm.model
     if not base_url:
-        base_url = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+        base_url = _cfg.services.llm.base_url
 
     return ChatOpenAI(
         model=model,
         base_url=base_url,
-        api_key=os.getenv("OPENAI_API_KEY", "not-needed"),
-        temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
-        max_tokens=32768,
+        api_key=config.services.llm.api_key,
+        temperature=config.services.llm.temperature,
+        max_tokens=config.services.llm.max_tokens,
     )
 
 
@@ -56,8 +59,8 @@ def invoke_skill(skill_content: str, task: str, context: str = "", llm=None, max
     if llm is None:
         llm = get_llm()
 
-    model = os.getenv("LLM_MODEL", "Qwen3.6-27B")
-    max_tokens = int(os.getenv("LLM_MAX_TOKENS", "32768"))
+    model = config.services.llm.model
+    max_tokens = config.services.llm.max_tokens
 
     if llm is None:
         result = f"[DRY-RUN] Skill({len(skill_content)} chars) → Task: {task}"
@@ -73,13 +76,16 @@ def invoke_skill(skill_content: str, task: str, context: str = "", llm=None, max
     prepared = prepare_context_for_llm(contexts, max_tokens=max_tokens)
     headroom_info = prepared["headroom"]
 
+    # Use compressed context from prepare_context_for_llm — not raw contexts
+    compressed_context = prepared['context']
+
     system_prompt = (
         f"You are an expert following these instructions:\n\n"
         f"{contexts['skill_instructions']}\n\n"
         f"Respond with actionable output. Be specific, include file paths, "
         f"code snippets, and verification steps."
     )
-    user_prompt = f"{contexts['task']}\n\nContext: {contexts['context']}"
+    user_prompt = compressed_context if compressed_context else contexts['task']
 
     try:
         response = llm.invoke([

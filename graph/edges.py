@@ -16,9 +16,7 @@ _forward_paths = {
     "DEFINE": "PLAN",
     "PLAN": "REVIEW",
     "REVIEW": "BUILD",
-    "BUILD": "SEED_DATA",
-    "SEED_DATA": "VERIFY",
-    "VERIFY": "SHIP",
+    "BUILD": "SHIP",
 }
 
 
@@ -95,24 +93,14 @@ def route_phase(state: WorkflowState) -> str:
             return "BUILD"
         return "PLAN"
 
-    # BUILD -> check security and review gates
+    # BUILD -> check security, review, and UAT gates (subgraph handles seed+test+UAT)
     if phase == "BUILD":
         if m.security_findings > max_sec_findings:
             return "BUILD"  # Fix security issues first
         if m.review_revisions > max_rev_revisions:
             return "BUILD"  # Too many revisions, needs simplification
-        return "SEED_DATA"
-
-    # SEED_DATA -> check if seed executed successfully
-    if phase == "SEED_DATA":
-        if state.get("artifacts", {}).get("seed_errors"):
-            return "BUILD"  # Seed failed, rebuild
-        return "VERIFY"
-
-    # VERIFY -> check UAT pass rate
-    if phase == "VERIFY":
         if m.uat_pass_rate < min_uat_pass:
-            return "BUILD"  # UAT failed, rebuild
+            return "BUILD"  # UAT failed, rebuild inside subgraph
         return "SHIP"
 
     # SHIP -> always reflect

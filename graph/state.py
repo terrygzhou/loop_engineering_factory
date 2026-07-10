@@ -62,3 +62,7 @@ class WorkflowState(TypedDict):
     # ── Audit trail ──
     trace_id: str                            # Correlation ID for all logs in this workflow
     audit_entries: List[dict]               # Accumulated audit log entries
+
+    # ── BUILD subgraph state (carried through for merge) ──
+    build_backlog: Optional[List[dict]]     # Backlog items from BUILD subgraph
+    build_uat_pass_rate: float              # UAT pass rate from BUILD subgraph

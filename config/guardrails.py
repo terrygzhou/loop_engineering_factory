@@ -28,15 +28,14 @@ _DEFAULTS: Dict[str, Any] = {
 
 
 def _resolve_path() -> str:
-    """Resolve guardrails path: env > config.yaml > default."""
-    env_path = os.getenv("GUARDRAILS_PATH")
-    if env_path:
-        return env_path
+    """Resolve guardrails path: config.yaml > default."""
+    from config.loader import config
+    _guardrails_path = config.paths.guardrails_path
     # Try alongside this module
     mod_path = Path(__file__).resolve().parent / "guardrails.yaml"
     if mod_path.exists():
         return str(mod_path)
-    return "./config/guardrails.yaml"
+    return _guardrails_path
 
 
 def load_guardrails() -> Dict[str, Any]:

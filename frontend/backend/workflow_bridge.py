@@ -109,17 +109,22 @@ class WorkflowBridge:
     # Phases in order
     PHASES = [
         "DISCOVER", "DEFINE", "PLAN", "ARCH_REVIEW", "BUILD",
-        "SEED_DATA", "VERIFY", "SHIP", "REFLECT",
+        "SHIP", "REFLECT",
     ]
 
     # Phases where we wait for user input
-    HIL_PHASES = {"DISCOVER", "ARCH_REVIEW", "VERIFY"}
+    HIL_PHASES = {"DISCOVER", "ARCH_REVIEW"}
 
-    # Orchestrator state file path (shared via Docker volume) — legacy, kept for backward compat
-    ORCHESTRATOR_STATE_DIR = Path("/app/build")
+    # Orchestrator state directory (configurable via config/config.yaml paths.build_dir)
+    @property
+    def orchestrator_state_dir(self) -> Path:
+        from config.loader import config as _cfg
+        return Path(_cfg.paths.build_dir)
 
-    # SQLite checkpoint DB path (matches executor's _get_checkpointer default)
-    CHECKPOINT_DB = Path("/app/build/checkpoints.db")
+    # SQLite checkpoint DB path
+    @property
+    def checkpoint_db(self) -> Path:
+        return self.orchestrator_state_dir / "checkpoints.db"
 
     def __init__(self):
         self.status = "idle"
@@ -129,7 +134,7 @@ class WorkflowBridge:
         self.phase_states: Dict[str, dict] = {}
         self.waiting_for: Optional[str] = None
         self.websocket_clients: List[WebSocket] = []
-        self._user_inputs_path = Path("/app/build/user_inputs.json")
+        self._user_inputs_path = self.orchestrator_state_dir / "user_inputs.json"
         self.user_inputs: Dict[str, Any] = self._load_persisted_inputs()
         self._lock = asyncio.Lock()
         self._run_task: Optional[asyncio.Task] = None
@@ -195,7 +200,7 @@ class WorkflowBridge:
         """
         import sqlite3
 
-        db_path = os.environ.get("CHECKPOINT_DB", str(self.CHECKPOINT_DB))
+        db_path = os.environ.get("CHECKPOINT_DB", str(self.checkpoint_db))
 
         if not os.path.exists(db_path):
             return {}
@@ -721,7 +726,22 @@ class WorkflowBridge:
 
         self.status = "running"
         # On recovery (thread_id was pre-set by _recover_workflow), don't increment cycle
-        is_recovery = bool(self._thread_id)
+        # Validate: thread_id only counts as recovery if a matching checkpoint actually exists
+        has_stale_thread_id = bool(self._thread_id)
+        is_recovery = has_stale_thread_id
+        if has_stale_thread_id:
+            try:
+                from langgraph.errors import EmptyInputError
+                test_config = {"configurable": {"thread_id": self._thread_id}}
+                cp_list = list(checkpointer.list(test_config))
+                if not cp_list:
+                    # Stale thread_id — no matching checkpoint
+                    print(f"[Bridge] Stale thread_id {self._thread_id} — no checkpoint, treating as fresh", flush=True)
+                    self._thread_id = None
+                    is_recovery = False
+            except Exception:
+                is_recovery = False
+
         if not is_recovery:
             self.cycle += 1
         self.waiting_for = None
@@ -824,8 +844,19 @@ class WorkflowBridge:
                             chunk = next_task.result()
                             chunk_count += 1
                         except StopAsyncIteration:
-                            print("[Bridge] StopAsyncIteration (stream ended)", flush=True)
-                            break  # Exit inner loop — stream ended
+                            # interrupt() causes StopAsyncIteration — get actual interrupt type from checkpoint
+                            print(f"  → StopAsyncIteration detected", flush=True)
+                            interrupted_chunk = {"__interrupt__": "resume"}
+                            # Try to determine the interrupt type from the checkpoint
+                            try:
+                                state_snapshot = checkpointer.list(config).next()
+                                if state_snapshot:
+                                    meta = getattr(state_snapshot, "metadata", None) or {}
+                                    if meta and "interrupted_type" in meta:
+                                        interrupted_chunk = {"__interrupt__": meta["interrupted_type"]}
+                            except Exception:
+                                pass  # Fall through to resume logic
+                            break
                     else:
                         # Both completed (rare) — re-loop
                         print("[Bridge] both tasks completed (rare)", flush=True)
@@ -872,33 +903,24 @@ class WorkflowBridge:
 
                 # If we hit an interrupt, handle HIL flow
                 if interrupted_chunk is not None:
-                    graph_state = await graph.aget_state(config)
-                    if not graph_state.next:
-                        if self._last_phase:
-                            ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
-                            await self.broadcast(ev)
-                        break
-
-                    # Determine interrupted phase
-                    current_chunk = graph_state.values or {}
-                    interrupted_phase = (
-                        current_chunk.get("phase")
-                        or current_chunk.get("next_phase")
-                        or self._last_phase
-                        or "UNKNOWN"
-                    )
-                    # Determine HIL type from the actual interrupt value in the stream
+                    # Determine interrupted phase — don't rely on aget_state which can fail
+                    # Determine interrupted type first — DISCOVER interrupts fire before any phase chunk
                     interrupted_type = None
                     if interrupted_chunk and "__interrupt__" in interrupted_chunk:
                         raw = interrupted_chunk["__interrupt__"]
-                        # Two shapes: (1) synthetic string sentinel from StopAsyncIteration,
-                        # (2) tuple/list of Interrupt objects from LangGraph native interrupt()
                         if isinstance(raw, str):
                             interrupted_type = raw
                         else:
                             for iv in raw:
                                 interrupted_type = iv.value.get("type")
                                 break
+
+                    # DISCOVER interrupts (project_setup, interview) fire before any regular chunk
+                    # arrives, so _last_phase is still None. Detect them by type.
+                    if interrupted_type in ("project_setup", "interview"):
+                        interrupted_phase = "DISCOVER"
+                    else:
+                        interrupted_phase = self._last_phase or state.get("phase", "UNKNOWN")
 
                     print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
 
@@ -930,7 +952,7 @@ class WorkflowBridge:
                         # state["phase"]="ARCH_REVIEW" isn't visible in aget_state() until resume.
                         # interrupted_type carries the real interrupt type ("review") from the payload.
                         print(f"  → ARCH_REVIEW HIL detected (phase={interrupted_phase}, type={interrupted_type})", flush=True)
-                        await self._send_review_plan("ARCH_REVIEW", current_chunk)
+                        await self._send_review_plan("ARCH_REVIEW", state)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
                         await self.broadcast(ev)

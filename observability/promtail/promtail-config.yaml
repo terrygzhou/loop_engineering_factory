@@ -15,10 +15,7 @@ scrape_configs:
         filters:
           - name: name
             values:
-              - loop_factory-orchestrator-1
-              - loop_factory-otel-collector-1
-              - loop_factory-phoenix-1
-              - loop_factory-chromadb-1
+              - loop_factory-loop-1
     relabel_configs:
       - source_labels: ['__meta_docker_container_name']
         target_label: container_name

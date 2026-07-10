@@ -10,8 +10,10 @@ the human reviewer to approve or reject with comments.
 
 Uses LangGraph OOTB interrupt() for the HIL pause.
 """
+import json
 import os
 from pathlib import Path
+from config.loader import config as _cfg
 from langgraph.types import interrupt
 from tools.audit_logger import AuditLog
 
@@ -45,7 +47,7 @@ def review_node(state: dict) -> dict:
     })
 
     # ── Auto-approve mode (headless Docker) ──
-    auto_approve = os.getenv("AUTO_APPROVE", "").lower() in ("true", "1", "yes")
+    auto_approve = _cfg.workflow.auto_approve
     if auto_approve:
         print("  → Auto-approve mode — skipping review gate")
         state["artifacts"]["review_approved"] = True
@@ -104,6 +106,22 @@ def review_node(state: dict) -> dict:
             "diagram_count": diagram_count,
         },
     }
+
+    # ── Auto-approve mode (headless Docker) ──
+    auto_approve = _cfg.workflow.auto_approve
+
+    if auto_approve:
+        # Skip interrupt — auto-approve
+        approved = True
+        user_review_comments = ""
+        state["artifacts"]["review_approved"] = True
+        state["diagram_status"] = "approved"
+        state["next_phase"] = "BUILD"
+        print("  ✓ REVIEW auto-approved (headless mode) — proceeding to BUILD")
+        audit.log_node_output("REVIEW", {"approved": True, "comments": ""})
+        audit.log_node_transition("REVIEW", "BUILD", "plan auto-approved")
+        state["phase"] = "REVIEW"
+        return state
 
     print(f"  → Review payload: {task_count} tasks, {diagram_count} diagrams, uncertainty={arch_uncertainty:.2f}")
     print("  → Pausing for human review...")

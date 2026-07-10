@@ -8,6 +8,7 @@ Tools: playwright (headless Chromium), browser_navigate, browser_snapshot(full=t
 import os
 import re
 import json
+from config.loader import config
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from config.guardrails import get_threshold
@@ -25,7 +26,7 @@ def verify_node(state: dict) -> dict:
     skills = state.get("artifacts", {}).get("skill_registry")
     if skills is None:
         print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(os.getenv("SKILLS_DIR", "~/.hermes/skills"))
+        skills = build_skill_registry(config.workflow.skill_registry_path)
         state.setdefault("artifacts", {})["skill_registry"] = skills
     feedback = []
 
@@ -115,7 +116,8 @@ def verify_node(state: dict) -> dict:
         phase_1_note = "SKIP" if skip_rebuild else "REQUIRED"
         phase_4_note = "SKIP (BUILD ran pytest)" if skip_pytest else "REQUIRED"
 
-        _base_url = os.getenv("PRODUCT_URL", "http://localhost:8010")
+        from config.loader import config as _cfg
+        _base_url = _cfg.services.product.url
         task = (
             f"Run full UAT tests for project: {project_path}\n"
             f"Base URL: {_base_url}\n\n"
@@ -123,7 +125,7 @@ def verify_node(state: dict) -> dict:
             "Phase 0: Playwright setup (verify installed, chromium available)\n"
             f"Phase 1: Docker rebuild + health check ({phase_1_note})\n"
             "  - If BUILD phase already compiled and deployed (build_status=pass), skip rebuild.\n"
-            "  - Just do a health check: curl http://localhost:8010/ and confirm 200/301/302.\n"
+            "  - Just do a health check: curl " + config.services.product.url + "/ and confirm 200/301/302.\n"
             "  - If BUILD did not run or failed, do full: docker compose build --no-cache api + up -d + health check\n"
             "Phase 2: Pre-UAT bulk API sweep (curl all discovered routes)\n"
             "Phase 3: Template completeness check (cross-check get_template vs files)\n"

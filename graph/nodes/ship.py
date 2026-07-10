@@ -5,6 +5,7 @@ Skills: observability-and-instrumentation → shipping-and-launch → docker-com
 import json
 import os
 from datetime import datetime
+from config.loader import config
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 
@@ -18,7 +19,7 @@ def ship_node(state: dict) -> dict:
     skills = state.get("artifacts", {}).get("skill_registry")
     if skills is None:
         print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(os.getenv("SKILLS_DIR", "~/.hermes/skills"))
+        skills = build_skill_registry(config.workflow.skill_registry_path)
         state.setdefault("artifacts", {})["skill_registry"] = skills
     feedback = []
 
@@ -52,7 +53,7 @@ def ship_node(state: dict) -> dict:
             print("  → BUILD already compiled and deployed. Skipping Docker rebuild.")
             import subprocess
             result = subprocess.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8010/"],
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", config.services.product.url + "/"],
                 capture_output=True, text=True, timeout=15,
             )
             state["artifacts"]["deploy_logs"] = f"SKIP_REBUILD: container health={result.stdout.strip()}"
@@ -87,7 +88,8 @@ def ship_node(state: dict) -> dict:
         # Derive product_type from DISCOVER scan context if available
         _ctx = state.get("artifacts", {}).get("project_context", "{}")
         _product_type = json.loads(_ctx if isinstance(_ctx, str) else "{}").get("project_type", "python-fastapi")
-        _product_url = os.getenv("PRODUCT_URL", "http://localhost:8010")
+        from config.loader import config as _cfg
+        _product_url = _cfg.services.product.url
         _live = {
             "version": "1",
             "product_url": _product_url,

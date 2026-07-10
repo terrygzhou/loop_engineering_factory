@@ -11,8 +11,8 @@ def setup_logger(name: str = "loop_factory") -> logging.Logger:
     if logger.handlers:
         return logger
 
-    level_str = os.getenv("LOG_LEVEL", "INFO")
-    logger.setLevel(getattr(logging, level_str.upper(), logging.INFO))
+    from config.loader import config
+    logger.setLevel(getattr(logging, config.observability.log_level.upper(), logging.INFO))
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(

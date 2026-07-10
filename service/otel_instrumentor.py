@@ -35,12 +35,13 @@ def setup_otel() -> bool:
     if _import_error:
         return False
 
+    from config.loader import config as _cfg
     resource = Resource.create({
-        "service.name": os.getenv("OTEL_SERVICE_NAME", "loop-engineering"),
+        "service.name": _cfg.services.otel.service_name,
         "service.version": "1.0.0",
     })
     provider = TracerProvider(resource=resource)
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces")
+    endpoint = _cfg.services.otel.endpoint
     exporter = OTLPSpanExporter(endpoint=endpoint)
     provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)

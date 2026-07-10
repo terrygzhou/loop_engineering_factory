@@ -1,11 +1,64 @@
+# Loop Engineering — Single Source of Truth for ALL external parameters
+# Resolution order: ENV_VAR > this file > built-in default
+
 paths:
   project_name: test_discover_fix
-  workspace_dir: ./output
+  workspace_dir: ./output          # Host workspace for generated projects
   project_path: '{{project_name}}'
+  build_dir: /app/build            # Container build artifacts
+  output_dir: /app/output          # Container output directory
   skills_dir: skills
   storage_dir: ./storage
   guardrails_path: ./config/guardrails.yaml
+  prompt_log_dir: build/prompt_logs
+
+services:
+  llm:
+    base_url: http://host.docker.internal:8080/v1
+    model: Qwen3.6-27B
+    api_key: not-needed
+    temperature: 0.1
+    max_tokens: 32768
+
+  chroma:
+    url: http://chromadb:8000
+
+  otel:
+    endpoint: http://otel-collector:4318/v1/traces
+    service_name: loop-orchestrator
+
+  phoenix:
+    host: 0.0.0.0
+    port: 6006
+    database_uri: /var/lib/phoenix/phoenix.db
+
+  postgres:
+    user: postgres
+    password: postgres
+    database: crm_dev
+    port: 5432
+    host: localhost
+
+  grafana:
+    host: 0.0.0.0
+    port: 3000
+
+  loop_api:
+    url: http://localhost:8011
+    port: 8011
+
+  product:
+    url: http://localhost:8010
+    port: 8010
+
+observability:
+  prometheus_port: 9090
+  loki_port: 3100
+  port: 8081
+  log_level: INFO
+
 workflow:
+  auto_approve: false
   hil_mode: auto
   max_retries: 2
-  auto_approve: false
+  skill_registry_path: ~/.hermes/skills

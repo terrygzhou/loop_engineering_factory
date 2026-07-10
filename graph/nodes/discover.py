@@ -8,14 +8,15 @@ Uses LangGraph OOTB interrupt() for double-pause:
 
 Output: $project_folder/requirement.md — structured discovery artifact
 """
-import os
 import json
+import os
 import re
 import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
 from langgraph.types import interrupt
+from config.loader import config as _cfg
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
@@ -31,7 +32,7 @@ def discover_node(state: dict) -> dict:
     On resume, both values are available and the node completes normally.
     """
     # ── Auto-approve mode (headless Docker) ──
-    auto_approve = os.getenv("AUTO_APPROVE", "").lower() in ("true", "1", "yes")
+    auto_approve = _cfg.workflow.auto_approve
 
     if auto_approve:
         return _discover_auto_approve(state)
@@ -92,7 +93,7 @@ def discover_node(state: dict) -> dict:
     # ── Derive project_folder ──
     project_folder = state.get("project_folder", "")
     if not project_folder:
-        workspace = os.getenv("WORKSPACE_DIR", "./output")
+        workspace = _cfg.paths.workspace_dir
         project_folder = os.path.join(workspace, project_name)
         state["project_folder"] = project_folder
     state["project_path"] = project_folder
@@ -165,8 +166,9 @@ def _discover_auto_approve(state: dict) -> dict:
     state["phase"] = "DISCOVER"
     state["next_phase"] = "DEFINE"
 
+    from config.loader import config as _cfg
     project_folder = state.get("project_folder", "") or os.path.join(
-        os.getenv("WORKSPACE_DIR", os.path.expanduser("~/workspace/projects")),
+        os.path.expanduser(_cfg.paths.workspace_dir),
         project_name or "Untitled"
     )
     project_dir = Path(project_folder)
@@ -203,7 +205,7 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
 
 
 def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder):
-    skills = build_skill_registry(os.getenv("SKILLS_DIR", "~/.hermes/skills"))
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     fabric_skill = skills.get("Fabric Prompt Engineering", {}) or skills.get("fabric-prompt-engineering", {})
     if fabric_skill:
         fabric_prompt = (
@@ -243,7 +245,8 @@ def _load_improve_telemetry(state, project_name):
         if not _live_path.exists():
             return None
         telemetry = json.loads(_live_path.read_text())
-        url = telemetry.get("product_url", "http://localhost:8010")
+        from config.loader import config as _cfg
+        url = telemetry.get("product_url", _cfg.services.product.url)
         health = telemetry.get("health_endpoint", "/health")
         try:
             req = urllib.request.Request(f"{url.rstrip('/')}/{health.lstrip('/')}", method="GET")

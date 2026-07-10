@@ -12,14 +12,17 @@ except ImportError as e:
     chromadb = None  # type: ignore
 
 
+from config.loader import config
+
 def get_chroma_client(url: str = None):
     """Get a ChromaDB client. Returns None if chromadb unavailable."""
+    from config.loader import config as _cfg
     if chromadb is None:
         print(f"WARNING: chromadb not installed ({_chroma_error}). Pattern storage disabled.")
         return None
 
     if not url:
-        url = os.getenv("CHROMA_URL", "http://localhost:8000")
+        url = _cfg.services.chroma.url
 
     try:
         return chromadb.HttpClient(

@@ -58,7 +58,7 @@ services:
     restart: unless-stopped
 
   phoenix:
-    image: phoenixArizeAI/phoenix:latest
+    image: arizephoenix/phoenix:latest
     ports:
       - "6006:6006"
     environment:
@@ -68,9 +68,29 @@ services:
       - phoenix_data:/var/lib/phoenix
     restart: unless-stopped
 
+  # ── Promtail: ship container logs → Loki (grafana-stack network) ──
+  promtail:
+    image: grafana/promtail:3.0.0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./observability/promtail/promtail-config.yaml:/etc/promtail/promtail.yaml:ro
+    command: ["-config.file=/etc/promtail/promtail.yaml"]
+    # No host ports — internal-only, talks to Loki on grafana-stack network
+    restart: unless-stopped
+    networks:
+      - loop_factory_default
+      - grafana-stack_observability
+
 volumes:
   chroma_data:
   skills_data:
   phoenix_data:
   build_data:
   skill_data:
+
+# Bridge to the existing Grafana observability stack (Loki, Prometheus, Grafana)
+networks:
+  loop_factory_default:
+    driver: bridge
+  grafana-stack_observability:
+    external: true

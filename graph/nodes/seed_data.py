@@ -9,6 +9,7 @@ import ast
 import json
 import subprocess
 from pathlib import Path
+from config.loader import config
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
@@ -44,7 +45,7 @@ def seed_data_node(state: dict) -> dict:
     skills = state.get("artifacts", {}).get("skill_registry")
     if skills is None:
         print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(os.getenv("SKILLS_DIR", "~/.hermes/skills"))
+        skills = build_skill_registry(config.workflow.skill_registry_path)
         state.setdefault("artifacts", {})["skill_registry"] = skills
 
     project_path = state.get("project_path", "")

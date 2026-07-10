@@ -5,6 +5,7 @@ Replaces langgraph.checkpoint.sqlite which was removed in langgraph >= 1.0.
 """
 import sqlite3
 import json
+import threading
 import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional, Sequence
@@ -17,39 +18,54 @@ from langgraph.checkpoint.base import (
 )
 from langchain_core.runnables import RunnableConfig
 
+_INIT_SQL = """
+CREATE TABLE IF NOT EXISTS checkpoints (
+    thread_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    parent_checkpoint_id TEXT,
+    checkpoint BLOB NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (thread_id, checkpoint_id)
+);
+CREATE TABLE IF NOT EXISTS writes (
+    thread_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    value BLOB NOT NULL,
+    PRIMARY KEY (thread_id, checkpoint_id, task_id, channel)
+);
+"""
+
 
 class SqliteSaver(BaseCheckpointSaver[int]):
-    """Minimal SQLite checkpoint saver compatible with LangGraph 1.2+."""
+    """Thread-safe SQLite checkpoint saver.
+
+    Each thread gets its own sqlite3.Connection via threading.local(),
+    avoiding cross-thread ProgrammingError when LangGraph dispatches
+    nodes to a thread pool.
+    """
 
     def __init__(self, db_path: str):
         super().__init__()
         self.db_path = db_path
-        self._conn = sqlite3.connect(db_path)
-        self._init_tables()
+        self._local = threading.local()
+        # Init schema in the main thread immediately
+        self._get_conn()
 
-    def _init_tables(self):
-        cur = self._conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS checkpoints (
-                thread_id TEXT NOT NULL,
-                checkpoint_id TEXT NOT NULL,
-                parent_checkpoint_id TEXT,
-                checkpoint BLOB NOT NULL,
-                metadata TEXT NOT NULL DEFAULT '{}',
-                PRIMARY KEY (thread_id, checkpoint_id)
-            )
-        """)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS writes (
-                thread_id TEXT NOT NULL,
-                checkpoint_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                channel TEXT NOT NULL,
-                value BLOB NOT NULL,
-                PRIMARY KEY (thread_id, checkpoint_id, task_id, channel)
-            )
-        """)
-        self._conn.commit()
+    def _get_conn(self) -> sqlite3.Connection:
+        """Lazily create a per-thread connection with schema."""
+        if not hasattr(self._local, "conn"):
+            self._local.conn = sqlite3.connect(self.db_path)
+            cur = self._local.conn.cursor()
+            cur.executescript(_INIT_SQL)
+            self._local.conn.commit()
+        return self._local.conn
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Property alias for backwards compat with rest of class."""
+        return self._get_conn()
 
     @classmethod
     def from_conn_string(cls, conn_string: str) -> "SqliteSaver":

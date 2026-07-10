@@ -2,6 +2,7 @@
 Load skills from local ./skills directory. Prioritizes local over external sources.
 Supports versioning, hot-reload, and validation.
 """
+from config.loader import config
 import os
 import json
 import time
@@ -101,13 +102,12 @@ def build_skill_registry(skills_dir: Optional[str] = None) -> Dict[str, Dict[str
 
     # Determine skills directory — local first
     if skills_dir is None:
-        skills_dir = os.getenv("SKILLS_DIR")
+        skills_dir = config.workflow.skill_registry_path
     if skills_dir is None:
         if LOCAL_SKILLS_DIR.exists():
             skills_dir = str(LOCAL_SKILLS_DIR)
         else:
-            skills_dir = "~/.hermes/skills"
-
+            skills_dir = str(Path.home() / ".hermes" / "skills")
     skills_path = Path(skills_dir).expanduser()
     try:
         latest = max(

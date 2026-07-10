@@ -4,8 +4,9 @@ UAT: ARCH_REVIEW UI gap fix
 Tests: Mermaid rendering, diagram review UI, approve/reject flow
 """
 import json, urllib.request, sys, subprocess
+from config.loader import config as _cfg
 
-BASE = "http://localhost:8011"
+BASE = _cfg.services.loop_api.url or "http://localhost:8011"
 PASS = FAIL = 0
 FAILURES = []
 
