@@ -20,6 +20,7 @@ from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
+from config import loader
 from graph.state import WorkflowState, CycleMetrics
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
@@ -548,7 +549,7 @@ def build_input_mapping(parent: dict) -> BuildSubState:
     skills = parent.get("artifacts", {}).get("skill_registry")
     if skills is None:
         from tools.loader import build_skill_registry
-        skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+        skills = build_skill_registry(loader.config.workflow.skill_registry_path)
 
     return BuildSubState({
         "sub_phase": "IMPL_PLAN",
