@@ -47,6 +47,10 @@ services:
     url: http://localhost:8011
     port: 8011
 
+  builder:
+    url: http://builder:8200
+    port: 8200
+
   product:
     url: http://localhost:8010
     port: 8010
@@ -58,7 +62,7 @@ observability:
   log_level: INFO
 
 workflow:
-  auto_approve: false
+  auto_approve: true
   hil_mode: auto
   max_retries: 2
   skill_registry_path: ~/.hermes/skills

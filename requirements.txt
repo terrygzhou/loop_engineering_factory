@@ -17,3 +17,5 @@ opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-requests
 opentelemetry-instrumentation-asyncio
 prometheus-client
+fastapi
+uvicorn[standard]

@@ -12,11 +12,7 @@ from graph.nodes.discover import discover_node
 from graph.nodes.define import define_node
 from graph.nodes.plan import plan_node
 from graph.nodes.review import review_node
-from graph.nodes.build_subgraph import (
-    build_subgraph,
-    build_input_mapping,
-    build_output_mapping,
-)
+from graph.nodes.build_proxy import build_proxy_node
 from graph.nodes.ship import ship_node
 from graph.nodes.reflect import reflect_node
 from graph.edges import route_phase
@@ -29,9 +25,9 @@ def build_graph(checkpointer=None, auto_approve=False):
     Flow: DISCOVER -> DEFINE -> PLAN -> REVIEW -> BUILD
          -> SHIP -> REFLECT -> END
 
-    BUILD uses a wrapper node that maps parent WorkflowState → BuildSubState,
-    invokes the compiled subgraph (with its own checkpointer), then merges
-    results back. This avoids the deprecated input=/output= kwargs on add_node().
+    BUILD uses the build_proxy node that delegates to a remote builder
+    service. If the builder is unreachable, it falls back to the local
+    build_subgraph so the orchestrator never dead-ends.
 
     REVIEW is a HIL gate: approve → BUILD, reject → back to PLAN.
     """
@@ -43,14 +39,8 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow.add_node("PLAN", plan_node)
     workflow.add_node("REVIEW", review_node)
 
-    # BUILD: wrapper node with explicit state mapping + subgraph checkpointer
-    def _build_node(state: dict) -> dict:
-        child_state = build_input_mapping(state)
-        compiled = build_subgraph().compile(checkpointer=checkpointer)
-        result = compiled.invoke(child_state)
-        return build_output_mapping(result)
-
-    workflow.add_node("BUILD", _build_node)
+    # BUILD: proxy to remote builder service (with local fallback)
+    workflow.add_node("BUILD", build_proxy_node())
 
     workflow.add_node("SHIP", ship_node)
     workflow.add_node("REFLECT", reflect_node)
