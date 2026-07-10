@@ -10,181 +10,282 @@ DISCOVER → DEFINE → PLAN → ARCH_REVIEW → BUILD → SEED_DATA → VERIFY 
 
 ![UI of a loop](image.png)
 
-
 Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop) review gates, and self-improvement via ChromaDB pattern storage. CLI and Web UI share the same `WorkflowRunner` — identical node execution, different UX layers.
 
-
+---
 
 ## Architecture
 
-![Loop Engineering Architecture](architecture.png)
+### C4 Container Diagram
 
-### Data Flow
+```mermaid
+C4Container
+    title Loop Factory — Container Diagram
 
-| Component | Connects To | Description |
-|-----------|-------------|------------|
-| CLI → API Gateway → LangGraph | Workflow Execution | Headless workflow execution |
-| HIL Frontend ↔ LangGraph | Human Review | Interrupt/resume for ARCH_REVIEW |
-| Phase Nodes → Tools | Skill Invocation | LLM-driven code generation |
-| Feedback → ChromaDB | Pattern Storage | Self-improvement loop |
+    Person(user, "User", "Developer or product owner")
 
-### Quality Gates
+    System_Boundary(loop, "Loop Factory")
+        Container(cli, "CLI (main.py)", "Python/Typer", "Headless auto-approve mode")
+        Container(web_ui, "Web UI (FastAPI)", "FastAPI + Jinja2", "HIL mode with SSE streaming")
+        Container(langgraph, "LangGraph Engine", "Python", "StateGraph workflow executor")
+        Container(llm_tool, "LLM Tool", "langchain_openai", "LLM call dispatch with context optimization")
+        Container(skill_loader, "Skill Loader", "Python", "Discovers and invokes SKILL.md files")
+        Container(chroma, "ChromaDB Client", "Python", "Stores/retrieves historical patterns")
+        Container(otel, "OTel Instrumentor", "opentelemetry", "Traces + metrics export")
+        Container(nginx, "nginx", "nginx", "Static frontend + reverse proxy")
 
-| Gate | Condition | Outcome |
-|------|-----------|---------|
-| ARCH_REVIEW | Approved | → BUILD |
-| ARCH_REVIEW | Rejected | → DEFINE |
-| BUILD | Pass | → SEED_DATA |
-| BUILD | Fail | → PLAN |
-| VERIFY | Pass | → SHIP |
-| VERIFY | Fail | → BUILD |
-## Data Flow
+    System_Ext(llm_server, "LLM Server", "vLLM / OpenAI API", "OpenAI-compatible completions endpoint")
+    System_Ext(docker_engine, "Docker Engine", "Docker", "Builds and deploys generated projects")
 
-| Component | Connects To | Description |
-|-----------|-------------|------------|
-| CLI → API Gateway → LangGraph | Workflow Execution | Headless workflow execution |
-| HIL Frontend ↔ LangGraph | Human Review | Interrupt/resume for ARCH_REVIEW |
-| Phase Nodes → Tools | Skill Invocation | LLM-driven code generation |
-| Feedback → ChromaDB | Pattern Storage | Self-improvement loop |
+    Rel(user, web_ui, "Reviews & approves via browser")
+    Rel(user, cli, "Runs headless via terminal")
+    Rel(web_ui, langgraph, "SSE event streaming")
+    Rel(cli, langgraph, "REST API calls")
+    Rel(langgraph, llm_tool, "Invokes skills")
+    Rel(llm_tool, skill_loader, "Loads SKILL.md")
+    Rel(llm_tool, chroma, "Queries patterns")
+    Rel(llm_tool, llm_server, "HTTP POST /v1/chat/completions")
+    Rel(langgraph, docker_engine, "Builds & deploys")
+    Rel(otel, langgraph, "Collects traces")
+    Rel(web_ui, nginx, "Reverse proxy for frontend")
 
-### Quality Gates
+    Rel_R(llm_server, llm_tool, "Streamed completions")
+```
 
-| Gate | Condition | Outcome |
-|------|-----------|---------|
-| ARCH_REVIEW | Approved | → BUILD |
-| ARCH_REVIEW | Rejected | → DEFINE |
-| BUILD | Pass | → SEED_DATA |
-| BUILD | Fail | → PLAN |
-| VERIFY | Pass | → SHIP |
-| VERIFY | Fail | → BUILD |
-## Key Components
+### C4 Deployment Diagram
 
-- **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:8011`) for HIL workflow
-- **LangGraph Engine**: `StateGraph` with 10 phase nodes, conditional routing via quality gates, OOTB `interrupt_after` for HIL pauses
-- **Skills System**: 27 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
-- **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; supports double-pause DISCOVER interview and ARCH_REVIEW diagram approval
-- **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
-- **Deployment**: Single Docker Compose stack (`loop` container = orchestrator + frontend + nginx)
+```mermaid
+C4Deployment
+    title Loop Factory — Deployment Architecture
 
-## Quick Start
+    Person(user, "User", "Browser or CLI")
+
+    Boundary(host, "Host Machine")
+        Container_Docker(llm_container, "LLM Server", "vLLM container", "Provides model inference on :8080")
+        ContainerDb(db, "PostgreSQL", "PostgreSQL", "Workflow state & checkpointer (SQLite fallback)")
+
+        Boundary(docker_compose, "Docker Compose Stack")
+            Container(loop_container, "Loop Container", "Python FastAPI + LangGraph", "Orchestrator: :8011, Health: :8081, Frontend: :80")
+            Container(chroma_container, "ChromaDB", "ChromaDB", "Pattern storage on :8000")
+            Container(otel_container, "OTel Collector", "OpenTelemetry Collector", "Trace aggregation on :4318")
+            Container(prom_container, "Prometheus", "Prometheus", "Metrics on :9090")
+            Container(grafana_container, "Grafana", "Grafana", "Dashboards on :3000")
+            Container(phoenix_container, "Phoenix", "Phoenix (OpenLIT)", "Trace UI on :6006")
+
+    Rel(user, loop_container, "HTTP :8011 / :80")
+    Rel(loop_container, chroma_container, "gRPC :8000")
+    Rel(loop_container, otel_container, "gRPC :4318")
+    Rel(otel_container, phoenix_container, "HTTP :6006")
+    Rel(otel_container, prom_container, "HTTP :9090")
+    Rel(prom_container, grafana_container, "scrapes :9090")
+    Rel(loop_container, llm_container, "HTTP :8080 via host.docker.internal")
+    Rel(loop_container, db, "TCP :5432")
+```
+
+### Component Overview
+
+| Component | Responsibility | Config Key |
+|-----------|---------------|------------|
+| `main.py` | CLI entry — headless auto-approve | `workflow.auto_approve` |
+| `api/app.py` | FastAPI backend — HIL mode via REST | `services.loop_api.*` |
+| `frontend/backend/workflow_bridge.py` | SSE event bridge + HIL interrupt handling | `services.product.*` |
+| `graph/main.py` | LangGraph StateGraph definition | `workflow.hil_mode` |
+| `graph/nodes/*.py` | Phase node implementations (9 nodes) | `paths.*` |
+| `tools/llm.py` | LLM call dispatch with retry & context compression | `services.llm.*` |
+| `tools/loader.py` | Skill registry discovery & hot-reload | `workflow.skill_registry_path` |
+| `feedback/chroma_client.py` | ChromaDB pattern storage/retrieval | `services.chroma.*` |
+| `service/otel_instrumentor.py` | OpenTelemetry trace export | `services.otel.*` |
+| `service/health.py` | Health check server + dependency verification | `services.observability.*` |
+| `config/loader.py` | Three-tier config: `ENV > YAML > default` | N/A (meta) |
+
+---
+
+## Skills Per Workflow State
+
+Each workflow phase chains specialized skills from `skills/` (29 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
+
+### Phase-Specific Skill Chains
+
+| Phase | Skills Chained | Purpose |
+|-------|----------------|---------|
+| **DISCOVER** | `interview-me` → `coding-principles` | HIL interview (9 structured questions). Scans existing codebases for context. Generates `requirement.md`. Auto-generates defaults in auto-approve mode. |
+| **DEFINE** | `speckit-specify` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
+| **PLAN** | `writing-plans` → `speckit-tasks` → `speckit-analyze` → `doubt-driven-development` → `speckit-checklist` → `architecture-diagram-generator` | Task breakdown, architecture planning, doubt resolution, and diagram generation. Outputs `plan.md` + `diagrams.md`. |
+| **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → DEFINE. Max 2 retries. |
+| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → `docker-compose-deployment` | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. |
+| **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
+| **VERIFY** | `uat-workflow` → `performance-optimization` → `systematic-debugging` → `code-simplification` | Playwright UAT (mandatory). Conditional: performance profiling if P95 > 500ms, debugging if flakiness > 10%, simplification if review revisions > threshold. |
+| **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `docker-compose-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, Docker deployment, version tagging. |
+| **REFLECT** | Internal `diff_engine` → `context-pruning` → `git-workflow` | Cycle analysis: aggregates metrics, queries ChromaDB patterns, generates config/guardrail diff proposals. Human approval gate for changes. |
+
+### Local Skills Registry
+
+```
+skills/
+├── ai-workflow-data-seeding/SKILL.md
+├── api-and-interface-design/SKILL.md
+├── architecture-diagram-generator/SKILL.md
+├── coding-principles/SKILL.md
+├── code-simplification/SKILL.md
+├── context-pruning/SKILL.md
+├── context-size-manager/SKILL.md
+├── docker-compose-deployment/SKILL.md
+├── doubt-driven-development/SKILL.md
+├── fastapi-jinja2-feature-build/SKILL.md
+├── git-workflow/SKILL.md
+├── headroom-context-compression/SKILL.md
+├── incremental-implementation/SKILL.md
+├── interview-me/SKILL.md
+├── observability-and-instrumentation/SKILL.md
+├── performance-optimization/SKILL.md
+├── requesting-code-review/SKILL.md
+├── security-and-hardening/SKILL.md
+├── shipping-and-launch/SKILL.md
+├── speckit-analyze/SKILL.md
+├── speckit-checklist/SKILL.md
+├── speckit-specify/SKILL.md
+├── speckit-tasks/SKILL.md
+├── systematic-debugging/SKILL.md
+├── test-driven-development/SKILL.md
+├── uat-workflow/SKILL.md
+└── writing-plans/SKILL.md
+```
+
+**Total per cycle**: ~20–35 LLM calls. BUILD loops (up to 2 retries) can increase this.
+
+---
+
+## How to Run It Locally
 
 ### Prerequisites
 
-- **Docker** + **Docker Compose**
-- **LLM endpoint** (OpenAI-compatible, e.g., vLLM on `http://localhost:8080/v1`)
+- **Docker** + **Docker Compose** (v2.20+)
+- **LLM endpoint** (OpenAI-compatible, e.g., vLLM Qwen3.6-27B on `:8080`)
 
-### Option A: CLI (headless, auto-approve)
+### Configuration
+
+All external parameters are centralized in `config/config.yaml`. Override via environment variables or direct YAML edits:
 
 ```bash
-docker compose up -d --build
+# Quick override — no code changes needed
+export LLM_BASE_URL="http://host.docker.internal:8080/v1"
+export LLM_MODEL="Qwen3.6-27B"
+export LOG_LEVEL="info"
 ```
 
-Runs the orchestrator in auto-approve mode. DISCOVER generates default interview notes from the spec.
+Or edit `config/config.yaml` directly:
 
-### Option B: Web UI (HIL)
+```yaml
+services:
+  llm:
+    base_url: http://host.docker.internal:8080/v1
+    model: Qwen3.6-27B
+    temperature: 0.1
+    max_tokens: 32768
+
+observability:
+  log_level: info
+  port: 8081
+```
+
+### Option A: CLI (Headless, Auto-Approve)
+
+Runs the full pipeline without human intervention. DISCOVER generates default interview notes from the spec.
 
 ```bash
+# Build and start (no bind mounts — uses Docker volume for output)
 docker compose up -d --build loop
+
+# Monitor logs
+docker compose logs -f loop
+
+# Access the health endpoint
+curl http://localhost:8081/health
 ```
 
-Open `http://localhost:8011`. Progress streams via Server-Sent Events (SSE) with quality gates dashboard, phase details, and Mermaid diagram rendering at ARCH_REVIEW gates.
+### Option B: Web UI (Human-in-the-Loop)
 
-### LLM Configuration
+Interactive mode with SSE event streaming, quality gates dashboard, and diagram rendering.
 
 ```bash
-# Local vLLM
-export LLM_BASE_URL="http://localhost:8080/v1"
-export LLM_MODEL="qwen3.6-27b"
+# Start the stack
+docker compose up -d --build loop
 
-# OpenAI
-export LLM_BASE_URL="https://api.openai.com/v1"
-export LLM_MODEL="gpt-4o"
-export OPENAI_API_KEY="sk-..."
+# Open the UI
+# Frontend: http://localhost (nginx :80)
+# API: http://localhost:8011
+# Health: http://localhost:8081
+```
+
+### Docker Stack Services
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| `loop` | :80 | nginx — static frontend |
+| `loop` | :8011 | FastAPI backend — workflow API |
+| `loop` | :8081 | Health check server |
+| `chromadb` | :8000 (internal) | Pattern storage |
+| `otel-collector` | :4318 | OpenTelemetry trace collection |
+| `phoenix` | :6006 | Trace visualization (OpenLIT) |
+| `prometheus` | :9090 | Metrics scraping |
+| `grafana` | :3000 | Observability dashboards |
+| `promtail` | _(internal)_ | Log aggregation |
+
+### Stopping & Restarting
+
+```bash
+# Stop everything
+docker compose down
+
+# Rebuild without cache (after code changes)
+docker compose build --no-cache loop
+docker compose up -d loop
+
+# Full restart (preserves volumes)
+docker compose stop
+docker compose rm -f
+docker compose up -d --build
 ```
 
 > ⚠️ **Token Usage**: A full cycle makes 20–35 LLM calls. Monitor your provider's usage dashboard during long runs.
 
-## How It Works
+---
 
-### Pipeline Phases
+## Key Components
 
-1. **DISCOVER** — HIL interview node using LangGraph OOTB `interrupt()`. Double-pause: first for project setup (name + description), then for interview questions (9 structured questions). Scans existing codebases for context. Generates `requirement.md`. In Web UI mode, pauses for user input via SSE. In auto-approve mode, generates defaults.
+- **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:8011`) for HIL workflow
+- **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via quality gates, OOTB `interrupt_after` for HIL pauses
+- **Skills System**: 29 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
+- **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; supports double-pause DISCOVER interview and ARCH_REVIEW diagram approval
+- **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
+- **Deployment**: Single Docker Compose stack (`loop` container = orchestrator + frontend + nginx)
 
-2. **DEFINE** — Generates a structured specification via `speckit-specify`, then produces an API contract via `api-and-interface-design`. Fully automatic — interview data collected in DISCOVER. Incorporates user review feedback if returning from ARCH_REVIEW rejection.
-
-3. **PLAN** — Architecture and task planning: `writing-plans` → `speckit-tasks` → `speckit-analyze` → `doubt-driven-development` → `speckit-checklist`. Generates architecture diagrams via `architecture-diagram-generator`. Diagrams are stored as `plan.md` and `diagrams.md` in the project output folder.
-
-4. **ARCH_REVIEW** — HIL gate: pauses execution so the user can review the specification, plan, and architecture diagrams before BUILD begins. Web UI renders Mermaid diagrams client-side with tabbed diagram viewer. User can approve (proceeds to BUILD) or reject with feedback (loops back to DEFINE). Max 2 retries before forced progression.
-
-5. **BUILD** — Iterative code generation per task item: `incremental-implementation` → `test-driven-development` (per item). Final aggregate passes: `security-and-hardening` (STRIDE model) → `requesting-code-review`. Runs Docker Compose build, health check, and pytest. Max 2 retries per cycle.
-
-6. **SEED_DATA** — Test data and fixture generation via `ai-workflow-data-seeding`. Executes seed script inside the running Docker container.
-
-7. **VERIFY** — Comprehensive validation: `uat-workflow` (Playwright) mandatory. Conditional passes: `performance-optimization` (if P95 latency > 500 ms) → `systematic-debugging` (if flakiness > 10%) → `code-simplification` (if review revisions exceed threshold).
-
-8. **SHIP** — Deployment packaging: `observability-and-instrumentation` → `shipping-and-launch` → `docker-compose-deployment` (if BUILD did not deploy) → `git-workflow` (version tag).
-
-9. **REFLECT** — Cycle analysis: aggregates metrics and feedback, queries ChromaDB for historical patterns, meta-agent generates proposed config/guardrail diffs, dry-run validation, human approval gate for changes. Approved changes committed via `git-workflow`.
-
-### Skills System
-
-Each node chains skills from `skills/` (27 currently registered). A skill is skipped if missing — the pipeline continues with whatever artifacts were produced.
-
-| Phase | Skills Chained |
-|---|---|
-| DISCOVER | `interview-me` → Fabric Prompt Engineering → codebase scan (filesystem/git/docker) |
-| DEFINE | `speckit-specify` → `api-and-interface-design` |
-| PLAN | `writing-plans` → `speckit-tasks` → `speckit-analyze` → `doubt-driven-development` → `speckit-checklist` → `architecture-diagram-generator` |
-| ARCH_REVIEW | HIL gate (human reviews spec + plan + Mermaid diagrams — no skills called) |
-| BUILD | `incremental-implementation` → `test-driven-development` (per task item) → `security-and-hardening` → `requesting-code-review` (aggregate) |
-| SEED_DATA | `ai-workflow-data-seeding` |
-| VERIFY | `uat-workflow` (mandatory) → `performance-optimization` (if slow) → `systematic-debugging` (if flaky) → `code-simplification` (if high revision count) |
-| SHIP | `observability-and-instrumentation` → `shipping-and-launch` → `docker-compose-deployment` → `git-workflow` |
-| REFLECT | Internal `diff_engine` + meta-agent → `git-workflow` (commit approved diffs) |
-
-**Total per cycle**: ~20–35 LLM calls. BUILD loops (up to 2 retries) can increase this.
-
-### Quality Gates
-
-Thresholds from `config/guardrails.yaml`:
-
-| Phase | Gate |
-|---|---|
-| DISCOVER | HIL required in Web UI mode; auto-generates defaults in auto-approve mode |
-| DEFINE | `spec_confidence ≥ 0.9` or loop back |
-| PLAN | `arch_uncertainty ≤ 0.8` or loop back |
-| BUILD | `security_findings = 0`, `review_revisions ≤ 2`, Docker build + health check + pytest pass — or loop back |
-| SEED_DATA | `seed_errors` is empty or loop back to BUILD |
-| VERIFY | `uat_pass_rate ≥ 0.95` or loop back to BUILD |
-| REFLECT | Human approval required for config changes (auto-apply low-risk when confidence ≥ 0.95) |
-
-### Self-Improvement Loop
-
-After SHIP, REFLECT:
-1. Aggregates cycle metrics and feedback
-2. Queries ChromaDB for historical patterns
-3. Meta-agent generates proposed skill/config/guardrail diffs
-4. Dry-run validation against guardrails
-5. Human approval gate (Web UI)
-6. Approved changes committed via `git-workflow`
-
-Low-risk changes (confidence ≥ 0.95, zero security findings) can auto-apply.
-
-
+---
 
 ## Configuration
 
 Three-tier priority: **Environment Variables** > **`config/config.yaml`** > **Built-in Defaults**.
 
-Key settings in `config.yaml`:
+All external parameters are centralized — zero hardcoded URLs, ports, or paths in production code.
+
 ```yaml
 paths:
   project_name: test_discover_fix
-  workspace_dir: ~/your_path/projects
-  project_path: '{{project_name}}'
+  workspace_dir: ./output
   skills_dir: skills
   storage_dir: ./storage
   guardrails_path: ./config/guardrails.yaml
+
+services:
+  llm:
+    base_url: http://host.docker.internal:8080/v1
+    model: Qwen3.6-27B
+  chroma:
+    url: http://chromadb:8000
+  loop_api:
+    url: http://localhost:8011
+  product:
+    url: http://localhost:8010
 
 workflow:
   hil_mode: auto
@@ -192,14 +293,7 @@ workflow:
   auto_approve: false
 ```
 
-LLM settings in `config/guardrails.yaml`:
-```yaml
-llm:
-  model: Qwen3.6-27B
-  base_url: ${LLM_BASE_URL:-http://localhost:8080/v1}
-  temperature: 0.1
-  max_retries: 3
-```
+---
 
 ## Dependencies
 
@@ -208,9 +302,12 @@ langgraph, langchain-core, langgraph-checkpoint, langgraph-sdk
 pydantic, pyyaml, httpx, aiohttp
 chromadb (pattern storage)
 opentelemetry-api, opentelemetry-sdk (observability)
+uvicorn, fastapi (web UI)
 ```
 
 Install: baked into Docker image via `docker compose up -d --build`.
+
+---
 
 ## Guardrails
 
