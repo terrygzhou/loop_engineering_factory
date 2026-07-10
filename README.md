@@ -20,35 +20,34 @@ Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop)
 
 ```mermaid
 C4Container
-    title Loop Factory — Container Diagram
+    title Loop Factory - Container Diagram
 
     Person(user, "User", "Developer or product owner")
 
-    System_Boundary(loop, "Loop Factory")
-        Container(cli, "CLI (main.py)", "Python/Typer", "Headless auto-approve mode")
-        Container(web_ui, "Web UI (FastAPI)", "FastAPI + Jinja2", "HIL mode with SSE streaming")
+    Boundary(loop, "Loop Factory")
+        Container(cli, "CLI", "Python/Typer", "Headless auto-approve mode")
+        Container(web_ui, "Web UI", "FastAPI + Jinja2", "HIL mode with SSE streaming")
         Container(langgraph, "LangGraph Engine", "Python", "StateGraph workflow executor")
-        Container(llm_tool, "LLM Tool", "langchain_openai", "LLM call dispatch with context optimization")
+        Container(llm_tool, "LLM Tool", "langchain_openai", "LLM call dispatch")
         Container(skill_loader, "Skill Loader", "Python", "Discovers and invokes SKILL.md files")
-        Container(chroma, "ChromaDB Client", "Python", "Stores/retrieves historical patterns")
-        Container(otel, "OTel Instrumentor", "opentelemetry", "Traces + metrics export")
-        Container(nginx, "nginx", "nginx", "Static frontend + reverse proxy")
+        Container(chroma_client, "ChromaDB Client", "Python", "Stores/retrieves historical patterns")
+        Container(otel_instr, "OTel Instrumentor", "opentelemetry", "Traces and metrics export")
+        Container(nginx_proxy, "nginx", "nginx", "Static frontend and reverse proxy")
 
     System_Ext(llm_server, "LLM Server", "vLLM / OpenAI API", "OpenAI-compatible completions endpoint")
     System_Ext(docker_engine, "Docker Engine", "Docker", "Builds and deploys generated projects")
 
-    Rel(user, web_ui, "Reviews & approves via browser")
+    Rel(user, web_ui, "Reviews and approves via browser")
     Rel(user, cli, "Runs headless via terminal")
     Rel(web_ui, langgraph, "SSE event streaming")
     Rel(cli, langgraph, "REST API calls")
     Rel(langgraph, llm_tool, "Invokes skills")
     Rel(llm_tool, skill_loader, "Loads SKILL.md")
-    Rel(llm_tool, chroma, "Queries patterns")
+    Rel(llm_tool, chroma_client, "Queries patterns")
     Rel(llm_tool, llm_server, "HTTP POST /v1/chat/completions")
-    Rel(langgraph, docker_engine, "Builds & deploys")
-    Rel(otel, langgraph, "Collects traces")
-    Rel(web_ui, nginx, "Reverse proxy for frontend")
-
+    Rel(langgraph, docker_engine, "Builds and deploys")
+    Rel(otel_instr, langgraph, "Collects traces")
+    Rel(web_ui, nginx_proxy, "Reverse proxy for frontend")
     Rel_R(llm_server, llm_tool, "Streamed completions")
 ```
 
@@ -56,28 +55,28 @@ C4Container
 
 ```mermaid
 C4Deployment
-    title Loop Factory — Deployment Architecture
+    title Loop Factory - Deployment Architecture
 
     Person(user, "User", "Browser or CLI")
 
-    Boundary(host, "Host Machine")
-        Container_Docker(llm_container, "LLM Server", "vLLM container", "Provides model inference on :8080")
-        ContainerDb(db, "PostgreSQL", "PostgreSQL", "Workflow state & checkpointer (SQLite fallback)")
+    Node(host, "Host Machine")
+        Container(llm_container, "LLM Server", "vLLM", "Model inference on port 8080")
+        ContainerDb(db, "PostgreSQL", "PostgreSQL", "Workflow state and checkpointer")
 
-        Boundary(docker_compose, "Docker Compose Stack")
-            Container(loop_container, "Loop Container", "Python FastAPI + LangGraph", "Orchestrator: :8011, Health: :8081, Frontend: :80")
-            Container(chroma_container, "ChromaDB", "ChromaDB", "Pattern storage on :8000")
-            Container(otel_container, "OTel Collector", "OpenTelemetry Collector", "Trace aggregation on :4318")
-            Container(prom_container, "Prometheus", "Prometheus", "Metrics on :9090")
-            Container(grafana_container, "Grafana", "Grafana", "Dashboards on :3000")
-            Container(phoenix_container, "Phoenix", "Phoenix (OpenLIT)", "Trace UI on :6006")
+        Node(docker_compose, "Docker Compose Stack")
+            Container(loop_container, "Loop Container", "Python FastAPI + LangGraph", "Orchestrator on port 8011, Health on port 8081, Frontend on port 80")
+            Container(chroma_container, "ChromaDB", "ChromaDB", "Pattern storage on port 8000")
+            Container(otel_container, "OTel Collector", "OpenTelemetry Collector", "Trace aggregation on port 4318")
+            Container(prom_container, "Prometheus", "Prometheus", "Metrics on port 9090")
+            Container(grafana_container, "Grafana", "Grafana", "Dashboards on port 3000")
+            Container(phoenix_container, "Phoenix", "Phoenix (OpenLIT)", "Trace UI on port 6006")
 
-    Rel(user, loop_container, "HTTP :8011 / :80")
-    Rel(loop_container, chroma_container, "gRPC :8000")
-    Rel(loop_container, otel_container, "gRPC :4318")
-    Rel(otel_container, phoenix_container, "HTTP :6006")
-    Rel(otel_container, prom_container, "HTTP :9090")
-    Rel(prom_container, grafana_container, "scrapes :9090")
+    Rel(user, loop_container, "HTTP on port 8011 and port 80")
+    Rel(loop_container, chroma_container, "gRPC on port 8000")
+    Rel(loop_container, otel_container, "gRPC on port 4318")
+    Rel(otel_container, phoenix_container, "HTTP on port 6006")
+    Rel(otel_container, prom_container, "HTTP on port 9090")
+    Rel(prom_container, grafana_container, "scrapes on port 9090")
     Rel(loop_container, llm_container, "HTTP :8080 via host.docker.internal")
     Rel(loop_container, db, "TCP :5432")
 ```
