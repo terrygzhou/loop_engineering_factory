@@ -9,7 +9,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - LLM_BASE_URL=http://host.docker.internal:8080/v1
+      - LLM_BASE_URL=http://pop-os:8080/v1
       - CHROMA_URL=http://chromadb:8000
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
       - OTEL_SERVICE_NAME=loop-orchestrator
@@ -46,7 +46,7 @@ services:
     ports:
       - "8200:8200"
     environment:
-      - LLM_BASE_URL=http://host.docker.internal:8080/v1
+      - LLM_BASE_URL=http://pop-os:8080/v1
     volumes:
       - ./output:/app/output
       - /var/run/docker.sock:/var/run/docker.sock:ro

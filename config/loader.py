@@ -95,7 +95,7 @@ class Config:
 
     class Services:
         class LLM:
-            base_url: str = _resolve("LLM_BASE_URL", _config, "services.llm.base_url", "http://host.docker.internal:8080/v1")
+            base_url: str = _resolve("LLM_BASE_URL", _config, "services.llm.base_url", "http://pop-os:8080/v1")
             model: str = _resolve("LLM_MODEL", _config, "services.llm.model", "Qwen3.6-27B")
             api_key: str = _resolve("OPENAI_API_KEY", _config, "services.llm.api_key", "not-needed")
             temperature: float = float(_resolve("LLM_TEMPERATURE", _config, "services.llm.temperature", "0.1"))

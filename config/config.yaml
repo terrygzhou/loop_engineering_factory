@@ -14,7 +14,7 @@ paths:
 
 services:
   llm:
-    base_url: http://host.docker.internal:8080/v1
+    base_url: http://pop-os:8080/v1
     model: Qwen3.6-27B
     api_key: not-needed
     temperature: 0.1
