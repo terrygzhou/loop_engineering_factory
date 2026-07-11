@@ -95,6 +95,9 @@ def route_phase(state: WorkflowState) -> str:
 
     # BUILD -> check security, review, and UAT gates (subgraph handles seed+test+UAT)
     if phase == "BUILD":
+        # Respect explicit next_phase override (e.g., REFLECT from build_fail_count guard)
+        if state.get("next_phase") and state.get("error"):
+            return state["next_phase"] or "REFLECT"
         if m.security_findings > max_sec_findings:
             return "BUILD"  # Fix security issues first
         if m.review_revisions > max_rev_revisions:

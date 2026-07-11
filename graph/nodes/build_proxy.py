@@ -104,10 +104,11 @@ class BuildProxy:
 
         state["phase"] = "BUILD"
         # ── Retry guard: abort on consecutive failures ────────────
-        fail_count = artifacts.get("build_fail_count", 0)
+        # Track at STATE top level so LangGraph shallow copy preserves it
+        fail_count = state.get("_build_fail_count", 0)
         if build_status["status"] == "fail":
             fail_count += 1
-            artifacts["build_fail_count"] = fail_count
+            state["_build_fail_count"] = fail_count
             if fail_count >= 3:
                 state["error"] = (
                     f"Build failed {fail_count} times consecutively — "
@@ -117,8 +118,7 @@ class BuildProxy:
                 state["next_phase"] = "REFLECT"  # Skip SHIP, go to REFLECT for diagnosis
                 return state
         else:
-            fail_count = 0
-            artifacts["build_fail_count"] = 0
+            state["_build_fail_count"] = 0
 
         state["next_phase"] = (
             "SHIP" if build_status["status"] == "pass" else None
