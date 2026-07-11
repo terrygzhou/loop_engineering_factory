@@ -118,7 +118,7 @@ def verify_node(state: dict) -> dict:
         phase_4_note = "SKIP (BUILD ran pytest)" if skip_pytest else "REQUIRED"
 
         from config.loader import config
-from config.bounds_loader import bounds as _cfg
+        from config.loader import config as _cfg
         _base_url = _cfg.services.product.url
         task = (
             f"Run full UAT tests for project: {project_path}\n"

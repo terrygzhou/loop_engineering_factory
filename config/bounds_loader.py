@@ -91,11 +91,16 @@ class Bounds:
         warning_threshold_pct: int = _resolve(_bounds_data, "memory_budget.warning_threshold_pct", 75)
         critical_threshold_pct: int = _resolve(_bounds_data, "memory_budget.critical_threshold_pct", 90)
 
+    class Workflow:
+        # Workflow-level settings
+        auto_approve: bool = True
+
     context = Context()
     artifacts = Artifacts()
     build = Build()
     feedback = Feedback()
     memory_budget = MemoryBudget()
+    workflow = Workflow()
 
 
 bounds = Bounds()

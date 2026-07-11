@@ -14,7 +14,8 @@ import json
 import os
 from pathlib import Path
 from config.loader import config
-from config.bounds_loader import bounds as _cfg
+from config.loader import config as _cfg
+from config.bounds_loader import bounds
 from langgraph.types import interrupt
 from tools.audit_logger import AuditLog
 

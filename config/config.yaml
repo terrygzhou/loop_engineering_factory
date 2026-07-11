@@ -18,7 +18,7 @@ services:
     model: Qwen3.6-27B
     api_key: not-needed
     temperature: 0.1
-    max_tokens: 32768
+    max_tokens: 65535
 
   chroma:
     url: http://chromadb:8000

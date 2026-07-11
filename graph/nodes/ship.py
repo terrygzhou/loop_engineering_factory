@@ -84,14 +84,14 @@ def ship_node(state: dict) -> dict:
     # DISCOVER reads this file to find and health-check the running product.
     try:
         from config.loader import config
-from config.bounds_loader import bounds as _cfg
+        from config.loader import config as _cfg
         _storage_dir = _cfg.paths.storage_dir
         _project_path = project_path or state.get("project_folder", "")
         # Derive product_type from DISCOVER scan context if available
         _ctx = state.get("artifacts", {}).get("project_context", "{}")
         _product_type = json.loads(_ctx if isinstance(_ctx, str) else "{}").get("project_type", "python-fastapi")
         from config.loader import config
-from config.bounds_loader import bounds as _cfg
+        from config.loader import config as _cfg
         _product_url = _cfg.services.product.url
         _live = {
             "version": "1",

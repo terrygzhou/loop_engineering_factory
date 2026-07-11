@@ -17,7 +17,8 @@ import urllib.error
 from pathlib import Path
 from langgraph.types import interrupt
 from config.loader import config
-from config.bounds_loader import bounds as _cfg
+from config.loader import config as _cfg
+from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
@@ -168,7 +169,7 @@ def _discover_auto_approve(state: dict) -> dict:
     state["next_phase"] = "DEFINE"
 
     from config.loader import config
-from config.bounds_loader import bounds as _cfg
+from config.loader import config as _cfg
     project_folder = state.get("project_folder", "") or os.path.join(
         os.path.expanduser(_cfg.paths.workspace_dir),
         project_name or "Untitled"
@@ -243,13 +244,13 @@ def _generate_requirement_template(project_name, project_description, interview_
 def _load_improve_telemetry(state, project_name):
     try:
         from config.loader import config
-from config.bounds_loader import bounds as _cfg
+from config.loader import config as _cfg
         _live_path = Path(_cfg.paths.storage_dir) / "live.json"
         if not _live_path.exists():
             return None
         telemetry = json.loads(_live_path.read_text())
         from config.loader import config
-from config.bounds_loader import bounds as _cfg
+from config.loader import config as _cfg
         url = telemetry.get("product_url", _cfg.services.product.url)
         health = telemetry.get("health_endpoint", "/health")
         try:
