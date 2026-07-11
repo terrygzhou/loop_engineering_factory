@@ -844,19 +844,26 @@ class WorkflowBridge:
                             chunk = next_task.result()
                             chunk_count += 1
                         except StopAsyncIteration:
-                            # interrupt() causes StopAsyncIteration — get actual interrupt type from checkpoint
+                            # StopAsyncIteration means the stream ended — could be actual interrupt or normal completion
                             print(f"  → StopAsyncIteration detected", flush=True)
-                            interrupted_chunk = {"__interrupt__": "resume"}
-                            # Try to determine the interrupt type from the checkpoint
+                            # Check ONLY the latest checkpoint for pending interrupts
                             try:
-                                state_snapshot = checkpointer.list(config).next()
-                                if state_snapshot:
-                                    meta = getattr(state_snapshot, "metadata", None) or {}
+                                latest = checkpointer.list(config).next()
+                                if latest and getattr(latest, "next", None):
+                                    meta = getattr(latest, "metadata", None) or {}
                                     if meta and "interrupted_type" in meta:
                                         interrupted_chunk = {"__interrupt__": meta["interrupted_type"]}
                             except Exception:
-                                pass  # Fall through to resume logic
-                            break
+                                pass
+
+                            if interrupted_chunk is None:
+                                # No pending interrupt — normal completion (e.g., auto-approve skipped)
+                                print(f"  → No pending interrupt — normal completion", flush=True)
+                                completed = True
+                                break
+                            else:
+                                # Actual interrupt — proceed with HIL flow
+                                break
                     else:
                         # Both completed (rare) — re-loop
                         print("[Bridge] both tasks completed (rare)", flush=True)
