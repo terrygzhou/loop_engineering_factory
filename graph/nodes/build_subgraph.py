@@ -182,6 +182,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
 
     if not item_code:
         state["errors"].append(f"Item {item['id']}: No code generated")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -216,6 +217,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["test_result"] = "fail"
         state["test_output"] = "No files generated"
         state["errors"].append(f"Item {item['id']}: No files to test")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -242,6 +244,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["test_result"] = "fail"
         state["test_output"] = err[:bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: Docker build failed")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -254,6 +257,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         print(f"     ✗ Container start failed: {err[:200]}")
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Container start failed")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -270,6 +274,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         print(f"     ✗ Health check failed: HTTP {health_out.strip()}")
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Health check failed")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -297,6 +302,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["test_result"] = "fail"
         state["test_output"] = test_out[:bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: {failed} test failures (attempt {state['retry_count'] + 1})")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -318,8 +324,9 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
     rc, _, err = run_command("docker compose up -d api", timeout=120, workdir=docker_proj)
     if rc != 0:
         state["int_test_result"] = "fail"
-        state["int_test_output"] = err
+        state["int_test_output"] = err[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"INT_TEST: Container start failed: {err[:200]}")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         return state
 
     import subprocess as _sp
@@ -328,12 +335,13 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
     rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=30)
     if health_out.strip() in ('200', '301', '302'):
         state["int_test_result"] = "pass"
-        state["int_test_output"] = f"Health check: HTTP {health_out.strip()}"
+        state["int_test_output"] = f"Health check: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
         print(f"     ✓ Integration tests passed (health: HTTP {health_out.strip()})")
     else:
         state["int_test_result"] = "fail"
-        state["int_test_output"] = f"Health check failed: HTTP {health_out.strip()}"
+        state["int_test_output"] = f"Health check failed: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"INT_TEST: Health check failed")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         print(f"     ✗ Integration test failed: HTTP {health_out.strip()}")
 
     state["sub_phase"] = "INT_TEST"
@@ -392,8 +400,9 @@ Requirements:
     except SyntaxError as e:
         print(f"     ✗ Seed script syntax error: {e}")
         state["seed_result"] = "fail"
-        state["seed_output"] = str(e)
+        state["seed_output"] = str(e)[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"SEED: SyntaxError: {e}")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         state["sub_phase"] = "SEED"
         return state
 
@@ -417,6 +426,7 @@ Requirements:
             state["seed_result"] = "fail"
             state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
             state["errors"].append(f"SEED: exit {result.returncode}: {seed_output[:200]}")
+            state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         else:
             print(f"     ✓ Seed data populated successfully")
             state["seed_result"] = "pass"
@@ -426,11 +436,13 @@ Requirements:
         state["seed_result"] = "fail"
         state["seed_output"] = "Timed out"
         state["errors"].append("SEED: timeout after 60s")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
     except Exception as e:
         print(f"     ✗ Seed execution failed: {e}")
         state["seed_result"] = "fail"
-        state["seed_output"] = str(e)
+        state["seed_output"] = str(e)[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"SEED: {e}")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
 
     state["sub_phase"] = "SEED"
     return state
@@ -476,7 +488,7 @@ def uat_node(state: BuildSubState) -> BuildSubState:
     )
 
     result = invoke_skill(uat_skill["content"], task, f"Project: {project_path}\nBase URL: {_base_url}", llm=None)
-    state["uat_output"] = result
+    state["uat_output"] = result[:bounds.build.max_seed_output_chars]
     uat_metrics = parse_uat_metrics(result)
     state["uat_pass_rate"] = uat_metrics["uat_pass_rate"]
 
@@ -487,6 +499,7 @@ def uat_node(state: BuildSubState) -> BuildSubState:
         state["uat_result"] = "fail"
         print(f"     ✗ UAT failed (rate={uat_metrics['uat_pass_rate']})")
         state["errors"].append(f"UAT: pass rate {uat_metrics['uat_pass_rate']} < 0.8")
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
 
     state["sub_phase"] = "UAT"
     return state

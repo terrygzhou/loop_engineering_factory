@@ -81,7 +81,7 @@ class Bounds:
         max_item_retries: int = _resolve("BUILD_MAX_ITEM_RETRIES", _bounds_data, "build.max_item_retries", 3)
         max_build_failures: int = _resolve("BUILD_MAX_FAILURES", _bounds_data, "build.max_build_failures", 3)
         max_test_output_chars: int = _resolve(None, _bounds_data, "build.max_test_output_chars", 500)
-        max_seed_output_chars: int = _resolve(None, _bounds_data, "build.max_seed_output_chars", 500)
+        max_seed_output_chars: int = _resolve("BUILD_MAX_SEED_OUTPUT_CHARS", _bounds_data, "build.max_seed_output_chars", 500)
         recent_code_snippets: int = _resolve(None, _bounds_data, "build.recent_code_snippets", 2)
         recent_code_chars: int = _resolve(None, _bounds_data, "build.recent_code_chars", 2000)
 
@@ -91,7 +91,7 @@ class Bounds:
         max_pattern_doc_chars: int = _resolve(None, _bounds_data, "feedback.max_pattern_doc_chars", 400)
         max_context_query_chars: int = _resolve(None, _bounds_data, "feedback.max_context_query_chars", 500)
         max_review_comments_chars: int = _resolve(None, _bounds_data, "feedback.max_review_comments_chars", 500)
-        max_error_entries: int = _resolve(None, _bounds_data, "feedback.max_error_entries", 10)
+        max_error_entries: int = _resolve("FEEDBACK_MAX_ERROR_ENTRIES", _bounds_data, "feedback.max_error_entries", 10)
         max_chroma_patterns: int = _resolve(None, _bounds_data, "feedback.max_chroma_patterns", 3)
 
     class MemoryBudget:

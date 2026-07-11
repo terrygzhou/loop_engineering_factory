@@ -221,8 +221,7 @@ from config.bounds_loader import bounds as _cfg
         "test_flakiness_rate": flakiness,
     })
     state["phase"] = "VERIFY"
-    state["feedback"] = state.get("feedback", []) + feedback
-    state["next_phase"] = "SHIP"
+    state["feedback"] = (state.get("feedback", []) + feedback)[-bounds.artifacts.max_feedback_entries:]
     state["human_approval_required"] = False
 
     print(f"  Done: uat_pass_rate={uat_pass}, endpoints_checked={len(api_endpoints)}, pages_checked={len(page_routes)}")

@@ -127,7 +127,7 @@ from config.bounds_loader import bounds as _cfg
         "launch_success": True,
     })
     state["phase"] = "SHIP"
-    state["feedback"] = state.get("feedback", []) + feedback
+    state["feedback"] = (state.get("feedback", []) + feedback)[-bounds.artifacts.max_feedback_entries:]
     state["next_phase"] = "REFLECT"
 
     print(f"  ✓ launch_success=True")
