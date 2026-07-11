@@ -1,0 +1,78 @@
+# Loop Engineering — Configurable Context & Memory Bounds
+# Prevents OOM by capping unbounded accumulation patterns.
+# Resolution: ENV_VAR > this file > built-in default
+
+# ── Context size limits (per LLM call) ──────────────────────────
+context:
+  # Max tokens for DEFINE phase LLM calls (spec generation)
+  define_max_tokens: 16000
+  # Max tokens for PLAN phase LLM calls (plan/task generation)
+  plan_max_tokens: 10000
+  # Max tokens for BUILD phase LLM calls (code generation per item)
+  build_max_tokens: 12000
+  # Max chars for diagram generation context (per input source)
+  diagram_context:
+    spec_chars: 3000
+    plan_chars: 8000
+    tasks_chars: 5000
+    doubt_chars: 3000
+
+# ── Artifact accumulation limits ─────────────────────────────────
+artifacts:
+  # Max entries to keep in all_generated_code list (BUILD subgraph)
+  max_generated_code_entries: 3
+  # Max entries in feedback list per phase
+  max_feedback_entries: 20
+  # Max chars for plan artifact stored in state
+  max_plan_chars: 40000
+  # Max chars for tasks artifact stored in state
+  max_tasks_chars: 20000
+  # Max chars for analysis artifact stored in state
+  max_analysis_chars: 15000
+  # Max chars for doubt_resolution artifact stored in state
+  max_doubt_chars: 15000
+  # Max chars for spec_refined in subgraph input
+  max_spec_subgraph_chars: 30000
+  # Max chars for tasks in subgraph input
+  max_tasks_subgraph_chars: 15000
+
+# ── Build pipeline limits ────────────────────────────────────────
+build:
+  # Max retries per backlog item before marking as failed
+  max_item_retries: 3
+  # Max build failures before aborting entire workflow
+  max_build_failures: 3
+  # Max chars for test/seed output stored in state
+  max_test_output_chars: 500
+  # Max chars for seed output stored in state
+  max_seed_output_chars: 500
+  # Max recent code snippets to include in implementation context
+  recent_code_snippets: 2
+  # Max chars for recent code context
+  recent_code_chars: 2000
+
+# ── Feedback & logging limits ────────────────────────────────────
+feedback:
+  # Max chars per feedback entry (skill output summary)
+  max_feedback_entry_chars: 300
+  # Max chars for historical pattern doc snippet (ChromaDB)
+  max_pattern_doc_chars: 400
+  # Max chars for project context query (ChromaDB)
+  max_context_query_chars: 500
+  # Max chars for user review comments in audit log
+  max_review_comments_chars: 500
+  # Max error messages to keep in errors list
+  max_error_entries: 10
+  # Max historical feedback patterns to load (top_k for ChromaDB)
+  max_chroma_patterns: 3
+
+# ── Memory budget (for monitoring) ────────────────────────────────
+memory_budget:
+  # Orchestrator container memory limit (bytes)
+  orchestrator_limit_bytes: 1073741824    # 1 GiB
+  # Builder container memory limit (bytes)
+  builder_limit_bytes: 6442450944          # 6 GiB
+  # Warning threshold percentage (alert when usage exceeds this %)
+  warning_threshold_pct: 75
+  # Critical threshold percentage (trigger emergency pruning)
+  critical_threshold_pct: 90

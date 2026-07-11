@@ -12,6 +12,12 @@ from tools.llm import invoke_skill
 from tools.context_manager import prepare_context_for_llm
 from tools.audit_logger import AuditLog
 from config.loader import config
+from config.bounds_loader import bounds
+
+
+def _cap_list(lst: list, max_len: int) -> list:
+    """Trim list to last max_len entries."""
+    return lst[-max_len:]
 from config.prompt_templates import speckit_specify, api_and_interface_design
 from feedback.chroma_client import get_chroma_client, query_patterns
 
@@ -24,14 +30,14 @@ def _load_feedback_context(state: dict) -> str:
             return ""
         project_name = state.get("project_name", "unknown")
         project_ctx = state.get("artifacts", {}).get("project_context", "")
-        query_text = f"project: {project_name} context: {project_ctx[:500]}"
-        results = query_patterns(client, {"project": project_name, "context": query_text[:500]}, top_k=3)
+        query_text = f"project: {project_name} context: {project_ctx[:bounds.feedback.max_context_query_chars]}"
+        results = query_patterns(client, {"project": project_name, "context": query_text[:bounds.feedback.max_context_query_chars]}, top_k=bounds.feedback.max_chroma_patterns)
         if not results:
             return ""
         parts = ["== Historical Lessons Learned =="]
         for i, pat in enumerate(results, 1):
             doc = pat.get("document", "")
-            parts.append(f"\n[Past Cycle {i}] (similarity distance: {pat.get('distance', '?'):.3f})\n{doc[:400]}")
+            parts.append(f"\n[Past Cycle {i}] (similarity distance: {pat.get('distance', '?'):.3f})\n{doc[:bounds.feedback.max_pattern_doc_chars]}")
         parts.append("\n== End Historical Lessons ==")
         text = "\n".join(parts)
         print(f"  → Loaded {len(results)} historical feedback patterns")
@@ -145,7 +151,7 @@ def define_node(state: dict) -> dict:
         print("  ⚠ No interview notes — using project description as fallback")
         interview_notes = state.get("project_description", "")
 
-    feedback.append({"skill": "interview-me", "output": interview_notes[:300] if interview_notes else "(empty)"})
+    feedback.append({"skill": "interview-me", "output": interview_notes[:bounds.feedback.max_feedback_entry_chars] if interview_notes else "(empty)"})
 
     # ── Step 2: Generate/refine spec (structured with traceability + ToT→CoT) ──
     specify_skill = skills.get("speckit-specify", {})
@@ -162,13 +168,13 @@ def define_node(state: dict) -> dict:
         task = speckit_specify.format(spec_path=state.get("spec_path", ""))
 
         # Context optimization: prune before LLM call
-        optimized = prepare_context_for_llm({"context": context}, max_tokens=16000)
+        optimized = prepare_context_for_llm({"context": context}, max_tokens=bounds.context.define_max_tokens)
         result = invoke_skill(
             specify_skill["content"], task, optimized["context"], llm=None,
             workflow_id=project_name, phase="DEFINE"
         )
         state["artifacts"]["spec_refined"] = result
-        feedback.append({"skill": "speckit-specify", "output": result[:300]})
+        feedback.append({"skill": "speckit-specify", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Step 3: API/interface design (multi-interface, contract-first + ToT→CoT) ──
     api_skill = skills.get("api-and-interface-design", {})
@@ -181,7 +187,7 @@ def define_node(state: dict) -> dict:
             llm=None, workflow_id=project_name, phase="DEFINE"
         )
         state["artifacts"]["api_contract"] = result
-        feedback.append({"skill": "api-and-interface-design", "output": result[:300]})
+        feedback.append({"skill": "api-and-interface-design", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Persist to $project_folder/specs/ ──
     project_folder = state.get("project_folder", state.get("project_path", ""))
@@ -223,7 +229,7 @@ def define_node(state: dict) -> dict:
         "spec_confidence": spec_confidence,
     })
     state["phase"] = "DEFINE"
-    state["feedback"] = state.get("feedback", []) + feedback
+    state["feedback"] = _cap_list(state.get("feedback", []) + feedback, bounds.artifacts.max_feedback_entries)
     state["next_phase"] = "PLAN"
     state["human_approval_required"] = False
 

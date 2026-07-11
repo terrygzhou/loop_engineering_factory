@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 from config.loader import config
+from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 
@@ -33,7 +34,7 @@ def ship_node(state: dict) -> dict:
         result = invoke_skill(obs_skill["content"], task,
                              f"Project: {project_path}", llm=None)
         state["artifacts"]["observability"] = result
-        feedback.append({"skill": "observability-and-instrumentation", "output": result[:300]})
+        feedback.append({"skill": "observability-and-instrumentation", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # Step 2: Pre-launch checklist
     launch_skill = skills.get("shipping-and-launch", {})
@@ -43,7 +44,7 @@ def ship_node(state: dict) -> dict:
         result = invoke_skill(launch_skill["content"], task,
                              f"Project: {project_path}", llm=None)
         state["artifacts"]["launch_checklist"] = result
-        feedback.append({"skill": "shipping-and-launch", "output": result[:300]})
+        feedback.append({"skill": "shipping-and-launch", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # Step 3: Deploy via Docker Compose (skip rebuild if BUILD already deployed)
     build_status = state.get("artifacts", {}).get("build_status", "")
@@ -65,7 +66,7 @@ def ship_node(state: dict) -> dict:
                                  state.get("artifacts", {}).get("launch_checklist", ""),
                                  llm=None)
             state["artifacts"]["deploy_logs"] = result
-            feedback.append({"skill": "docker-compose-deployment", "output": result[:300]})
+            feedback.append({"skill": "docker-compose-deployment", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # Step 4: Git workflow (commit changes)
     git_skill = skills.get("git-workflow", {})
@@ -76,19 +77,21 @@ def ship_node(state: dict) -> dict:
                              f"Cycle: {state['cycle_id']}", llm=None)
         state["artifacts"]["git_log"] = result
         state["config_version"] = state["cycle_id"]
-        feedback.append({"skill": "git-workflow", "output": result[:300]})
+        feedback.append({"skill": "git-workflow", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Write live.json: product delivery record ──
     # This is the bridge for future --improve cycles:
     # DISCOVER reads this file to find and health-check the running product.
     try:
-        from config.loader import config as _cfg
+        from config.loader import config
+from config.bounds_loader import bounds as _cfg
         _storage_dir = _cfg.paths.storage_dir
         _project_path = project_path or state.get("project_folder", "")
         # Derive product_type from DISCOVER scan context if available
         _ctx = state.get("artifacts", {}).get("project_context", "{}")
         _product_type = json.loads(_ctx if isinstance(_ctx, str) else "{}").get("project_type", "python-fastapi")
-        from config.loader import config as _cfg
+        from config.loader import config
+from config.bounds_loader import bounds as _cfg
         _product_url = _cfg.services.product.url
         _live = {
             "version": "1",

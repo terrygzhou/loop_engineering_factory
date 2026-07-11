@@ -21,6 +21,7 @@ from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 
 from config import loader
+from config.bounds_loader import bounds
 from graph.state import WorkflowState, CycleMetrics
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
@@ -62,7 +63,7 @@ class BuildSubState(TypedDict):
     parent_artifacts: dict         # Reference to parent artifacts dict (for writing back)
 
 
-MAX_ITEM_RETRIES = 3
+MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
 
 
 # ── Sub-node functions ─────────────────────────────────────────────
@@ -80,11 +81,11 @@ def impl_plan_node(state: BuildSubState) -> BuildSubState:
             "Review the spec and tasks, then create an implementation plan.\n"
             "Outline the order of implementation, dependencies between components,\n"
             "and any architectural decisions. Be concise.\n\n"
-            f"Spec:\n{spec[:2000]}\n\nTasks:\n{tasks[:2000]}"
+            f"Spec:\n{spec[:bounds.build.recent_code_chars]}\n\nTasks:\n{tasks[:bounds.build.recent_code_chars]}"
         )
         plan = invoke_skill(impl_skill["content"], task, "", llm=None)
     else:
-        plan = f"Implement tasks in order: {tasks[:500]}"
+        plan = f"Implement tasks in order: {tasks[:bounds.build.recent_code_chars]}"
 
     state["impl_plan"] = plan
     state["sub_phase"] = "IMPL_PLAN"
@@ -126,7 +127,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         return implement_node(state)  # Skip to next
 
     print(f"  → [IMPLEMENT] Item {idx + 1}/{len(state['backlog'])}: {item['description'][:80]}")
-    print(f"     Retry: {state['retry_count']}/{MAX_ITEM_RETRIES}")
+    print(f"     Retry: {state['retry_count']}/{bounds.build.max_item_retries}")
 
     skills = state["skills"]
     spec = state["spec_text"]
@@ -149,7 +150,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
     if impl_skill:
         impl_context = spec + "\n\n" + tasks
         if idx > 0:
-            impl_context += "\n\nPreviously generated code:\n" + "\n".join(state["all_generated_code"][-2:])[:2000]
+            impl_context += "\n\nPreviously generated code:\n" + "\n".join(state["all_generated_code"][-bounds.build.recent_code_snippets:])[:bounds.build.recent_code_chars]
 
         result = invoke_skill(
             impl_skill["content"],
@@ -158,7 +159,8 @@ def implement_node(state: BuildSubState) -> BuildSubState:
             llm=None,
         )
         item_code = result
-        state["all_generated_code"].append(result)
+        # Cap to prevent unbounded memory growth
+        state["all_generated_code"] = state["all_generated_code"][-bounds.artifacts.max_generated_code_entries:] + [result]
 
     # Step 2: Generate tests
     tdd_skill = skills.get("test-driven-development", {})
@@ -181,7 +183,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
     if not item_code:
         state["errors"].append(f"Item {item['id']}: No code generated")
         state["retry_count"] += 1
-        if state["retry_count"] >= MAX_ITEM_RETRIES:
+        if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
         return state
@@ -215,7 +217,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["test_output"] = "No files generated"
         state["errors"].append(f"Item {item['id']}: No files to test")
         state["retry_count"] += 1
-        if state["retry_count"] >= MAX_ITEM_RETRIES:
+        if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
         state["sub_phase"] = "UNIT_TEST"
@@ -238,10 +240,10 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     if rc != 0:
         print(f"     ✗ Docker build failed: {err[:200]}")
         state["test_result"] = "fail"
-        state["test_output"] = err[:500]
+        state["test_output"] = err[:bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: Docker build failed")
         state["retry_count"] += 1
-        if state["retry_count"] >= MAX_ITEM_RETRIES:
+        if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
         return state
@@ -253,7 +255,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Container start failed")
         state["retry_count"] += 1
-        if state["retry_count"] >= MAX_ITEM_RETRIES:
+        if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
         return state
@@ -269,7 +271,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Health check failed")
         state["retry_count"] += 1
-        if state["retry_count"] >= MAX_ITEM_RETRIES:
+        if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
         return state
@@ -286,17 +288,17 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     if rc == 0 and failed == 0:
         print(f"     ✓ pytest passed ({passed} tests) — item {item['id']} complete")
         state["test_result"] = "pass"
-        state["test_output"] = test_out[:500]
+        state["test_output"] = test_out[:bounds.build.max_test_output_chars]
         state["backlog"][idx]["status"] = "completed"
         state["retry_count"] = 0
         state["backlog_idx"] = idx + 1
     else:
         print(f"     ✗ pytest: {failed} failed, {passed} passed")
         state["test_result"] = "fail"
-        state["test_output"] = test_out[:500]
+        state["test_output"] = test_out[:bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: {failed} test failures (attempt {state['retry_count'] + 1})")
         state["retry_count"] += 1
-        if state["retry_count"] >= MAX_ITEM_RETRIES:
+        if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
             state["retry_count"] = 0
@@ -413,12 +415,12 @@ Requirements:
         if result.returncode != 0:
             print(f"     ✗ Seed script failed (exit {result.returncode})")
             state["seed_result"] = "fail"
-            state["seed_output"] = seed_output[:500]
+            state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
             state["errors"].append(f"SEED: exit {result.returncode}: {seed_output[:200]}")
         else:
             print(f"     ✓ Seed data populated successfully")
             state["seed_result"] = "pass"
-            state["seed_output"] = seed_output[:500]
+            state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
     except subprocess.TimeoutExpired:
         print("     ✗ Seed script timed out (>60s)")
         state["seed_result"] = "fail"
@@ -557,8 +559,8 @@ def build_input_mapping(parent: dict) -> BuildSubState:
         "sub_phase": "IMPL_PLAN",
         "project_path": project_path,
         "docker_proj": docker_proj,
-        "spec_text": parent.get("artifacts", {}).get("spec_refined", "")[:30000],
-        "tasks_text": parent.get("artifacts", {}).get("tasks", "")[:15000],
+        "spec_text": parent.get("artifacts", {}).get("spec_refined", "")[:bounds.artifacts.max_spec_subgraph_chars],
+        "tasks_text": parent.get("artifacts", {}).get("tasks", "")[:bounds.artifacts.max_tasks_subgraph_chars],
         "skills": skills,
         "backlog": [],
         "backlog_idx": 0,

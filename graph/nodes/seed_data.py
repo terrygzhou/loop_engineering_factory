@@ -10,6 +10,7 @@ import json
 import subprocess
 from pathlib import Path
 from config.loader import config
+from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
@@ -170,12 +171,12 @@ Requirements:
             capture_output=True, text=True, timeout=60, cwd=docker_proj,
         )
         seed_output = result.stdout + result.stderr
-        print(f"  Seed output:\n{seed_output[:500]}")
+        print(f"  Seed output:\n{seed_output[:bounds.build.max_seed_output_chars]}")
 
         if result.returncode != 0:
             print("  ✗ Seed script failed with exit code", result.returncode)
             state["artifacts"]["seed_errors"] = seed_output
-            state["error"] = f"Seed script failed (exit {result.returncode}): {seed_output[:300]}"
+            state["error"] = f"Seed script failed (exit {result.returncode}): {seed_output[:bounds.feedback.max_feedback_entry_chars]}"
             state["next_phase"] = "BUILD"
         else:
             print("  ✓ Seed data populated successfully")

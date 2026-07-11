@@ -9,6 +9,7 @@ import os
 import re
 import json
 from config.loader import config
+from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from config.guardrails import get_threshold
@@ -116,7 +117,8 @@ def verify_node(state: dict) -> dict:
         phase_1_note = "SKIP" if skip_rebuild else "REQUIRED"
         phase_4_note = "SKIP (BUILD ran pytest)" if skip_pytest else "REQUIRED"
 
-        from config.loader import config as _cfg
+        from config.loader import config
+from config.bounds_loader import bounds as _cfg
         _base_url = _cfg.services.product.url
         task = (
             f"Run full UAT tests for project: {project_path}\n"
@@ -161,7 +163,7 @@ def verify_node(state: dict) -> dict:
                              "Project: " + project_path + f"\nBase URL: {_base_url}",
                              llm=None)
         state["artifacts"]["uat_results"] = result
-        feedback.append({"skill": "uat-workflow", "output": result[:500]})
+        feedback.append({"skill": "uat-workflow", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
         # Parse all UAT metrics
         uat_metrics = _parse_uat_metrics(result)
@@ -186,7 +188,7 @@ def verify_node(state: dict) -> dict:
                                  state.get("artifacts", {}).get("code_generated", ""),
                                  llm=None)
             state["artifacts"]["perf_report"] = result
-            feedback.append({"skill": "performance-optimization", "output": result[:300]})
+            feedback.append({"skill": "performance-optimization", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # Step 3: Systematic debugging (if test flakiness exceeds threshold)
     if flakiness > max_flakiness:
@@ -198,7 +200,7 @@ def verify_node(state: dict) -> dict:
                                  state.get("artifacts", {}).get("uat_results", ""),
                                  llm=None)
             state["artifacts"]["debug_report"] = result
-            feedback.append({"skill": "systematic-debugging", "output": result[:300]})
+            feedback.append({"skill": "systematic-debugging", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # Step 4: Code simplification (if review revisions exceed threshold)
     if metrics.review_revisions > max_revisions:
@@ -210,7 +212,7 @@ def verify_node(state: dict) -> dict:
                                  state.get("artifacts", {}).get("code_generated", ""),
                                  llm=None)
             state["artifacts"]["simplified_code"] = result
-            feedback.append({"skill": "code-simplification", "output": result[:300]})
+            feedback.append({"skill": "code-simplification", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # Update metrics with actual UAT results
     state["metrics"] = state["metrics"].model_copy(update={

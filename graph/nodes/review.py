@@ -13,7 +13,8 @@ Uses LangGraph OOTB interrupt() for the HIL pause.
 import json
 import os
 from pathlib import Path
-from config.loader import config as _cfg
+from config.loader import config
+from config.bounds_loader import bounds as _cfg
 from langgraph.types import interrupt
 from tools.audit_logger import AuditLog
 
@@ -150,7 +151,7 @@ def review_node(state: dict) -> dict:
         state["user_review_comments"] = user_review_comments
         state["next_phase"] = "PLAN"
         print(f"  ✗ REVIEW rejected — sending back to PLAN with feedback ({len(user_review_comments)} chars)")
-        audit.log_node_output("REVIEW", {"approved": False, "comments": user_review_comments[:500]})
+        audit.log_node_output("REVIEW", {"approved": False, "comments": user_review_comments[:bounds.feedback.max_review_comments_chars]})
         audit.log_node_transition("REVIEW", "PLAN", "plan rejected with feedback")
 
     state["phase"] = "REVIEW"

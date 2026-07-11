@@ -16,7 +16,8 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from langgraph.types import interrupt
-from config.loader import config as _cfg
+from config.loader import config
+from config.bounds_loader import bounds as _cfg
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
@@ -166,7 +167,8 @@ def _discover_auto_approve(state: dict) -> dict:
     state["phase"] = "DISCOVER"
     state["next_phase"] = "DEFINE"
 
-    from config.loader import config as _cfg
+    from config.loader import config
+from config.bounds_loader import bounds as _cfg
     project_folder = state.get("project_folder", "") or os.path.join(
         os.path.expanduser(_cfg.paths.workspace_dir),
         project_name or "Untitled"
@@ -240,12 +242,14 @@ def _generate_requirement_template(project_name, project_description, interview_
 
 def _load_improve_telemetry(state, project_name):
     try:
-        from config.loader import config as _cfg
+        from config.loader import config
+from config.bounds_loader import bounds as _cfg
         _live_path = Path(_cfg.paths.storage_dir) / "live.json"
         if not _live_path.exists():
             return None
         telemetry = json.loads(_live_path.read_text())
-        from config.loader import config as _cfg
+        from config.loader import config
+from config.bounds_loader import bounds as _cfg
         url = telemetry.get("product_url", _cfg.services.product.url)
         health = telemetry.get("health_endpoint", "/health")
         try:
@@ -352,7 +356,7 @@ def _discover_dependencies(project_path):
     for f in [p / "requirements.txt", p / "package.json", p / "Cargo.toml", p / "go.mod"]:
         if f.exists():
             try:
-                deps[f.name] = f.read_text(errors="replace")[:500]
+                deps[f.name] = f.read_text(errors="replace")[:bounds.feedback.max_context_query_chars]
             except Exception: pass
     return deps
 
@@ -360,7 +364,7 @@ def _discover_dependencies(project_path):
 def _get_git_status(project_path):
     try:
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=project_path, timeout=5)
-        return {"status": result.stdout.strip()[:500], "clean": not result.stdout.strip()}
+        return {"status": result.stdout.strip()[:bounds.feedback.max_context_query_chars], "clean": not result.stdout.strip()}
     except Exception:
         return {"status": "unknown"}
 
