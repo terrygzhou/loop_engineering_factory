@@ -58,3 +58,17 @@ output/
 
 # State directory (local runtime data)
 state/
+.state/
+
+# Root config with local paths (source of truth is config/config.yaml)
+config.yaml
+
+# Generated diagrams / images (reproducible from Mermaid)
+architecture.html
+architecture.png
+
+# Auto-generated skill registry (rebuildable)
+skills/SKILLS_INDEX.json
+
+# README screenshot (large binary, not version-controlled)
+# image.png
