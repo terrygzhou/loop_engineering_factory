@@ -1,14 +1,56 @@
 # Loop Factory
 
-AI agent-driven loop-engineering factory to produce software products with minimal human intervention.
+AI agent-driven loop-engineering factory to produce software products based on the architecture and business specifications, with minimal human intervention.
 
-Self-improving AI-driven software development engine built on LangGraph.
+![The UI dashboard](image.png)
+
+It is a Self-improving AI-driven software development engine built on LangGraph.
+
 
 ```
-DISCOVER → DEFINE → PLAN → ARCH_REVIEW → BUILD → SEED_DATA → VERIFY → SHIP → REFLECT
+DISCOVER → DEFINE → PLAN → REVIEW → BUILD → SHIP → REFLECT
 ```
 
-![UI of a loop](image.png)
+### State Machine
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> DISCOVER
+
+    %% Fixed forward edges (graph/main.py)
+    DISCOVER --> DEFINE
+    DEFINE --> PLAN
+    PLAN --> REVIEW
+    SHIP --> REFLECT
+    REFLECT --> [*]
+
+    %% Conditional edges (graph/edges.py route_phase)
+    REVIEW --> BUILD : approved (auto or human)
+    REVIEW --> PLAN : rejected (loop back, max 2)
+
+    BUILD --> SHIP : all gates pass
+    BUILD --> BUILD : security / revisions / UAT gate failed (self-loop)
+    BUILD --> REFLECT : error + build_fail_count exceeded
+
+    %% Self-loops (quality gates in edges.py)
+    DEFINE --> DEFINE : spec_confidence < 0.9 (max 2)
+    PLAN --> PLAN : arch_uncertainty > 0.8 (max 2)
+
+    %% HIL interrupt points
+    note right of DISCOVER : interrupt() x2<br/>project_setup + interview
+    note right of REVIEW : interrupt() x1<br/>human approve/reject
+
+    classDef hil fill:#FFD700,stroke:#B8860B,stroke-width:2px,color:#000
+    classDef gate fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
+    classDef normal fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
+    class DISCOVER,REVIEW hil
+    class DEFINE,PLAN,BUILD gate
+    class SHIP,REFLECT normal
+```
+
+> **Note**: The code implements 7 phases. `ARCH_REVIEW`, `SEED_DATA`, and `VERIFY` nodes exist as files (`graph/nodes/seed_data.py`) but are **not wired** into `graph/main.py`. The `BUILD` subgraph (`build_subgraph.py`) handles seed/UAT internally.
 
 Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop) review gates, and self-improvement via ChromaDB pattern storage. CLI and Web UI share the same `WorkflowRunner` — identical node execution, different UX layers.
 
