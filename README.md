@@ -94,7 +94,7 @@ graph LR
 | `UNIT_TEST` | Docker build → pytest → pass/fail | retry ≤ `{max_item_retries}` |
 | `INT_TEST` | Aggregate integration health check | HTTP status 2xx |
 | `SEED` | Generate & run seed data script | AST valid + DB insert OK |
-| `UAT` | Playwright UAT + pass rate check | `uat_pass_rate ≥ 0.8` |
+| `UAT` | SuperWeb UAT — agent mode (OpenHands) → scripted (Playwright) → LLM fallback | `uat_pass_rate ≥ 0.8` |
 
 **Outer graph routing** (from `edges.py`): BUILD self-loops if `security_findings > 0`, `review_revisions > max`, or `uat_pass_rate < min`. After 3 consecutive build failures, routes directly to `REFLECT` to skip `SHIP`.
 
@@ -123,6 +123,7 @@ graph LR
             Graph["StateGraph\nWorkflow"]
             Nodes["9 Phase Nodes"]
             Bridge["HIL Bridge\nSSE Events"]
+            UATNode["UAT Node\n(SuperWeb CLI)"]
         end
 
         subgraph Tools["Tool Layer"]
@@ -136,6 +137,7 @@ graph LR
         LLM_Srv["LLM Server\n(vLLM :8080)"]
         Docker["Docker Engine"]
         Chroma["ChromaDB :8000"]
+        OpenHands["OpenHands\n(:3005)\nAgent Server"]
     end
 
     U -->|browser| WebUI
@@ -151,6 +153,21 @@ graph LR
     Graph -->|"build & deploy"| Docker
     ChromaC <--> Chroma
     WebUI --> Nginx
+
+    %% SuperWeb UAT flows (agent → scripted → LLM fallback)
+    Nodes -->|"BUILD: UAT"| UATNode
+    UATNode -->|"agent mode"| OpenHands
+    UATNode -->|"scripted"| Docker
+    UATNode -->|"fallback"| LLM
+
+    classDef default fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
+    classDef hil fill:#FFD700,stroke:#B8860B,stroke-width:2px,color:#000
+    classDef gate fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
+    classDef normal fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
+    classDef external fill:#E8E8E8,stroke:#666,stroke-width:1px,color:#000
+    classDef agent fill:#90EE90,stroke:#2E8B57,stroke-width:2px,color:#000
+    class UATNode agent
+    class OpenHands external
 ```
 
 ### Deployment Architecture
@@ -215,9 +232,9 @@ Each workflow phase chains specialized skills from `skills/` (29 registered). Sk
 | **DEFINE** | `speckit-specify` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
 | **PLAN** | `writing-plans` → `speckit-tasks` → `speckit-analyze` → `doubt-driven-development` → `speckit-checklist` → `architecture-diagram-generator` | Task breakdown, architecture planning, doubt resolution, and diagram generation. Outputs `plan.md` + `diagrams.md`. |
 | **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → DEFINE. Max 2 retries. |
-| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → `docker-compose-deployment` | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. |
+| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → `docker-compose-deployment` → **SuperWeb UAT** (`agent` mode default → `scripted` fallback → LLM prompt) | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. **UAT: SuperWeb agent mode** (OpenHands explores the app, generates tests) with scripted and LLM fallbacks. |
 | **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
-| **VERIFY** | `uat-workflow` → `performance-optimization` → `systematic-debugging` → `code-simplification` | Playwright UAT (mandatory). Conditional: performance profiling if P95 > 500ms, debugging if flakiness > 10%, simplification if review revisions > threshold. |
+| **VERIFY** | `performance-optimization` → `systematic-debugging` → `code-simplification` | Conditional gates only — UAT moved to BUILD subgraph (SuperWeb agent mode). Performance profiling if P95 > 500ms, debugging if flakiness > 10%, simplification if review revisions > threshold. |
 | **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `docker-compose-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, Docker deployment, version tagging. |
 | **REFLECT** | Internal `diff_engine` → `context-pruning` → `git-workflow` | Cycle analysis: aggregates metrics, queries ChromaDB patterns, generates config/guardrail diff proposals. Human approval gate for changes. |
 
@@ -333,6 +350,7 @@ docker compose up -d --build loop
 | `prometheus` | :9090 | Metrics scraping |
 | `grafana` | :3000 | Observability dashboards |
 | `promtail` | _(internal)_ | Log aggregation |
+| `openhands` | :3005 | OpenHands Agent Server — SuperWeb UAT agent mode |
 
 ### Stopping & Restarting
 
@@ -394,6 +412,13 @@ workflow:
   hil_mode: auto
   max_retries: 2
   auto_approve: false
+
+superweb:
+  mode: agent
+  openhands_url: http://openhands:8000
+  openhands_port: 3005
+  agent_conversations: 3
+  agent_timeout_seconds: 3600
 ```
 
 ---
@@ -406,6 +431,7 @@ pydantic, pyyaml, httpx, aiohttp
 chromadb (pattern storage)
 opentelemetry-api, opentelemetry-sdk (observability)
 uvicorn, fastapi (web UI)
+superweb-testing (UAT — agent mode: OpenHands, scripted: Playwright)
 ```
 
 Install: baked into Docker image via `docker compose up -d --build`.
