@@ -76,3 +76,18 @@ memory_budget:
   warning_threshold_pct: 75
   # Critical threshold percentage (trigger emergency pruning)
   critical_threshold_pct: 90
+
+# ── SuperWeb UAT settings ─────────────────────────────────────────
+superweb:
+  # Execution mode: "agent" (default) or "scripted"
+  mode: "agent"
+  # Timeout for scripted mode (seconds)
+  timeout_seconds: 600
+  # Timeout for agent mode (seconds) — OpenHands conversations
+  agent_timeout_seconds: 3600
+  # Number of test data variations per form (scripted mode)
+  variations: 3
+  # Fallback to LLM-prompt UAT if SuperWeb fails
+  fallback_to_llm: true
+  # Pass rate threshold for UAT verdict
+  pass_rate_threshold: 0.8

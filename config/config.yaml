@@ -66,3 +66,10 @@ workflow:
   hil_mode: auto
   max_retries: 2
   skill_registry_path: ~/.hermes/skills
+
+superweb:
+  mode: agent
+  openhands_url: http://openhands:8000
+  openhands_port: 3005
+  agent_conversations: 3
+  agent_timeout_seconds: 3600

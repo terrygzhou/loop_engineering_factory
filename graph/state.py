@@ -66,3 +66,5 @@ class WorkflowState(TypedDict):
     # ── BUILD subgraph state (carried through for merge) ──
     build_backlog: Optional[List[dict]]     # Backlog items from BUILD subgraph
     build_uat_pass_rate: float              # UAT pass rate from BUILD subgraph
+    superweb_mode: str                       # "agent" | "scripted" — UAT execution mode
+    superweb_agent_report: Optional[dict]   # Parsed agent_report.json from agent mode

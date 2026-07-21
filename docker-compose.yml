@@ -90,7 +90,27 @@ services:
       - phoenix_data:/var/lib/phoenix
     restart: unless-stopped
 
-  # ── Promtail: ship container logs → Loki (grafana-stack network) ──
+  # ── OpenHands: AI agent for SuperWeb UAT (agent mode) ──
+  openhands:
+    image: ghcr.io/openhands/agent-server:1.30.0-python
+    container_name: openhands-server
+    restart: unless-stopped
+    ports:
+      - "3005:8000"
+    volumes:
+      - ~/.openhands:/.openhands
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - LLM_BASE_URL=http://pop-os:8080/v1
+      - LLM_MODEL=Qwen3.6-27B
+      - SANDBOX_USER_ID=1000
+      - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
+      - AGENT_SERVER_IMAGE_TAG=1.30.0-python
+      - WORKSPACE_BASE=/opt/workspace_base
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - loop
   promtail:
     image: grafana/promtail:3.0.0
     volumes:

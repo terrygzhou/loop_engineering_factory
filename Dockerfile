@@ -37,6 +37,9 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --no-cache-dir playwright \
     && python3 -m playwright install chromium
 
+# Install SuperWeb Testing CLI (UAT tool)
+RUN pip install --no-cache-dir superweb-testing
+
 WORKDIR /app
 
 # Copy Python packages from builder

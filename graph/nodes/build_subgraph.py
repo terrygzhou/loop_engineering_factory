@@ -59,6 +59,8 @@ class BuildSubState(TypedDict):
     errors: list[str]              # Accumulated error messages
     build_status: str              # "pass" / "fail" / "partial"
     parent_artifacts: dict         # Reference to parent artifacts dict (for writing back)
+    superweb_mode: str             # "agent" (default) | "scripted"
+    superweb_agent_report: dict    # Parsed agent_report.json from agent mode
 
 MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
 
@@ -443,59 +445,166 @@ Requirements:
     state["sub_phase"] = "SEED"
     return state
 
-def uat_node(state: BuildSubState) -> BuildSubState:
-    """Run UAT tests (from verify.py logic)."""
-    print("  → [UAT] Running UAT tests...")
-    skills = state["skills"]
-    docker_proj = state["docker_proj"]
-    project_path = state["project_path"]
-    build_status = "pass"  # Already passed unit/int tests
+def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
+    """Run SuperWeb in agent mode — OpenHands agent explores and tests."""
+    agent_timeout = getattr(getattr(bounds, "superweb", None), "agent_timeout_seconds", 3600)
+    llm_url = getattr(getattr(bounds, "services", None), "llm_base_url", "http://172.25.0.1:8080")
+    llm_model = getattr(getattr(bounds, "llm", None), "model", "Qwen3.6-27B")
+    superweb_root = getattr(getattr(bounds, "paths", None), "superweb_root", "/app")
+    cmd = [
+        "superweb", "run",
+        "--target", base_url,
+        "--source", state["project_path"],
+        "--output", str(output_dir),
+        "--mode", "agent",
+        "--agent-timeout", str(agent_timeout),
+        "--llm-url", llm_url,
+        "--llm-model", llm_model,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=agent_timeout + 120,
+            cwd=str(Path(superweb_root)),
+        )
+        # Parse agent_report.json or test_results.json
+        report_path = output_dir / "report" / "agent_report.json"
+        if report_path.exists():
+            return json.loads(report_path.read_text())
+        # Fallback: check data/test_results.json
+        results_path = output_dir / "data" / "test_results.json"
+        if results_path.exists():
+            return {"results": json.loads(results_path.read_text())}
+        return {"status": "completed", "verdict": "unknown"}
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "verdict": "fail"}
+    except FileNotFoundError:
+        return {"status": "not_found", "verdict": "fail"}
 
-    # Skip rebuild — already done in unit/int test phases
+
+def _run_superweb_scripted(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
+    """Run SuperWeb in scripted mode — deterministic Playwright pipeline."""
+    timeout = getattr(getattr(bounds, "superweb", None), "timeout_seconds", 600)
+    variations = getattr(getattr(bounds, "superweb", None), "variations", 3)
+    llm_url = getattr(getattr(bounds, "services", None), "llm_base_url", "http://172.25.0.1:8080")
+    llm_model = getattr(getattr(bounds, "llm", None), "model", "Qwen3.6-27B")
+    superweb_root = getattr(getattr(bounds, "paths", None), "superweb_root", "/app")
+    cmd = [
+        "superweb", "run",
+        "--target", base_url,
+        "--source", state["project_path"],
+        "--output", str(output_dir),
+        "--mode", "scripted",
+        "--variations", str(variations),
+        "--llm-url", llm_url,
+        "--llm-model", llm_model,
+    ]
+    try:
+        subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            cwd=str(Path(superweb_root)),
+        )
+        results_path = output_dir / "data" / "test_results.json"
+        if results_path.exists():
+            return {"scripted_results": json.loads(results_path.read_text())}
+        return {"scripted_results": []}
+    except subprocess.TimeoutExpired:
+        return {"scripted_results": []}
+    except FileNotFoundError:
+        return {"scripted_results": []}
+
+
+def _run_llm_uat_fallback(state: BuildSubState, base_url: str) -> tuple[str, float]:
+    """Fallback to LLM-prompt UAT (original behavior)."""
+    skills = state["skills"]
     uat_skill = skills.get("uat-workflow", {})
     if not uat_skill:
-        print("     ⚠ uat-workflow skill not found — defaulting to pass")
-        state["uat_result"] = "pass"
-        state["uat_output"] = "SKIPPED — skill not found"
-        state["uat_pass_rate"] = 0.5
-        state["sub_phase"] = "UAT"
-        return state
+        return "SKIPPED — skill not found", 0.5
 
-    from config.loader import config as _cfg
-    _base_url = _cfg.services.product.url
-    max_latency = 2000
     task = (
-        f"Run full UAT tests for project: {project_path}\n"
-        f"Base URL: {_base_url}\n\n"
-        "=== UAT EXECUTION ORDER ===\n"
-        "Phase 0: Playwright setup (verify installed, chromium available)\n"
-        "Phase 1: Docker rebuild + health check (SKIP — already done)\n"
-        "Phase 2: Pre-UAT bulk API sweep (curl all discovered routes)\n"
-        "Phase 3: Template completeness check\n"
-        "Phase 4: Automated pytest test run (SKIP — already done)\n"
-        "Phase 5: Playwright UAT — desktop pass (MANDATORY)\n"
-        "Phase 6: Playwright UAT — mobile pass (MANDATORY)\n"
-        "Phase 7: Browser Tool Walkthrough (fallback)\n"
-        "Phase 8: Report: PASS/FAIL verdict with per-page results\n\n"
-        "=== Report Format ===\n"
-        "For each test case, output: [PASS] or [FAIL]: test description\n"
-        "Final summary must include: Total tests run, Passed, Failed, Pass rate (0.0-1.0), Verdict: PASS or FAIL\n"
+        f"Run full UAT tests for project: {state['project_path']}\\n"
+        f"Base URL: {base_url}\\n\\n"
+        "=== UAT EXECUTION ORDER ===\\n"
+        "Phase 0: Playwright setup (verify installed, chromium available)\\n"
+        "Phase 2: Pre-UAT bulk API sweep (curl all discovered routes)\\n"
+        "Phase 3: Template completeness check\\n"
+        "Phase 5: Playwright UAT — desktop pass (MANDATORY)\\n"
+        "Phase 6: Playwright UAT — mobile pass (MANDATORY)\\n"
+        "Phase 7: Browser Tool Walkthrough (fallback)\\n"
+        "Phase 8: Report: PASS/FAIL verdict with per-page results\\n\\n"
+        "=== Report Format ===\\n"
+        "For each test case, output: [PASS] or [FAIL]: test description\\n"
+        "Final summary must include: Total tests run, Passed, Failed, Pass rate (0.0-1.0), Verdict: PASS or FAIL\\n"
     )
-
-    result = invoke_skill(uat_skill["content"], task, f"Project: {project_path}\nBase URL: {_base_url}", llm=None)
+    result = invoke_skill(uat_skill["content"], task, f"Project: {state['project_path']}\\nBase URL: {base_url}", llm=None)
     state["uat_output"] = result[:bounds.build.max_seed_output_chars]
     uat_metrics = parse_uat_metrics(result)
-    state["uat_pass_rate"] = uat_metrics["uat_pass_rate"]
+    return result, uat_metrics["uat_pass_rate"]
 
-    if uat_metrics["uat_pass_rate"] >= 0.8:
-        state["uat_result"] = "pass"
-        print(f"     ✓ UAT passed (rate={uat_metrics['uat_pass_rate']})")
+
+def uat_node(state: BuildSubState) -> BuildSubState:
+    """Run UAT tests — agent mode default, scripted fallback, LLM fallback."""
+    print("  → [UAT] Running UAT tests...")
+    from config.loader import config as _cfg
+    base_url = _cfg.services.product.url
+
+    output_dir = Path(state["project_path"]) / "superweb_output"
+    mode = state.get("superweb_mode", "agent")
+    print(f"     Mode: {mode}")
+
+    uat_pass_rate = 0.0
+    uat_result = "fail"
+    uat_output = ""
+
+    # ── Try SuperWeb (agent mode default) ──────────────────────────
+    superweb_worked = False
+    if mode == "agent":
+        report = _run_superweb_agent(state, base_url, output_dir)
+        if report.get("status") != "not_found":
+            superweb_worked = True
+            uat_output = json.dumps(report, indent=2)[:bounds.build.max_seed_output_chars]
+            # Parse verdict
+            verdict = report.get("verdict", "unknown")
+            # Try to extract pass rate from results
+            if "results" in report:
+                results = report["results"]
+                if isinstance(results, list) and results:
+                    passed = sum(1 for r in results if r.get("status") == "passed")
+                    uat_pass_rate = passed / len(results)
+                else:
+                    uat_pass_rate = 1.0 if verdict == "pass" else 0.0
+            elif verdict == "pass":
+                uat_pass_rate = 1.0
+            elif verdict == "fail":
+                uat_pass_rate = 0.0
+            else:
+                uat_pass_rate = 0.5
     else:
-        state["uat_result"] = "fail"
-        print(f"     ✗ UAT failed (rate={uat_metrics['uat_pass_rate']})")
-        state["errors"].append(f"UAT: pass rate {uat_metrics['uat_pass_rate']} < 0.8")
+        results = _run_superweb_scripted(state, base_url, output_dir)
+        if results:
+            superweb_worked = True
+            passed = sum(1 for r in results if r.get("status") == "passed")
+            uat_pass_rate = passed / len(results)
+            uat_output = json.dumps(results[:5], indent=2)[:bounds.build.max_seed_output_chars]
+
+    # ── Fallback chain ─────────────────────────────────────────────
+    if not superweb_worked:
+        print("     ⚠ SuperWeb unavailable — falling back to LLM UAT")
+        result_text, uat_pass_rate = _run_llm_uat_fallback(state, base_url)
+        uat_output = result_text[:bounds.build.max_seed_output_chars]
+
+    # ── Verdict ────────────────────────────────────────────────────
+    if uat_pass_rate >= 0.8:
+        uat_result = "pass"
+        print(f"     ✓ UAT passed (rate={uat_pass_rate:.2f})")
+    else:
+        uat_result = "fail"
+        print(f"     ✗ UAT failed (rate={uat_pass_rate:.2f})")
+        state["errors"].append(f"UAT: pass rate {uat_pass_rate:.2f} < 0.8")
         state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
 
+    state["uat_pass_rate"] = uat_pass_rate
+    state["uat_result"] = uat_result
+    state["uat_output"] = uat_output
     state["sub_phase"] = "UAT"
     return state
 
@@ -587,6 +696,8 @@ def build_input_mapping(parent: dict) -> BuildSubState:
         "errors": [],
         "build_status": "pending",
         "parent_artifacts": parent.get("artifacts", {}),
+        "superweb_mode": "agent",  # Default: agent mode
+        "superweb_agent_report": {},
     })
 
 def build_output_mapping(child: BuildSubState) -> dict:
