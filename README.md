@@ -28,15 +28,15 @@ stateDiagram-v2
 
     %% Conditional edges (graph/edges.py route_phase)
     REVIEW --> BUILD : approved (auto or human)
-    REVIEW --> PLAN : rejected (loop back, max 2)
+    REVIEW --> PLAN : rejected
 
     BUILD --> SHIP : all gates pass
-    BUILD --> BUILD : security / revisions / UAT gate failed (self-loop)
-    BUILD --> REFLECT : error + build_fail_count exceeded
+    BUILD --> BUILD : security / revisions / UAT gate failed
+    BUILD --> REFLECT : 3 consecutive build failures
 
     %% Self-loops (quality gates in edges.py)
-    DEFINE --> DEFINE : spec_confidence < 0.9 (max 2)
-    PLAN --> PLAN : arch_uncertainty > 0.8 (max 2)
+    DEFINE --> DEFINE : spec_confidence < 0.9 (max 2 loops)
+    PLAN --> PLAN : arch_uncertainty > 0.8 (max 2 loops)
 
     %% HIL interrupt points
     note right of DISCOVER : interrupt() x2<br/>project_setup + interview
@@ -51,6 +51,52 @@ stateDiagram-v2
 ```
 
 > **Note**: The code implements 7 phases. `ARCH_REVIEW`, `SEED_DATA`, and `VERIFY` nodes exist as files (`graph/nodes/seed_data.py`) but are **not wired** into `graph/main.py`. The `BUILD` subgraph (`build_subgraph.py`) handles seed/UAT internally.
+
+#### BUILD Phase Subgraph
+
+The BUILD node delegates to a subgraph that implements the full build pipeline:
+
+```mermaid
+graph LR
+    START([START]) --> IMPL_PLAN
+
+    IMPL_PLAN[&nbsp;IMPL_PLAN&nbsp;] --> CREATE_BACKLOG[&nbsp;CREATE_BACKLOG&nbsp;]
+    CREATE_BACKLOG --> IMPLEMENT[&nbsp;IMPLEMENT&nbsp;]
+
+    IMPLEMENT --> UNIT_TEST[&nbsp;UNIT_TEST&nbsp;]
+
+    UNIT_TEST -->|test pass| IMPLEMENT_NEXT[&nbsp;next item&nbsp;]
+    UNIT_TEST -->|test fail<br/>retry&lt;3| RETRY[&nbsp;retry&nbsp;]
+    UNIT_TEST -->|retry max| SKIP[&nbsp;skip item&nbsp;]
+
+    IMPLEMENT_NEXT --> IMPLEMENT
+    RETRY --> IMPLEMENT
+    SKIP --> IMPLEMENT
+
+    UNIT_TEST -->|all items done| INT_TEST[&nbsp;INT_TEST&nbsp;]
+    INT_TEST --> SEED[&nbsp;SEED&nbsp;]
+    SEED --> UAT[&nbsp;UAT&nbsp;]
+    UAT --> END([END])
+
+    classDef pass fill:#4CAF50,stroke:#2E7D32,stroke-width:1px,color:#fff
+    classDef fail fill:#F44336,stroke:#C62828,stroke-width:1px,color:#fff
+    classDef loop fill:#FF9800,stroke:#E65100,stroke-width:1px,color:#fff
+    classDef node fill:#2196F3,stroke:#1565C0,stroke-width:1px,color:#fff
+    class IMPL_PLAN,CREATE_BACKLOG,IMPLEMENT,UNIT_TEST,INT_TEST,SEED,UAT node
+    class RETRY,SKIP loop
+```
+
+| Sub-Node | Purpose | Gateway |
+|-----------|---------|---------|
+| `IMPL_PLAN` | Generate implementation plan from spec + tasks | — |
+| `CREATE_BACKLOG` | Parse tasks into backlog items | — |
+| `IMPLEMENT` | Generate code + tests per backlog item | LLM + skill registry |
+| `UNIT_TEST` | Docker build → pytest → pass/fail | retry ≤ `{max_item_retries}` |
+| `INT_TEST` | Aggregate integration health check | HTTP status 2xx |
+| `SEED` | Generate & run seed data script | AST valid + DB insert OK |
+| `UAT` | Playwright UAT + pass rate check | `uat_pass_rate ≥ 0.8` |
+
+**Outer graph routing** (from `edges.py`): BUILD self-loops if `security_findings > 0`, `review_revisions > max`, or `uat_pass_rate < min`. After 3 consecutive build failures, routes directly to `REFLECT` to skip `SHIP`.
 
 Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop) review gates, and self-improvement via ChromaDB pattern storage. CLI and Web UI share the same `WorkflowRunner` — identical node execution, different UX layers.
 
