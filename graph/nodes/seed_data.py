@@ -3,8 +3,20 @@ SEED_DATA node: Generate random test data against data models and API specs.
 Outputs: seeding scripts, instructions, edge cases to $project_folder/build/seed_data/
 
 Skills: ai-workflow-data-seeding
+
+DEPRECATED: This module is not wired into the active workflow graph.
+The SEED_DATA phase was removed from the 7-phase pipeline. Kept for historical
+reference — import is blocked to prevent accidental usage.
 """
-import os
+
+# ── DISABLED: Import guard to prevent accidental usage ──────────────
+raise ImportError(
+    "graph.nodes.seed_data is DEPRECATED and not wired into the workflow graph. "
+    "This module was disabled in the code cleanup audit. "
+    "If you need seeding functionality, use the build subgraph directly."
+)
+# ── End guard — original code below (preserved for reference) ──────
+
 import ast
 import json
 import subprocess
@@ -14,8 +26,8 @@ from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
+from graph.nodes.build_helpers import resolve_app_service
 from graph.nodes.build import find_docker_project
-
 
 def seed_data_node(state: dict) -> dict:
     """
@@ -165,9 +177,10 @@ Requirements:
 
     # ── Step 9: Execute seed script inside Docker ──
     print("  → [EXECUTION] Running seed script in Docker container...")
+    _svc = resolve_app_service(docker_proj)
     try:
         result = subprocess.run(
-            ["docker", "compose", "exec", "-T", "api", "python", "-m", "app.seed"],
+            ["docker", "compose", "exec", "-T", _svc, "python", "-m", "app.seed"],
             capture_output=True, text=True, timeout=60, cwd=docker_proj,
         )
         seed_output = result.stdout + result.stderr
@@ -216,7 +229,6 @@ Requirements:
 
     return state
 
-
 def _extract_data_models(docker_proj: str) -> list[dict]:
     """Extract data models from project code."""
     models = []
@@ -250,7 +262,6 @@ def _extract_data_models(docker_proj: str) -> list[dict]:
             })
     return models
 
-
 def _extract_api_specs(docker_proj: str) -> list[dict]:
     """Extract API specs from route files."""
     specs = []
@@ -274,7 +285,6 @@ def _extract_api_specs(docker_proj: str) -> list[dict]:
                     "file": str(pyfile.relative_to(p)),
                 })
     return specs
-
 
 def _generate_instructions(seed_path: Path, models: list[dict], docker_proj: str) -> str:
     """Generate usage instructions for seed data."""
@@ -307,7 +317,6 @@ def _generate_instructions(seed_path: Path, models: list[dict], docker_proj: str
     lines.append("- Use `--help` for all available options")
     return "\n".join(lines)
 
-
 def _generate_edge_cases(models: list[dict], api_specs: list[dict]) -> str:
     """Generate edge case scenarios for seed data."""
     lines = ["# Edge Cases", ""]
@@ -339,7 +348,6 @@ def _generate_edge_cases(models: list[dict], api_specs: list[dict]) -> str:
                     lines.append(f"- **{field['name']}**: Test {field.get('type', '?')} type limits")
             lines.append("")
     return "\n".join(lines)
-
 
 def _generate_schema_md(models: list[dict], api_specs: list[dict]) -> str:
     """Generate data model reference document."""

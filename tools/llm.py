@@ -2,10 +2,9 @@
 LLM integration via local vLLM (Qwen3.6-27B) using OpenAI-compatible API.
 Uses distilled skill instructions (Purpose + Process only) for fast context windows.
 """
-import os
 import time
 from tools.distiller import distill_skill
-from tools.context_manager import prepare_context_for_llm, estimate_tokens
+from tools.context_manager import prepare_context_for_llm
 from tools.prompt_logger import log_llm_call
 
 _import_error = None
@@ -17,7 +16,6 @@ except ImportError as e:
     ChatOpenAI = None
     HumanMessage = None
     SystemMessage = None
-
 
 from config.loader import config
 
@@ -40,7 +38,6 @@ def get_llm(model: str = None, base_url: str = None):
         temperature=config.services.llm.temperature,
         max_tokens=config.services.llm.max_tokens,
     )
-
 
 def invoke_skill(skill_content: str, task: str, context: str = "", llm=None, max_prompt_chars: int = 2000,
                   workflow_id: str = "", phase: str = ""):

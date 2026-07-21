@@ -3,18 +3,14 @@ REFLECT node: Meta-agent reflection — analyze cycle, propose config updates,
 request human approval, archive feedback.
 Skills: meta-agent-reflection (internal) → git-workflow (commit approved diffs)
 """
-import os
 import json
 import yaml
 from config.loader import config
 from tools.loader import build_skill_registry
 from tools.llm import get_llm, invoke_skill
-from tools.context_manager import prepare_context_for_llm
-from tools.audit_logger import AuditLog
 from feedback.aggregator import FeedbackAggregator
 from feedback.diff_engine import generate_config_diffs, dry_run_validation
 from feedback.chroma_client import get_chroma_client, store_pattern, query_patterns
-
 
 def reflect_node(state: dict) -> dict:
     """

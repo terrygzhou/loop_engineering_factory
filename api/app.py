@@ -2,7 +2,6 @@
 Loop Engineering FastAPI application.
 Entry point for API layer — serves workflow interactions, approvals, and real-time updates.
 """
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI

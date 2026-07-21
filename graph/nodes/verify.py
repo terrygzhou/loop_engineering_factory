@@ -4,8 +4,20 @@ Skills: uat-workflow (Playwright desktop + mobile mandatory) -> performance-opti
         (if slow) -> systematic-debugging (if flaky) -> code-simplification (if complex)
 Tools: playwright (headless Chromium), browser_navigate, browser_snapshot(full=true),
        browser_vision, browser_console, curl, pytest
+
+DEPRECATED: This module is not wired into the active workflow graph.
+The VERIFY phase was removed from the 7-phase pipeline. Kept for historical
+reference — import is blocked to prevent accidental usage.
 """
-import os
+
+# ── DISABLED: Import guard to prevent accidental usage ──────────────
+raise ImportError(
+    "graph.nodes.verify is DEPRECATED and not wired into the workflow graph. "
+    "This module was disabled in the code cleanup audit. "
+    "UAT and verification logic is handled by the BUILD subgraph instead."
+)
+# ── End guard — original code below (preserved for reference) ──────
+
 import re
 import json
 from config.loader import config
@@ -13,7 +25,6 @@ from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from config.guardrails import get_threshold
-
 
 def verify_node(state: dict) -> dict:
     """
@@ -227,7 +238,6 @@ def verify_node(state: dict) -> dict:
     print(f"  Done: uat_pass_rate={uat_pass}, endpoints_checked={len(api_endpoints)}, pages_checked={len(page_routes)}")
     return state
 
-
 def _parse_uat_metrics(uat_output: str) -> dict:
     """
     Parse UAT metrics from the text output of the uat-workflow skill run.
@@ -265,7 +275,6 @@ def _parse_uat_metrics(uat_output: str) -> dict:
         "latency_ms": latency_ms,
         "test_flakiness_rate": flakiness,
     }
-
 
 def _parse_uat_pass_rate(uat_output: str) -> float:
     """

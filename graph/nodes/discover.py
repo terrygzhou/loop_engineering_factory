@@ -12,8 +12,6 @@ import json
 import os
 import re
 import subprocess
-import urllib.request
-import urllib.error
 from pathlib import Path
 from langgraph.types import interrupt
 from config.loader import config as _cfg
@@ -21,7 +19,6 @@ from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
-
 
 def discover_node(state: dict) -> dict:
     """
@@ -150,7 +147,6 @@ def discover_node(state: dict) -> dict:
     state["next_phase"] = "DEFINE"
     return state
 
-
 def _discover_auto_approve(state: dict) -> dict:
     """Auto-approve mode: generate default interview notes from project description."""
     project_name = state.get("project_name", "Untitled")
@@ -180,7 +176,6 @@ def _discover_auto_approve(state: dict) -> dict:
     state["artifacts"]["requirement_path"] = str(req_path)
     return state
 
-
 # ── Helpers (unchanged) ──
 
 def _scan_codebase(context_folder: str, project_name: str, project_folder: str) -> dict:
@@ -203,7 +198,6 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
         "git": {"branch": "greenfield"}, "docker": {"services": []}, "specs": {},
     }
 
-
 def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder):
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     fabric_skill = skills.get("Fabric Prompt Engineering", {}) or skills.get("fabric-prompt-engineering", {})
@@ -224,7 +218,6 @@ def _generate_requirement_via_fabric(project_name, project_description, intervie
         return md
     return _generate_requirement_template(project_name, project_description, interview_notes, context, project_folder)
 
-
 def _generate_requirement_template(project_name, project_description, interview_notes, context, project_folder):
     return (
         f"# {project_name} — Discovery Report\n\n"
@@ -236,7 +229,6 @@ def _generate_requirement_template(project_name, project_description, interview_
         f"## Edge Cases\n- (to be determined)\n\n"
         f"## Constraints\n- `{project_folder}`\n- {context.get('project_type', 'greenfield')}\n"
     )
-
 
 def _load_improve_telemetry(state, project_name):
     try:
@@ -262,7 +254,6 @@ def _load_improve_telemetry(state, project_name):
     except Exception:
         return None
 
-
 def _detect_project_type(project_path: str) -> str:
     p = Path(project_path)
     if (p / "pyproject.toml").exists(): return "python-pyproject"
@@ -276,12 +267,10 @@ def _detect_project_type(project_path: str) -> str:
             return "python-fastapi"
     return "unknown"
 
-
 def _inventory_tree(project_path: str) -> dict:
     p = Path(project_path)
     dirs = [{"name": d.name, "file_count": len(list(d.rglob("*")))} for d in p.iterdir() if d.is_dir() and not d.name.startswith(".")]
     return {"directories": dirs, "total_top_level": len(dirs)}
-
 
 def _discover_routes(project_path, project_type):
     if project_type in ("python-fastapi", "python-pyproject", "python-requirements"):
@@ -289,7 +278,6 @@ def _discover_routes(project_path, project_type):
     elif project_type == "node":
         return _discover_express_routes(project_path)
     return []
-
 
 def _discover_fastapi_routes(project_path):
     routes = []
@@ -309,7 +297,6 @@ def _discover_fastapi_routes(project_path):
         except Exception: pass
     return routes
 
-
 def _discover_express_routes(project_path):
     routes = []
     p = Path(project_path)
@@ -319,7 +306,6 @@ def _discover_express_routes(project_path):
                 routes.append({"method": method.upper(), "path": path, "file": str(jsfile.relative_to(p))})
         except Exception: pass
     return routes
-
 
 def _discover_models(project_path, project_type):
     models = []
@@ -335,7 +321,6 @@ def _discover_models(project_path, project_type):
                 except Exception: pass
     return models
 
-
 def _discover_templates(project_path, project_type):
     templates = []
     p = Path(project_path)
@@ -344,7 +329,6 @@ def _discover_templates(project_path, project_type):
             for f in d.glob("*.html"):
                 templates.append({"name": f.stem, "file": str(f.relative_to(p))})
     return templates
-
 
 def _discover_dependencies(project_path):
     deps = {}
@@ -356,7 +340,6 @@ def _discover_dependencies(project_path):
             except Exception: pass
     return deps
 
-
 def _get_git_status(project_path):
     try:
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=project_path, timeout=5)
@@ -364,12 +347,10 @@ def _get_git_status(project_path):
     except Exception:
         return {"status": "unknown"}
 
-
 def _get_docker_status(project_path):
     p = Path(project_path)
     services = [str(f) for f in [p / "docker-compose.yml", p / "docker-compose.yaml"] if f.exists()]
     return {"services": services}
-
 
 def _discover_specs(project_path):
     specs = []

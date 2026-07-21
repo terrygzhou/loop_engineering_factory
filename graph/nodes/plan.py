@@ -5,7 +5,6 @@ Outputs: $project_folder/build/solution.md — complete solution design with dia
 Skills: writing-plans → speckit-tasks → speckit-analyze → doubt-driven-development → 
          speckit-checklist → architecture-diagram-generator
 """
-import json
 import os
 import re
 from pathlib import Path
@@ -16,7 +15,6 @@ from tools.llm import invoke_skill
 from tools.context_manager import prepare_context_for_llm
 from tools.audit_logger import AuditLog
 from feedback.chroma_client import get_chroma_client, query_patterns
-
 
 def _load_feedback_context(state: dict) -> str:
     """Query ChromaDB for historical patterns relevant to this project type."""
@@ -80,7 +78,6 @@ def _estimate_arch_uncertainty(artifacts: dict) -> float:
         score += 0.15
     return max(0.0, min(1.0, score))
 
-
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     """Generate a specific diagram type from workflow artifacts."""
     arch_skill = skills.get("architecture-diagram-generator", {})
@@ -102,7 +99,6 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     )
     return diagram
 
-
 def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     """Generate all architecture diagrams and save to build/diagrams/."""
     project_folder = state.get("project_folder", state.get("project_path", ""))
@@ -123,7 +119,6 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
         filepath.write_text(diagram)
         diagrams[dtype] = str(filepath)
     return diagrams
-
 
 def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
     """Convert .mmd diagrams to PNG for UI rendering (single browser session).
@@ -191,7 +186,6 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
         except OSError:
             pass
     return result
-
 
 def plan_node(state: dict) -> dict:
     """
@@ -326,6 +320,10 @@ def plan_node(state: dict) -> dict:
     audit.log_file_write("PLAN", str(solution_path), "markdown", len(solution_md))
     print(f"  → solution.md written: {solution_path} ({len(solution_md)} chars)")
 
+    # Store in artifacts for build_proxy to pick up
+    state["artifacts"]["solution_md"] = solution_md
+    state["artifacts"]["solution_path"] = str(solution_path)
+
     # ── Audit output ──
     audit.log_node_output("PLAN", {
         "solution_path": str(solution_path),
@@ -340,10 +338,8 @@ def plan_node(state: dict) -> dict:
     state["next_phase"] = "BUILD"
     state["human_approval_required"] = False
 
-
     print(f"  ✓ task_count={state['metrics'].task_count}, arch_uncertainty={arch_uncertainty:.2f}, diagrams={diagram_count}")
     return state
-
 
 def _generate_solution_md(state: dict) -> str:
     """Generate comprehensive solution.md from all PLAN artifacts."""

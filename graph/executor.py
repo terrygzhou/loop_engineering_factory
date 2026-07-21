@@ -15,7 +15,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 # Ensure project root is on path so config.loader resolves
 _project_root = Path(__file__).resolve().parent.parent

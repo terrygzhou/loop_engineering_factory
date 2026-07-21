@@ -32,17 +32,47 @@ async def submit_build(req: BuildRequest):
         "request": req,
     }
 
-    asyncio.create_task(execute_build(req.build_id, req))
+    task = asyncio.create_task(execute_build(req.build_id, req))
+    task.add_done_callback(lambda t: _on_build_task_done(req.build_id, t))
     return BuildResponse(build_id=req.build_id, status="accepted")
+
+
+def _on_build_task_done(build_id: str, task: asyncio.Task):
+    """Handle background build task completion or failure."""
+    entry = builds.get(build_id)
+    if not entry:
+        return
+    try:
+        task.result()  # Re-raise if there was an exception
+    except Exception as e:
+        entry["status"] = "fail"
+        entry["sub_phase"] = "error"
+        entry["errors"].append(f"Build crashed: {e}")
+        entry["completed_at"] = datetime.now(timezone.utc).isoformat()
+        entry["runner"] = None
 
 
 @app.get("/api/build/{build_id}")
 async def get_status(build_id: str) -> BuildStatus:
-    """Poll build status."""
+    """Poll build status — reads live progress from runner during execution."""
     if build_id not in builds:
         raise HTTPException(status_code=404, detail="Build not found")
 
     entry = builds[build_id]
+    runner = entry.get("runner")
+    # If runner exists and build is still running, read live progress from it
+    if runner is not None and entry["status"] == "running":
+        rs = runner.get_status()
+        return BuildStatus(
+            build_id=build_id,
+            status=entry["status"],
+            sub_phase=rs.get("sub_phase", entry.get("sub_phase", "unknown")),
+            progress=rs.get("progress", []),
+            artifacts=rs.get("artifacts", {}),
+            errors=rs.get("errors", []),
+            completed_at=entry.get("completed_at"),
+        )
+
     return BuildStatus(
         build_id=build_id,
         status=entry["status"],

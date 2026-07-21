@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from api.services import WorkflowService
 from api.schemas.workflow import WorkflowStartRequest, WorkflowStatusResponse
 from api.schemas.approval import ApprovalRequest, ApprovalResponse
-from api.schemas.llm import LLMResponse
 from api.middleware.logging import log_request
 
 router = APIRouter()

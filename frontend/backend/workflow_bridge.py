@@ -844,17 +844,28 @@ class WorkflowBridge:
                             chunk = next_task.result()
                             chunk_count += 1
                         except StopAsyncIteration:
-                            # StopAsyncIteration means the stream ended — could be actual interrupt or normal completion
+                            # StopAsyncIteration means the stream ended — check current graph state
                             print(f"  → StopAsyncIteration detected", flush=True)
-                            # Check ONLY the latest checkpoint for pending interrupts
+                            # Use aget_state to read CURRENT state (not stale checkpoints)
                             try:
-                                latest = checkpointer.list(config).next()
-                                if latest and getattr(latest, "next", None):
-                                    meta = getattr(latest, "metadata", None) or {}
+                                current = await graph.aget_state(config)
+                                next_steps = getattr(current, "next", []) or []
+                                if next_steps and len(next_steps) > 0:
+                                    # Pending next step — check for actual interrupt
+                                    meta = getattr(current, "metadata", {}) or {}
                                     if meta and "interrupted_type" in meta:
                                         interrupted_chunk = {"__interrupt__": meta["interrupted_type"]}
-                            except Exception:
-                                pass
+                                    else:
+                                        # Next step but no interrupt metadata — normal transition
+                                        print(f"  → Pending next step {next_steps[0]} but no interrupt", flush=True)
+                                        interrupted_chunk = None
+                                else:
+                                    # No next step — workflow fully completed
+                                    print(f"  → No next step — workflow complete", flush=True)
+                                    interrupted_chunk = None
+                            except Exception as e:
+                                print(f"  → aget_state failed: {e}", flush=True)
+                                interrupted_chunk = None
 
                             if interrupted_chunk is None:
                                 # No pending interrupt — normal completion (e.g., auto-approve skipped)

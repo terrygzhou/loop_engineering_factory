@@ -4,7 +4,6 @@ Guardrails loader — load quality thresholds from YAML at runtime.
 Used by edges.py, verify.py, and reflect.py to read thresholds that REFLECT
 can update between cycles. Falls back to built-in defaults if YAML missing.
 """
-import os
 from pathlib import Path
 from typing import Any, Dict
 

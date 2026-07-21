@@ -1,9 +1,7 @@
 """Structured JSON logging — writes to stdout for Docker."""
 import json
 import logging
-import os
 import sys
-
 
 def setup_logger(name: str = "loop_factory") -> logging.Logger:
     """Configure JSON logger. Idempotent — safe to call multiple times."""
@@ -22,7 +20,6 @@ def setup_logger(name: str = "loop_factory") -> logging.Logger:
 
     logger.propagate = False
     return logger
-
 
 def log_event(logger: logging.Logger, event: str, **ctx):
     """Structured event logging — all context as JSON fields."""

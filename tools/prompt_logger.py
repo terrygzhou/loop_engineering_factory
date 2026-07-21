@@ -3,8 +3,6 @@ Prompt and response logger — persists LLM interactions for debugging.
 Logs system prompts, user prompts, responses, and metadata to build/prompt_logs/.
 """
 import json
-import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -15,7 +13,6 @@ logger = setup_logger("prompt_logger")
 from config.loader import config
 
 PROMPT_LOG_DIR = Path(config.paths.prompt_log_dir)
-
 
 def log_llm_call(
     workflow_id: str,
@@ -58,7 +55,6 @@ def log_llm_call(
               skill=skill, model=model, duration_s=round(duration_s, 3),
               system_prompt_len=len(system_prompt), user_prompt_len=len(user_prompt),
               response_len=len(response))
-
 
 def get_logs(workflow_id: str = "", phase: str = "") -> list[dict]:
     """Retrieve prompt logs, optionally filtered by workflow or phase."""

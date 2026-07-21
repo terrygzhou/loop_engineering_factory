@@ -1,6 +1,19 @@
 # Loop Engineering — Pydantic Schemas for LLM
+#
+# DEPRECATED: This module is not used by any active code path.
+# The LLM logging is handled directly in tools/llm.py and graph/executor.py
+# without these schema classes. Kept for historical reference — import is
+# blocked to prevent accidental usage.
 
-from pydantic import BaseModel, Field
+# ── DISABLED: Import guard to prevent accidental usage ──────────────
+raise ImportError(
+    "api.schemas.llm is DEPRECATED. "
+    "This module was disabled in the code cleanup audit. "
+    "LLM logging is handled directly in tools/llm.py without Pydantic schemas."
+)
+# ── End guard — original code below (preserved for reference) ──────
+
+from pydantic import BaseModel
 from typing import Optional
 
 

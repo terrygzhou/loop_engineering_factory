@@ -7,7 +7,6 @@ import sqlite3
 import json
 import threading
 import uuid
-from contextlib import contextmanager
 from typing import Any, Iterator, Optional, Sequence
 
 from langgraph.checkpoint.base import (
@@ -36,7 +35,6 @@ CREATE TABLE IF NOT EXISTS writes (
     PRIMARY KEY (thread_id, checkpoint_id, task_id, channel)
 );
 """
-
 
 class SqliteSaver(BaseCheckpointSaver[int]):
     """Thread-safe SQLite checkpoint saver.

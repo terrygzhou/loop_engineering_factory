@@ -6,7 +6,6 @@ Runs on port 8081 (configurable via OBSERVABILITY_PORT).
 """
 import atexit
 import json
-import os
 import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -26,7 +25,6 @@ WORKFLOW_PHASE = Gauge("workflow_current_phase", "Current workflow phase", ["pro
 _start_time = time.time()
 _active_workflows: dict[str, dict] = {}
 _stats_lock = Lock()
-
 
 class HealthHandler(BaseHTTPRequestHandler):
     """Minimal health check + metrics handler — no external deps."""
@@ -87,7 +85,6 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(generate_latest())
 
-
 def start_health_server(port: int = 0):
     """Start health server in a background thread."""
     global health_server
@@ -101,7 +98,6 @@ def start_health_server(port: int = 0):
     print(f"[Health] Server listening on :{port}")
     return server
 
-
 def _shutdown_health_server():
     try:
         if 'health_server' in globals() and health_server:
@@ -109,15 +105,12 @@ def _shutdown_health_server():
     except Exception:
         pass
 
-
 atexit.register(_shutdown_health_server)
-
 
 def track_workflow_start(project_name: str):
     with _stats_lock:
         _active_workflows[project_name] = {"started": time.time()}
         ACTIVE_WORKFLOWS.set(len(_active_workflows))
-
 
 def track_workflow_end(project_name: str, duration: float):
     WORKFLOW_DURATION.labels(project=project_name).observe(duration)
@@ -125,21 +118,17 @@ def track_workflow_end(project_name: str, duration: float):
         _active_workflows.pop(project_name, None)
         ACTIVE_WORKFLOWS.set(len(_active_workflows))
 
-
 def track_phase(phase: str, duration: float, success: bool = True):
     PHASE_DURATION.labels(phase=phase).observe(duration)
     if not success:
         PHASE_ERRORS.labels(phase=phase).inc()
 
-
 def track_llm(skill: str, duration: float, success: bool = True):
     LLM_DURATION.labels(skill=skill).observe(duration)
     LLM_CALLS.labels(skill=skill, status="success" if success else "error").inc()
 
-
 def set_current_phase(project_name: str, phase: str):
     WORKFLOW_PHASE.labels(project=project_name).set(1)
-
 
 if __name__ == "__main__":
     import signal

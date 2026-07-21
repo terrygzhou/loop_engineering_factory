@@ -10,7 +10,6 @@ Internal routing:
   INT_TEST bugs → append to backlog → IMPLEMENT
   UAT fail → route back to BUILD parent (outer graph handles retry)
 """
-import os
 import re
 import json
 import ast
@@ -20,14 +19,13 @@ from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
-from config import loader
 from config.bounds_loader import bounds
-from graph.state import WorkflowState, CycleMetrics
+from graph.state import CycleMetrics
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
-from tools.audit_logger import AuditLog
 from .build_helpers import (
     parse_llm_output, write_files_to_project, run_command, find_docker_project,
+    resolve_app_service,
     parse_tasks_to_backlog, generate_backlog_md, extract_data_models, extract_api_specs,
     parse_uat_metrics,
 )
@@ -62,9 +60,7 @@ class BuildSubState(TypedDict):
     build_status: str              # "pass" / "fail" / "partial"
     parent_artifacts: dict         # Reference to parent artifacts dict (for writing back)
 
-
 MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
-
 
 # ── Sub-node functions ─────────────────────────────────────────────
 
@@ -92,7 +88,6 @@ def impl_plan_node(state: BuildSubState) -> BuildSubState:
     print(f"  → [IMPL_PLAN] Plan generated ({len(plan)} chars)")
     return state
 
-
 def create_backlog_node(state: BuildSubState) -> BuildSubState:
     """Parse tasks into backlog items, write backlog.md."""
     print("  → [CREATE_BACKLOG] Creating backlog...")
@@ -111,7 +106,6 @@ def create_backlog_node(state: BuildSubState) -> BuildSubState:
     state["sub_phase"] = "CREATE_BACKLOG"
     print(f"  → [CREATE_BACKLOG] {len(backlog_items)} backlog items created")
     return state
-
 
 def implement_node(state: BuildSubState) -> BuildSubState:
     """Generate code + tests for current backlog item."""
@@ -191,7 +185,6 @@ def implement_node(state: BuildSubState) -> BuildSubState:
 
     return state
 
-
 def unit_test_node(state: BuildSubState) -> BuildSubState:
     """Run Docker build + pytest for current item."""
     idx = state["backlog_idx"]
@@ -238,7 +231,8 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
 
     # Docker build
     print("     Docker compose build...")
-    rc, out, err = run_command("docker compose build --no-cache api", timeout=300, workdir=docker_proj)
+    _svc = resolve_app_service(docker_proj)
+    rc, out, err = run_command(f"docker compose build --no-cache {_svc}", timeout=300, workdir=docker_proj)
     if rc != 0:
         print(f"     ✗ Docker build failed: {err[:200]}")
         state["test_result"] = "fail"
@@ -252,7 +246,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return state
 
     # Start container
-    rc, _, err = run_command("docker compose up -d api", timeout=120, workdir=docker_proj)
+    rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
     if rc != 0:
         print(f"     ✗ Container start failed: {err[:200]}")
         state["test_result"] = "fail"
@@ -284,7 +278,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     # Run pytest
     print("     Running pytest...")
     rc, test_out, test_err = run_command(
-        "docker compose exec api python -m pytest tests/ -v --tb=short 2>&1",
+        f"docker compose exec {_svc} python -m pytest tests/ -v --tb=short 2>&1",
         timeout=120, workdir=docker_proj,
     )
     passed = len(re.findall(r'passed', test_out))
@@ -312,7 +306,6 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     state["sub_phase"] = "UNIT_TEST"
     return state
 
-
 def int_test_node(state: BuildSubState) -> BuildSubState:
     """Integration test: verify Docker app is running, run aggregate checks."""
     print("  → [INT_TEST] Running integration tests...")
@@ -320,8 +313,10 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
     from config.loader import config as _cfg
     _health_url = _cfg.services.product.url + "/"
 
+    _svc = resolve_app_service(docker_proj)
+
     # Ensure container is running
-    rc, _, err = run_command("docker compose up -d api", timeout=120, workdir=docker_proj)
+    rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
     if rc != 0:
         state["int_test_result"] = "fail"
         state["int_test_output"] = err[:bounds.build.max_seed_output_chars]
@@ -346,7 +341,6 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
 
     state["sub_phase"] = "INT_TEST"
     return state
-
 
 def seed_node(state: BuildSubState) -> BuildSubState:
     """Generate and execute seed data script."""
@@ -414,10 +408,12 @@ Requirements:
     docker_seed_path.parent.mkdir(parents=True, exist_ok=True)
     docker_seed_path.write_text(clean_script)
 
+    _svc = resolve_app_service(docker_proj)
+
     try:
         import subprocess as _sp
         result = _sp.run(
-            ["docker", "compose", "exec", "-T", "api", "python", "-m", "app.seed"],
+            ["docker", "compose", "exec", "-T", _svc, "python", "-m", "app.seed"],
             capture_output=True, text=True, timeout=60, cwd=docker_proj,
         )
         seed_output = result.stdout + result.stderr
@@ -446,7 +442,6 @@ Requirements:
 
     state["sub_phase"] = "SEED"
     return state
-
 
 def uat_node(state: BuildSubState) -> BuildSubState:
     """Run UAT tests (from verify.py logic)."""
@@ -504,7 +499,6 @@ def uat_node(state: BuildSubState) -> BuildSubState:
     state["sub_phase"] = "UAT"
     return state
 
-
 # ── Conditional routing ────────────────────────────────────────────
 
 def route_build(state: BuildSubState) -> str:
@@ -544,7 +538,6 @@ def route_build(state: BuildSubState) -> str:
         return END
 
     return END
-
 
 # ── State mapping functions (parent ↔ child) ──────────────────────
 
@@ -595,7 +588,6 @@ def build_input_mapping(parent: dict) -> BuildSubState:
         "build_status": "pending",
         "parent_artifacts": parent.get("artifacts", {}),
     })
-
 
 def build_output_mapping(child: BuildSubState) -> dict:
     """Map BuildSubState → parent WorkflowState update for native subgraph exit.
@@ -671,7 +663,6 @@ def build_output_mapping(child: BuildSubState) -> dict:
         "metrics": metrics,
     }
 
-
 # ── Build subgraph ─────────────────────────────────────────────────
 
 def build_subgraph() -> StateGraph:
@@ -697,11 +688,9 @@ def build_subgraph() -> StateGraph:
 
     return sub
 
-
 def get_compiled_subgraph():
     """Return the compiled BUILD subgraph for native parent integration."""
     return build_subgraph().compile()
-
 
 def build_subgraph_node(state: dict) -> dict:
     """Wrapper node that bridges WorkflowState ↔ BuildSubState.

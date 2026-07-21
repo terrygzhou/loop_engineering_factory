@@ -13,18 +13,20 @@ class BuildRequest(BaseModel):
     tasks_text: str
     backlog: list[dict]
     skills: dict
+    # Full solution.md from PLAN phase — authority for tech stack detection
+    solution_md: Optional[str] = ""
 
 
 class BuildStatus(BaseModel):
     build_id: str
-    status: str  # "running" | "pass" | "fail" | "partial"
+    status: str
     sub_phase: str
-    progress: list[dict]
-    artifacts: dict
-    errors: list[str]
+    progress: list[dict] = []
+    artifacts: dict = {}
+    errors: list[str] = []
     completed_at: Optional[str] = None
 
 
 class BuildResponse(BaseModel):
     build_id: str
-    status: str  # "accepted"
+    status: str

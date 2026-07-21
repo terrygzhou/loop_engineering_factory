@@ -2,7 +2,6 @@
 Feedback aggregator: collect metrics and artifacts from each phase run.
 """
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 

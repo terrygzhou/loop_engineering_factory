@@ -1,0 +1,16 @@
+{
+  "projects": [
+    {
+      "name": "crm_test2",
+      "spec_file": "output/crm_test2/spec.md",
+      "context_folder": "output/crm_test2"
+    },
+    {
+      "name": "car_trade_in",
+      "spec_file": "output/car_trade_in/build/solution.md",
+      "context_folder": "output/car_trade_in/build"
+    }
+  ],
+  "max_consecutive_failures": 3,
+  "cron_interval_min": 5
+}

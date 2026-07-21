@@ -52,3 +52,9 @@ logs/
 tests/
 # Workflow output directory
 output/
+
+# Scripts (contain local paths and credentials)
+/scripts/
+
+# State directory (local runtime data)
+state/

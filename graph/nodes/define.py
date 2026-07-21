@@ -4,7 +4,6 @@ Fully automatic — no user input required (interview is in DISCOVER phase).
 
 Skills: speckit-specify → api-and-interface-design
 """
-import os
 import re
 from pathlib import Path
 from tools.loader import build_skill_registry
@@ -14,13 +13,11 @@ from tools.audit_logger import AuditLog
 from config.loader import config
 from config.bounds_loader import bounds
 
-
 def _cap_list(lst: list, max_len: int) -> list:
     """Trim list to last max_len entries."""
     return lst[-max_len:]
 from config.prompt_templates import speckit_specify, api_and_interface_design
 from feedback.chroma_client import get_chroma_client, query_patterns
-
 
 def _load_feedback_context(state: dict) -> str:
     """Query ChromaDB for historical patterns relevant to this project type."""
@@ -45,7 +42,6 @@ def _load_feedback_context(state: dict) -> str:
     except Exception as e:
         return ""
 
-
 def _estimate_spec_confidence(artifacts: dict) -> float:
     """Derive spec confidence from actual artifact content."""
     score = 0.0
@@ -66,7 +62,6 @@ def _estimate_spec_confidence(artifacts: dict) -> float:
     if any(kw in spec_lower for kw in ["error handling", "exception", "failure", "rollback", "fallback"]):
         score += 0.1
     return min(score, 1.0)
-
 
 def define_node(state: dict) -> dict:
     """

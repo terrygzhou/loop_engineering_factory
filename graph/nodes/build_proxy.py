@@ -31,6 +31,15 @@ class BuildProxy:
         artifacts = state.get("artifacts", {}) or {}
 
         # ── Build request payload ──────────────────────────────────
+        # Load solution.md from PLAN phase — authority for tech stack detection
+        solution_md = artifacts.get("solution_md", "")
+        if not solution_md and artifacts.get("solution_path"):
+            try:
+                import pathlib
+                solution_md = pathlib.Path(artifacts["solution_path"]).read_text()
+            except Exception:
+                pass
+
         req = {
             "build_id": build_id,
             "project_name": state["project_name"],
@@ -39,6 +48,7 @@ class BuildProxy:
             "tasks_text": artifacts.get("tasks", ""),
             "backlog": state.get("build_backlog") or [],
             "skills": artifacts.get("skill_registry", {}),
+            "solution_md": solution_md,
         }
 
         # ── Submit build to builder ───────────────────────────────

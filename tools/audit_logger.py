@@ -5,12 +5,10 @@ Every LLM prompt/response passes through prompt skills + context optimization.
 Every user interaction (CLI/Web/API) is logged with trace IDs.
 """
 import json
-import os
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 from log.logging import setup_logger, log_event
 
 logger = setup_logger("audit")
@@ -19,17 +17,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AUDIT_DIR = PROJECT_ROOT / "build" / "audit_logs"
 INTERACTION_LOG = AUDIT_DIR / "interactions.jsonl"
 
-
 def ensure_audit_dir() -> Path:
     """Create audit log directory structure."""
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     return AUDIT_DIR
 
-
 def generate_trace_id() -> str:
     """Generate a unique trace ID for correlation across logs."""
     return str(uuid.uuid4())
-
 
 class AuditLog:
     """

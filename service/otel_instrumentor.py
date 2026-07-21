@@ -6,7 +6,6 @@ Architecture:
 
 Graceful degradation — never crashes if OTel is unavailable.
 """
-import os
 import time
 from contextlib import contextmanager
 from typing import Any, Optional
@@ -25,7 +24,6 @@ except ImportError as e:
 __all__ = ["tracer", "OTelTracer"]
 
 _configured = False
-
 
 def setup_otel() -> bool:
     """Configure OTel SDK. Idempotent — returns False if already configured."""
@@ -47,7 +45,6 @@ def setup_otel() -> bool:
     trace.set_tracer_provider(provider)
     _configured = True
     return True
-
 
 class OTelTracer:
     """Facade for OTel tracing — graceful degradation if OTel unavailable."""
@@ -189,7 +186,6 @@ class OTelTracer:
         finally:
             if cm:
                 cm.__exit__(None, None, None)
-
 
 # Module-level singleton — import anywhere
 tracer = OTelTracer()

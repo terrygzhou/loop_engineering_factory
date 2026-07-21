@@ -1,23 +1,22 @@
 """
 Build task executor — standalone build pipeline replicating build_subgraph logic.
 
-Pipeline: IMPL_PLAN → CREATE_BACKLOG → IMPLEMENT → UNIT_TEST → INT_TEST → SEED → UAT
+Pipeline: PROVISION → IMPL_PLAN → CREATE_BACKLOG → IMPLEMENT → UNIT_TEST → INT_TEST → SEED → UAT
 """
-import os
 import re
 import json
-import asyncio
 import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
 
 from tools.llm import invoke_skill
-from tools.loader import build_skill_registry
 from graph.nodes.build_helpers import (
     parse_llm_output, write_files_to_project, run_command, find_docker_project,
+    resolve_app_service,
     parse_tasks_to_backlog, generate_backlog_md, extract_data_models,
     extract_api_specs, parse_uat_metrics,
 )
+from builder import stack_detect
 
 
 MAX_ITEM_RETRIES = 3
@@ -119,6 +118,8 @@ def unit_test(item_code: str, test_code: str, docker_proj: str,
     """
     print(f"  → [UNIT_TEST] Building and testing item {item_id}...")
 
+    _svc = resolve_app_service(docker_proj)
+
     combined = item_code + "\n" + test_code
     files, cmds, _ = parse_llm_output(combined)
     print(f"     Parsed {len(files)} files, {len(cmds)} commands")
@@ -140,13 +141,13 @@ def unit_test(item_code: str, test_code: str, docker_proj: str,
 
     # Docker build
     print("     Docker compose build...")
-    rc, out, err = run_command("docker compose build --no-cache api", timeout=300, workdir=docker_proj)
+    rc, out, err = run_command(f"docker compose build --no-cache {_svc}", timeout=300, workdir=docker_proj)
     if rc != 0:
         print(f"     ✗ Docker build failed: {err[:200]}")
         return "fail", err[:500], "retry"
 
     # Start container
-    rc, _, err = run_command("docker compose up -d api", timeout=120, workdir=docker_proj)
+    rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
     if rc != 0:
         print(f"     ✗ Container start failed: {err[:200]}")
         return "fail", err[:500], "retry"
@@ -165,7 +166,7 @@ def unit_test(item_code: str, test_code: str, docker_proj: str,
     # Run pytest
     print("     Running pytest...")
     rc, test_out, test_err = run_command(
-        "docker compose exec api python -m pytest tests/ -v --tb=short 2>&1",
+        f"docker compose exec {_svc} python -m pytest tests/ -v --tb=short 2>&1",
         timeout=120, workdir=docker_proj,
     )
     passed = len(re.findall(r'passed', test_out))
@@ -185,8 +186,10 @@ def int_test(docker_proj: str) -> tuple[str, str]:
     from config.loader import config as _cfg
     _health_url = _cfg.services.product.url + "/"
 
+    _svc = resolve_app_service(docker_proj)
+
     # Ensure container is running
-    rc, _, err = run_command("docker compose up -d api", timeout=120, workdir=docker_proj)
+    rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
     if rc != 0:
         print(f"     ✗ Container start failed: {err[:200]}")
         return "fail", err
@@ -268,9 +271,11 @@ Requirements:
     docker_seed_path.parent.mkdir(parents=True, exist_ok=True)
     docker_seed_path.write_text(clean_script)
 
+    _svc = resolve_app_service(docker_proj)
+
     try:
         result = subprocess.run(
-            ["docker", "compose", "exec", "-T", "api", "python", "-m", "app.seed"],
+            ["docker", "compose", "exec", "-T", _svc, "python", "-m", "app.seed"],
             capture_output=True, text=True, timeout=60, cwd=docker_proj,
         )
         seed_output = result.stdout + result.stderr
@@ -369,9 +374,36 @@ class BuildRunner:
         spec_text = req.spec_text
         tasks_text = req.tasks_text
         skills = req.skills
+        solution_md = req.solution_md or ""
 
         # Resolve Docker project path
         docker_proj = find_docker_project(project_path)
+
+        # ── Phase 0: PROVISION (toolchain) ──
+        self._update_progress("PROVISION", "running", "Detecting tech stack from PLAN output")
+        try:
+            packages = stack_detect.detect_tech_stack(solution_md)
+            if packages:
+                print(f"  → [PROVISION] Stack detected: {packages}")
+                missing = stack_detect.check_existing_tools(packages)
+                if missing:
+                    print(f"  → [PROVISION] Installing: {missing}")
+                    success, out, err = stack_detect.provision_tools(solution_md)
+                    if not success:
+                        self.errors.append(f"PROVISION: {err[:300]}")
+                        self._update_progress("PROVISION", "fail", err[:200])
+                        return self._build_result("fail", "PROVISION")
+                    self.artifacts["installed_tools"] = missing
+                    self._update_progress("PROVISION", "pass", f"Installed: {out}")
+                else:
+                    self._update_progress("PROVISION", "pass", f"All tools present: {packages}")
+            else:
+                self._update_progress("PROVISION", "pass", "No additional tools needed (Python-only)")
+        except Exception as e:
+            self.errors.append(f"PROVISION: {e}")
+            self._update_progress("PROVISION", "fail", str(e))
+            # Don't abort — provision is best-effort. Proceed with what we have.
+            print(f"  → [PROVISION] Warning: {e} — continuing anyway")
 
         # ── Phase 1: IMPL_PLAN ──
         self._update_progress("IMPL_PLAN", "running", "Generating implementation plan")

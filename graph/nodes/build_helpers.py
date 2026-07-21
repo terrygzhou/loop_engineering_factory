@@ -4,9 +4,8 @@ Refactored from build.py, seed_data.py, verify.py.
 """
 import os
 import re
-import ast
-import json
 import subprocess
+import yaml
 from pathlib import Path
 from typing import Optional
 
@@ -96,6 +95,39 @@ def find_docker_project(project_path: str) -> str:
             if os.path.exists(os.path.join(candidate, pattern)):
                 return candidate
     return project_path
+
+
+def resolve_app_service(docker_proj: str) -> str:
+    """Discover the app/primary service name from the project's docker-compose file.
+
+    Looks for the service that has `build: .` or `build:` (i.e. the service built
+    from the project source).  Falls back to common names: ``app``, ``api``, ``web``.
+    """
+    for pattern in ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']:
+        compose_path = os.path.join(docker_proj, pattern)
+        if os.path.exists(compose_path):
+            try:
+                with open(compose_path) as f:
+                    dc = yaml.safe_load(f) or {}
+                services = dc.get('services', {})
+                # Priority 1: service with build: . or build: ./
+                for svc_name, svc_conf in services.items():
+                    if isinstance(svc_conf, dict):
+                        build_val = svc_conf.get('build', '')
+                        if build_val in ('.', './', '', None) or (isinstance(build_val, str) and build_val.startswith('.')):
+                            return svc_name
+                # Priority 2: service with a 'ports' mapping that includes common app ports
+                for svc_name, svc_conf in services.items():
+                    if isinstance(svc_conf, dict) and svc_conf.get('ports'):
+                        return svc_name
+                # Priority 3: first non-db/non-infra service
+                skip = {'db', 'database', 'redis', 'nginx', 'postgres', 'mongodb', 'mysql'}
+                for svc_name in services:
+                    if svc_name not in skip:
+                        return svc_name
+            except Exception:
+                pass
+    return 'app'  # default fallback
 
 
 def parse_tasks_to_backlog(tasks_text: str) -> list[dict]:
@@ -193,6 +225,57 @@ def parse_uat_pass_rate(uat_output: str) -> float:
     fail_count = len(re.findall(r'\[fail\]', output_lower))
     total = pass_count + fail_count
     return pass_count / total if total > 0 else 0.5
+
+
+def resolve_service_name(docker_proj: str) -> str:
+    """Dynamically resolve the application service name from docker-compose.yml.
+
+    The generated compose file can name the app service differently (e.g., 'app',
+    'api', 'web'). This function inspects the actual file and returns the correct
+    service name so docker compose commands don't fail with 'no such service'.
+
+    Falls back to 'api' if no compose file is found or no services can be read.
+    """
+    import subprocess as _sp
+
+    for candidate in [docker_proj, os.path.join(docker_proj, "")]:
+        for pattern in ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']:
+            compose_file = os.path.join(candidate, pattern)
+            if os.path.exists(compose_file):
+                try:
+                    result = _sp.run(
+                        ['docker', 'compose', '-f', compose_file, 'ls', '--format', 'json'],
+                        capture_output=True, text=True, timeout=10, cwd=docker_proj,
+                    )
+                    if result.returncode == 0 and result.stdout:
+                        import json as _json
+                        for svc in _json.loads(result.stdout.strip()):
+                            name = svc.get('Name', '')
+                            if name in ('api', 'app', 'web', 'backend'):
+                                return name
+                except Exception:
+                    pass
+                # Fallback: parse YAML directly
+                try:
+                    with open(compose_file) as f:
+                        content = f.read()
+                    # Simple YAML service extraction
+                    import yaml as _yaml
+                    data = _yaml.safe_load(content)
+                    if data and 'services' in data:
+                        for svc_name in data['services']:
+                            if svc_name in ('api', 'app', 'web', 'backend'):
+                                return svc_name
+                        # If none of the well-known names, take the non-db one
+                        for svc_name in data['services']:
+                            if svc_name not in ('db', 'database', 'redis', 'nginx', 'worker'):
+                                return svc_name
+                except Exception:
+                    pass
+                break  # found compose file, no need to check other patterns
+
+    # Ultimate fallback
+    return 'api'
 
 
 def parse_uat_metrics(uat_output: str) -> dict:

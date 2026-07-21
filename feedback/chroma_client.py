@@ -1,8 +1,6 @@
 """
 ChromaDB client for storing and retrieving pattern embeddings.
 """
-import os
-
 # Graceful import — chromadb may not be available locally
 _chroma_error = None
 try:
@@ -11,8 +9,6 @@ except ImportError as e:
     _chroma_error = str(e)
     chromadb = None  # type: ignore
 
-
-from config.loader import config
 
 def get_chroma_client(url: str = None):
     """Get a ChromaDB client. Returns None if chromadb unavailable."""
