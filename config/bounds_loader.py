@@ -95,12 +95,22 @@ class Bounds:
         # Workflow-level settings
         auto_approve: bool = True
 
+    class SuperWeb:
+        # UAT settings
+        mode: str = _resolve(_bounds_data, "superweb.mode", "agent")
+        timeout_seconds: int = _resolve(_bounds_data, "superweb.timeout_seconds", 600)
+        agent_timeout_seconds: int = _resolve(_bounds_data, "superweb.agent_timeout_seconds", 3600)
+        variations: int = _resolve(_bounds_data, "superweb.variations", 3)
+        fallback_to_llm: bool = _resolve(_bounds_data, "superweb.fallback_to_llm", True)
+        pass_rate_threshold: float = _resolve(_bounds_data, "superweb.pass_rate_threshold", 0.8)
+
     context = Context()
     artifacts = Artifacts()
     build = Build()
     feedback = Feedback()
     memory_budget = MemoryBudget()
     workflow = Workflow()
+    superweb = SuperWeb()
 
 
 bounds = Bounds()

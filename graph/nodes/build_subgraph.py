@@ -448,9 +448,16 @@ Requirements:
 def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
     """Run SuperWeb in agent mode — OpenHands agent explores and tests."""
     agent_timeout = getattr(getattr(bounds, "superweb", None), "agent_timeout_seconds", 3600)
-    llm_url = getattr(getattr(bounds, "services", None), "llm_base_url", "http://172.25.0.1:8080")
-    llm_model = getattr(getattr(bounds, "llm", None), "model", "Qwen3.6-27B")
-    superweb_root = getattr(getattr(bounds, "paths", None), "superweb_root", "/app")
+    # LLM config is in config.yaml, not bounds.yaml — use config loader
+    from config.loader import config as _cfg
+    llm_url = _cfg.services.llm.base_url
+    llm_model = _cfg.services.llm.model
+    # SuperWeb root from config (default: pip-installed CLI runs from project dir)
+    superweb_config = getattr(_cfg, "superweb", None)
+    if superweb_config:
+        superweb_root = getattr(superweb_config, "root", state["project_path"])
+    else:
+        superweb_root = state["project_path"]
     cmd = [
         "superweb", "run",
         "--target", base_url,
@@ -462,11 +469,11 @@ def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -
         "--llm-model", llm_model,
     ]
     try:
-        proc = subprocess.run(
+        subprocess.run(
             cmd, capture_output=True, text=True, timeout=agent_timeout + 120,
-            cwd=str(Path(superweb_root)),
+            cwd=superweb_root,
         )
-        # Parse agent_report.json or test_results.json
+        # Parse agent_report.json (agent mode writes to report/)
         report_path = output_dir / "report" / "agent_report.json"
         if report_path.exists():
             return json.loads(report_path.read_text())
@@ -485,9 +492,12 @@ def _run_superweb_scripted(state: BuildSubState, base_url: str, output_dir: Path
     """Run SuperWeb in scripted mode — deterministic Playwright pipeline."""
     timeout = getattr(getattr(bounds, "superweb", None), "timeout_seconds", 600)
     variations = getattr(getattr(bounds, "superweb", None), "variations", 3)
-    llm_url = getattr(getattr(bounds, "services", None), "llm_base_url", "http://172.25.0.1:8080")
-    llm_model = getattr(getattr(bounds, "llm", None), "model", "Qwen3.6-27B")
-    superweb_root = getattr(getattr(bounds, "paths", None), "superweb_root", "/app")
+    from config.loader import config as _cfg
+    llm_url = _cfg.services.llm.base_url
+    llm_model = _cfg.services.llm.model
+    superweb_config = getattr(_cfg, "superweb", None)
+    superweb_root = (getattr(superweb_config, "root", state["project_path"])
+                     if superweb_config else state["project_path"])
     cmd = [
         "superweb", "run",
         "--target", base_url,
@@ -501,7 +511,7 @@ def _run_superweb_scripted(state: BuildSubState, base_url: str, output_dir: Path
     try:
         subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout,
-            cwd=str(Path(superweb_root)),
+            cwd=superweb_root,
         )
         results_path = output_dir / "data" / "test_results.json"
         if results_path.exists():
@@ -521,21 +531,21 @@ def _run_llm_uat_fallback(state: BuildSubState, base_url: str) -> tuple[str, flo
         return "SKIPPED — skill not found", 0.5
 
     task = (
-        f"Run full UAT tests for project: {state['project_path']}\\n"
-        f"Base URL: {base_url}\\n\\n"
-        "=== UAT EXECUTION ORDER ===\\n"
-        "Phase 0: Playwright setup (verify installed, chromium available)\\n"
-        "Phase 2: Pre-UAT bulk API sweep (curl all discovered routes)\\n"
-        "Phase 3: Template completeness check\\n"
-        "Phase 5: Playwright UAT — desktop pass (MANDATORY)\\n"
-        "Phase 6: Playwright UAT — mobile pass (MANDATORY)\\n"
-        "Phase 7: Browser Tool Walkthrough (fallback)\\n"
-        "Phase 8: Report: PASS/FAIL verdict with per-page results\\n\\n"
-        "=== Report Format ===\\n"
-        "For each test case, output: [PASS] or [FAIL]: test description\\n"
-        "Final summary must include: Total tests run, Passed, Failed, Pass rate (0.0-1.0), Verdict: PASS or FAIL\\n"
+        f"Run full UAT tests for project: {state['project_path']}\n"
+        f"Base URL: {base_url}\n\n"
+        "=== UAT EXECUTION ORDER ===\n"
+        "Phase 0: Playwright setup (verify installed, chromium available)\n"
+        "Phase 2: Pre-UAT bulk API sweep (curl all discovered routes)\n"
+        "Phase 3: Template completeness check\n"
+        "Phase 5: Playwright UAT — desktop pass (MANDATORY)\n"
+        "Phase 6: Playwright UAT — mobile pass (MANDATORY)\n"
+        "Phase 7: Browser Tool Walkthrough (fallback)\n"
+        "Phase 8: Report: PASS/FAIL verdict with per-page results\n\n"
+        "=== Report Format ===\n"
+        "For each test case, output: [PASS] or [FAIL]: test description\n"
+        "Final summary must include: Total tests run, Passed, Failed, Pass rate (0.0-1.0), Verdict: PASS or FAIL\n"
     )
-    result = invoke_skill(uat_skill["content"], task, f"Project: {state['project_path']}\\nBase URL: {base_url}", llm=None)
+    result = invoke_skill(uat_skill["content"], task, f"Project: {state['project_path']}\nBase URL: {base_url}", llm=None)
     state["uat_output"] = result[:bounds.build.max_seed_output_chars]
     uat_metrics = parse_uat_metrics(result)
     return result, uat_metrics["uat_pass_rate"]
