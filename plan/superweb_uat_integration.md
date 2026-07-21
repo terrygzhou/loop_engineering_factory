@@ -43,16 +43,28 @@ BuildSubState → build_output_mapping() → parent WorkflowState
 
 ### Mode Selection Logic
 
+Agent mode is the **default**. Scripted mode is a fallback when OpenHands is unavailable.
+
 ```python
-if state["superweb_mode"] == "agent":
-    # OpenHands-based: agent explores, tests, and reports
-    # Requires: OpenHands container, LLM access from container
-    mode = "agent"
-    timeout = 3600  # 60 min
-else:
-    mode = "scripted"  # default
+if state["superweb_mode"] == "scripted":
+    # Fallback: deterministic Playwright pipeline
+    mode = "scripted"
     timeout = 600     # 10 min
+else:
+    mode = "agent"   # default
+    timeout = 3600   # 60 min
 ```
+
+**Agent mode** is preferred because:
+- OpenHands agent autonomously explores the application (no pre-defined schemas needed)
+- Better coverage: agent discovers forms, navigation, and edge cases dynamically
+- Adapts to project structure without source code analysis (works for any web app)
+- Produces a rich `agent_report.json` with reasoning and artifacts
+
+**Scripted mode** is the fallback when:
+- OpenHands container is not available or unreachable
+- Agent mode times out or fails
+- Explicitly configured as `"scripted"` in bounds
 
 ### Integration Points
 
