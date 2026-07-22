@@ -16,6 +16,7 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-requests
 opentelemetry-instrumentation-asyncio
+arize-phoenix
 prometheus-client
 fastapi
 uvicorn[standard]

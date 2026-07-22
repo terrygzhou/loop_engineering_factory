@@ -13,8 +13,10 @@ import os
 import sys
 import time
 
+from config.loader import config
 from graph.executor import WorkflowRunner
 from service.otel_instrumentor import tracer
+from service.evaluator import init_evaluator
 from service import health as health_module
 from log.logging import setup_logger, log_event
 
@@ -38,6 +40,12 @@ def main():
 
     # ── Start observability ──
     tracer.configure()
+    init_evaluator(
+        llm_base_url=config.services.llm.base_url,
+        llm_model=config.services.llm.model,
+        tracer_instance=tracer,
+        api_key=config.services.llm.api_key,
+    )
     health_module.start_health_server()
     logger.info("CLI starting")
 

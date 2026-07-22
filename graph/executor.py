@@ -30,10 +30,39 @@ from tools.loader import build_skill_registry  # noqa: E402
 
 # ── Observability ──
 from service.otel_instrumentor import tracer  # noqa: E402
+from service.evaluator import evaluator as px_evaluator  # noqa: E402
 from service import health as health_module  # noqa: E402
 from log.logging import setup_logger, log_event  # noqa: E402
 
 logger = setup_logger("executor")
+
+
+def _run_phase_eval(phase: str, chunk: Dict) -> None:
+    """Run Phoenix eval on phase output if evaluator is available.
+
+    Graceful: no-op when evaluator is None or LLM unreachable.
+    """
+    if px_evaluator is None:
+        return
+
+    artifacts = chunk.get("artifacts") or {}
+
+    if phase == "DISCOVER":
+        spec_text = artifacts.get("spec_refined", "") or artifacts.get("requirement_md", "")
+        if spec_text:
+            px_evaluator.eval_spec(spec_text)
+
+    elif phase == "PLAN":
+        plan_text = artifacts.get("plan", "") or artifacts.get("plan_md", "")
+        spec_ref = artifacts.get("spec_refined", "")
+        if plan_text:
+            px_evaluator.eval_plan(plan_text, spec_ref=spec_ref)
+
+    elif phase == "REVIEW":
+        review_text = artifacts.get("review", "") or artifacts.get("review_notes", "")
+        spec_context = artifacts.get("spec_refined", "")
+        if review_text:
+            px_evaluator.eval_review(review_text, spec_context=spec_context)
 
 
 def get_skills_dir() -> str:
@@ -207,6 +236,7 @@ class WorkflowRunner:
                             success = chunk.get("error") is None
                             tracer.record_phase(current_phase, duration, success, project=state.get("project_name"))
                             health_module.track_phase(current_phase, duration, success)
+                            _run_phase_eval(current_phase, chunk)
                             print(f"\n[{current_phase}] Completed ({duration}s)")
 
                         current_phase = phase

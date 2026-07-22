@@ -215,6 +215,7 @@ graph TB
 | `tools/loader.py` | Skill registry discovery & hot-reload | `workflow.skill_registry_path` |
 | `feedback/chroma_client.py` | ChromaDB pattern storage/retrieval | `services.chroma.*` |
 | `service/otel_instrumentor.py` | OpenTelemetry trace export | `services.otel.*` |
+| `service/evaluator.py` | LLM-as-judge evaluator — context-aware phase scoring → Phoenix UI | `services.otel.*`, `services.llm.*` |
 | `service/health.py` | Health check server + dependency verification | `services.observability.*` |
 | `config/loader.py` | Three-tier config: `ENV > YAML > default` | N/A (meta) |
 
@@ -346,7 +347,7 @@ docker compose up -d --build loop
 | `loop` | :8081 | Health check server |
 | `chromadb` | :8000 (internal) | Pattern storage |
 | `otel-collector` | :4318 | OpenTelemetry trace collection |
-| `phoenix` | :6006 | Trace visualization (OpenLIT) |
+| `phoenix` | :6006 | Trace visualization + LLM evaluation UI (Arize Phoenix) |
 | `prometheus` | :9090 | Metrics scraping |
 | `grafana` | :3000 | Observability dashboards |
 | `promtail` | _(internal)_ | Log aggregation |
@@ -379,6 +380,7 @@ docker compose up -d --build
 - **Skills System**: 29 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
 - **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; supports double-pause DISCOVER interview and ARCH_REVIEW diagram approval
 - **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
+- **Evaluation**: `service/evaluator.py` runs LLM-as-judge on DISCOVER, PLAN, and REVIEW outputs; results stream to Phoenix UI via OTel spans. Context-aware — the evaluator extracts project domain from the spec before scoring. Graceful degradation: eval failures never block the workflow.
 - **Deployment**: Single Docker Compose stack (`loop` container = orchestrator + frontend + nginx)
 
 ---
@@ -429,12 +431,35 @@ superweb:
 langgraph, langchain-core, langgraph-checkpoint, langgraph-sdk
 pydantic, pyyaml, httpx, aiohttp
 chromadb (pattern storage)
-opentelemetry-api, opentelemetry-sdk (observability)
+opentelemetry-api, opentelemetry-sdk, arize-phoenix (observability + evaluation)
 uvicorn, fastapi (web UI)
 superweb-testing (UAT — agent mode: OpenHands, scripted: Playwright)
 ```
 
 Install: baked into Docker image via `docker compose up -d --build`.
+
+---
+
+## Evaluation
+
+At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. Each evaluation is context-aware — the LLM first extracts the project's domain from the spec, then scores against criteria tailored to that context. Results stream to the Phoenix UI at `localhost:6006` via OTel span attributes.
+
+### Evaluators
+
+| Evaluator | Phase | Dimensions |
+|---|---|---|
+| `spec_quality` | DISCOVER | `domain_fit`, `clarity`, `completeness`, `consistency`, `actionability` |
+| `plan_score` | PLAN | `coverage`, `actionability`, `architecture`, `risk`, `domain_fit` |
+| `review_score` | REVIEW | `thoroughness`, `specificity`, `actionability`, `severity`, `domain_fit` |
+
+### How It Works
+
+1. Phase completes → `_run_phase_eval()` called in `graph/executor.py`
+2. Evaluator sends context + output to LLM (`Qwen3.6-27B`)
+3. LLM returns scores (0.0–1.0) with rationale
+4. Results attached as OTel span attributes → Phoenix UI at `:6006`
+
+Evaluations are **non-blocking** — if the LLM is unreachable or the eval times out, the workflow continues. Each eval adds ~3s per phase.
 
 ---
 
