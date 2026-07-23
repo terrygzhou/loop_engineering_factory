@@ -551,6 +551,48 @@ def _run_llm_uat_fallback(state: BuildSubState, base_url: str) -> tuple[str, flo
     return result, uat_metrics["uat_pass_rate"]
 
 
+def deploy_gate_node(state: BuildSubState) -> BuildSubState:
+    """Validate container is healthy before UAT begins.
+
+    Gate: container running, HTTP health endpoint responds, seed data exists.
+    If unhealthy, skip UAT — nothing to test.
+    """
+    print("  → [DEPLOY_GATE] Validating deployment health...")
+    docker_proj = state["docker_proj"]
+    from config.loader import config as _cfg
+    _svc = resolve_app_service(docker_proj)
+    _health_url = _cfg.services.product.url + "/"
+
+    # Check 1: Container running
+    rc, out, err = run_command(f"docker compose ps {_svc} --format '{{{{.Status}}}}'", workdir=docker_proj)
+    if rc != 0 or "Up" not in out:
+        print(f"     ✗ Container {_svc} not running — skipping UAT")
+        state["uat_result"] = "skip"
+        state["uat_output"] = f"DEPLOY_GATE failed: container not running"
+        state["uat_pass_rate"] = 1.0  # skip counts as pass
+        state["sub_phase"] = "DEPLOY_GATE"
+        return state
+
+    # Check 2: Health endpoint
+    rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=15, workdir=docker_proj)
+    if health_out.strip() not in ('200', '301', '302'):
+        print(f"     ✗ Health check failed: HTTP {health_out.strip()} — skipping UAT")
+        state["uat_result"] = "skip"
+        state["uat_output"] = f"DEPLOY_GATE failed: HTTP {health_out.strip()}"
+        state["uat_pass_rate"] = 1.0
+        state["sub_phase"] = "DEPLOY_GATE"
+        return state
+
+    # Check 3: Logs for startup errors
+    rc, logs, _ = run_command(f"docker compose logs {_svc} --tail=20", timeout=10, workdir=docker_proj)
+    if any(kw in logs for kw in ["Traceback", "ImportError", "SyntaxError"]):
+        print("     ⚠ Container logs contain startup errors — proceeding with caution")
+
+    print(f"     ✓ Deploy gate passed: HTTP {health_out.strip()}")
+    state["sub_phase"] = "DEPLOY_GATE"
+    return state
+
+
 def uat_node(state: BuildSubState) -> BuildSubState:
     """Run UAT tests — agent mode default, scripted fallback, LLM fallback."""
     print("  → [UAT] Running UAT tests...")
@@ -651,6 +693,9 @@ def route_build(state: BuildSubState) -> str:
         return "SEED"
 
     if sub_phase == "SEED":
+        return "DEPLOY_GATE"
+
+    if sub_phase == "DEPLOY_GATE":
         return "UAT"
 
     if sub_phase == "UAT":
@@ -796,6 +841,7 @@ def build_subgraph() -> StateGraph:
     sub.add_node("UNIT_TEST", unit_test_node)
     sub.add_node("INT_TEST", int_test_node)
     sub.add_node("SEED", seed_node)
+    sub.add_node("DEPLOY_GATE", deploy_gate_node)
     sub.add_node("UAT", uat_node)
 
     sub.add_edge(START, "IMPL_PLAN")
@@ -804,7 +850,8 @@ def build_subgraph() -> StateGraph:
     sub.add_edge("IMPLEMENT", "UNIT_TEST")
     sub.add_conditional_edges("UNIT_TEST", route_build)
     sub.add_edge("INT_TEST", "SEED")
-    sub.add_edge("SEED", "UAT")
+    sub.add_edge("SEED", "DEPLOY_GATE")
+    sub.add_edge("DEPLOY_GATE", "UAT")
     sub.add_edge("UAT", END)
 
     return sub

@@ -3,6 +3,7 @@ Build task executor — standalone build pipeline replicating build_subgraph log
 
 Pipeline: PROVISION → IMPL_PLAN → CREATE_BACKLOG → IMPLEMENT → UNIT_TEST → INT_TEST → SEED → UAT
 """
+import os
 import re
 import json
 import subprocess
@@ -294,36 +295,82 @@ Requirements:
 
 
 def run_uat(docker_proj: str, project_path: str, skills: dict) -> tuple[str, str, float]:
-    """Run UAT tests. Returns (result, output, pass_rate)."""
+    """Run UAT tests via SuperWeb (agent mode) with LLM fallback.
+    Returns (result, output, pass_rate).
+    """
     print("  → [UAT] Running UAT tests...")
+    import json as _json
+    import subprocess as _sub
 
+    from config.loader import config as _cfg
+    from config.bounds_loader import bounds as _bounds
+
+    _base_url = _cfg.services.product.url
+    _output_dir = os.path.join(project_path, "superweb_output")
+    os.makedirs(_output_dir, exist_ok=True)
+
+    # ── Try SuperWeb agent mode (primary) ──────────────────────────
+    _agent_timeout = getattr(getattr(_bounds, "superweb", None), "agent_timeout_seconds", 3600)
+    _llm_url = _cfg.services.llm.base_url
+    _llm_model = _cfg.services.llm.model
+
+    _cmd = [
+        "superweb", "run",
+        "--target", _base_url,
+        "--source", project_path,
+        "--output", _output_dir,
+        "--mode", "agent",
+        "--agent-timeout", str(_agent_timeout),
+        "--llm-url", _llm_url,
+        "--llm-model", _llm_model,
+    ]
+    _superweb_worked = False
+    try:
+        _result = _sub.run(
+            _cmd, capture_output=True, text=True, timeout=_agent_timeout + 120,
+            cwd=project_path,
+        )
+        # Parse agent_report.json
+        _report_path = os.path.join(_output_dir, "report", "agent_report.json")
+        if os.path.exists(_report_path):
+            _superweb_worked = True
+            _report = _json.loads(open(_report_path).read())
+            _output = _json.dumps(_report, indent=2)[:10000]
+            # Extract pass rate from results
+            _pass_rate = 0.5
+            if "results" in _report:
+                _results = _report["results"]
+                if isinstance(_results, list) and _results:
+                    _passed = sum(1 for r in _results if r.get("status") == "passed")
+                    _pass_rate = _passed / len(_results)
+                else:
+                    _verdict = _report.get("verdict", "unknown")
+                    _pass_rate = 1.0 if _verdict == "pass" else 0.0
+            elif _report.get("verdict") == "pass":
+                _pass_rate = 1.0
+            else:
+                _pass_rate = 0.5
+            print(f"     ✓ SuperWeb agent UAT completed (rate={_pass_rate:.2f})")
+            return "pass" if _pass_rate >= 0.8 else "fail", _output, _pass_rate
+    except (_sub.TimeoutExpired, FileNotFoundError) as _e:
+        print(f"     ⚠ SuperWeb unavailable: {_e}")
+
+    # ── Fallback: LLM-prompted UAT via uat-workflow skill ─────────
+    print("     ⚠ Falling back to LLM UAT...")
     uat_skill = skills.get("uat-workflow", {})
     if not uat_skill:
         print("     ⚠ uat-workflow skill not found — defaulting to pass")
-        return "pass", "SKIPPED — skill not found", 0.5
-
-    from config.loader import config as _cfg
-    _base_url = _cfg.services.product.url
+        return "pass", "SKIPPED — no UAT skill", 0.5
 
     task = (
-        f"Run full UAT tests for project: {project_path}\n"
+        f"Run UAT tests for project: {project_path}\n"
         f"Base URL: {_base_url}\n\n"
-        "=== UAT EXECUTION ORDER ===\n"
-        "Phase 0: Playwright setup (verify installed, chromium available)\n"
-        "Phase 1: Docker rebuild + health check (SKIP — already done)\n"
-        "Phase 2: Pre-UAT bulk API sweep (curl all discovered routes)\n"
-        "Phase 3: Template completeness check\n"
-        "Phase 4: Automated pytest test run (SKIP — already done)\n"
-        "Phase 5: Playwright UAT — desktop pass (MANDATORY)\n"
-        "Phase 6: Playwright UAT — mobile pass (MANDATORY)\n"
-        "Phase 7: Browser Tool Walkthrough (fallback)\n"
-        "Phase 8: Report: PASS/FAIL verdict with per-page results\n\n"
-        "=== Report Format ===\n"
-        "For each test case, output: [PASS] or [FAIL]: test description\n"
-        "Final summary must include: Total tests run, Passed, Failed, Pass rate (0.0-1.0), Verdict: PASS or FAIL\n"
+        "Generate a Playwright UAT script, execute it, and report results.\n"
+        "Phases: public pages → auth flow → authenticated pages → form submission.\n"
+        "Report format: [PASS]/[FAIL] per test, summary with pass rate.\n"
     )
-
-    result = invoke_skill(uat_skill["content"], task, f"Project: {project_path}\nBase URL: {_base_url}", llm=None)
+    result = invoke_skill(uat_skill["content"], task,
+                         f"Project: {project_path}\nBase URL: {_base_url}", llm=None)
 
     metrics = parse_uat_metrics(result)
     pass_rate = metrics["uat_pass_rate"]

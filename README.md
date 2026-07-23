@@ -233,10 +233,10 @@ Each workflow phase chains specialized skills from `skills/` (29 registered). Sk
 | **DEFINE** | `writing-plans` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
 | **PLAN** | `writing-plans` → `doubt-driven-development` → `architecture-diagram-generator` | Implementation plan, architectural doubt resolution, and diagram generation. Outputs `solution.md` + diagrams. |
 | **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → DEFINE. Max 2 retries. |
-| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → `docker-compose-deployment` → **SuperWeb UAT** (`agent` mode default → `scripted` fallback → LLM prompt) | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. **UAT: SuperWeb agent mode** (OpenHands explores the app, generates tests) with scripted and LLM fallbacks. |
+| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → **deploy_gate** (health check) → **SuperWeb UAT** (`agent` mode default → `scripted` fallback → LLM prompt) | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. **UAT: deploy_gate validates container health before SuperWeb agent mode** (OpenHands explores the app, generates tests) with scripted and LLM fallbacks. |
 | **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
 | **VERIFY** | `performance-optimization` → `systematic-debugging` → `code-simplification` | Conditional gates only — UAT moved to BUILD subgraph (SuperWeb agent mode). Performance profiling if P95 > 500ms, debugging if flakiness > 10%, simplification if review revisions > threshold. |
-| **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `docker-compose-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, Docker deployment, version tagging. |
+| **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `production-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, cloud platform configuration (AWS/Azure/GCP), version tagging. |
 | **REFLECT** | Internal `diff_engine` → `context-pruning` → `git-workflow` | Cycle analysis: aggregates metrics, queries ChromaDB patterns, generates config/guardrail diff proposals. Human approval gate for changes. |
 
 ### Local Skills Registry
@@ -261,6 +261,7 @@ skills/
 ├── performance-optimization/SKILL.md
 ├── requesting-code-review/SKILL.md
 ├── security-and-hardening/SKILL.md
+├── production-deployment/SKILL.md
 ├── shipping-and-launch/SKILL.md
 ├── systematic-debugging/SKILL.md
 ├── test-driven-development/SKILL.md

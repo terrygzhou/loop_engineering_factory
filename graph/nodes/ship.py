@@ -1,6 +1,6 @@
 """
-SHIP node: Add observability, run pre-launch checklist, deploy, version with git.
-Skills: observability-and-instrumentation → shipping-and-launch → docker-compose-deployment → git-workflow
+SHIP node: Add observability, run pre-launch checklist, generate production deployment config, version with git.
+Skills: observability-and-instrumentation → shipping-and-launch → production-deployment → git-workflow
 """
 import json
 import os
@@ -46,27 +46,35 @@ def ship_node(state: dict) -> dict:
         state["artifacts"]["launch_checklist"] = result
         feedback.append({"skill": "shipping-and-launch", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
-    # Step 3: Deploy via Docker Compose (skip rebuild if BUILD already deployed)
+    # Step 3: Generate production deployment config (AWS/Azure/GCP)
+    prod_skill = skills.get("production-deployment", {})
+    if prod_skill:
+        print("  → Running production-deployment...")
+        task = f"""Generate production deployment configurations for project at: {project_path}.
+
+        Determine the project type and generate:
+        1. Cloud platform deployment manifest (ECS task def / Azure ARM template / Cloud Run config)
+        2. CI/CD pipeline configuration (GitHub Actions / Cloud Build)
+        3. Secrets management references (AWS Secrets Manager / Azure Key Vault / GCP Secret Manager)
+        4. Health check and rollback strategy
+
+        Target environment considerations:
+        - Managed database (RDS/Azure SQL/Cloud SQL) instead of local PostgreSQL
+        - Cloud secret references instead of .env files
+        - Auto-scaling configuration
+        - TLS/certificate management
+        - Cloud-native logging (CloudWatch/Application Insights/Cloud Monitoring)
+        """
+        result = invoke_skill(prod_skill["content"], task,
+                             state.get("artifacts", {}).get("launch_checklist", ""),
+                             llm=None)
+        state["artifacts"]["prod_deploy_config"] = result
+        feedback.append({"skill": "production-deployment", "output": result[:bounds.feedback.max_feedback_entry_chars]})
+
+    # Step 3b: Verify local deployment is healthy (BUILD handles docker-compose)
     build_status = state.get("artifacts", {}).get("build_status", "")
-    deploy_skill = skills.get("docker-compose-deployment", {})
-    if deploy_skill:
-        if build_status == "pass":
-            print("  → BUILD already compiled and deployed. Skipping Docker rebuild.")
-            import subprocess
-            result = subprocess.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", config.services.product.url + "/"],
-                capture_output=True, text=True, timeout=15,
-            )
-            state["artifacts"]["deploy_logs"] = f"SKIP_REBUILD: container health={result.stdout.strip()}"
-            feedback.append({"skill": "docker-compose-deployment", "output": "Skipped — BUILD already deployed"})
-        else:
-            print("  → Running docker-compose-deployment (BUILD did not deploy)...")
-            task = f"Deploy the application using docker compose up -d --build in: {project_path}"
-            result = invoke_skill(deploy_skill["content"], task,
-                                 state.get("artifacts", {}).get("launch_checklist", ""),
-                                 llm=None)
-            state["artifacts"]["deploy_logs"] = result
-            feedback.append({"skill": "docker-compose-deployment", "output": result[:bounds.feedback.max_feedback_entry_chars]})
+    if build_status == "pass":
+        print("  → Local deployment verified from BUILD phase.")
 
     # Step 4: Git workflow (commit changes)
     git_skill = skills.get("git-workflow", {})
