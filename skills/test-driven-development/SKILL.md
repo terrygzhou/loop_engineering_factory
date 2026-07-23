@@ -420,7 +420,7 @@ assert resp.status_code in (200, 201, 400, 401, 404, 409, 422, 500, 503)
 ### Test Data Setup
 
 For integration tests, ensure seed data exists:
-- Users, vehicles, orders must be in the DB before tests run
+- Users, items, orders must be in the DB before tests run
 - Use seed scripts to populate test fixtures
 - Truncate tables between test runs for clean state
 
@@ -643,10 +643,10 @@ Structure:
 When running the full test suite, **explicitly note** which failures existed before the feature was built. This prevents false attribution and keeps UAT reports accurate.
 
 ```markdown
-## Pre-existing Test Failures (Not Related to Hiring)
+## Pre-existing Test Failures (Not Related to Feature)
 | Test Module | Issue | Cause |
 |-------------|-------|-------|
-| test_vehicles.py | 8 failures | External image API calls (socket.gaierror) |
+| test_resources.py | 8 failures | External API calls (socket.gaierror) |
 | test_orders.py | 8 failures | Auth setup missing (401 responses) |
 ```
 

@@ -166,7 +166,7 @@ refactor/<short-description>  → refactor/auth-module
 
 ## Working with Worktrees
 
-For parallel subagent work, use git worktrees. See `references/parallel-worktrees.md` for setup, subagent dispatch pattern, and GloryEV-specific pitfalls.
+For parallel subagent work, use git worktrees. See `references/parallel-worktrees.md` for setup and subagent dispatch pattern.
 
 ```bash
 # Quick start

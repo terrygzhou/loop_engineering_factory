@@ -387,12 +387,12 @@ When executing, use the `subagent-driven-development` skill:
 
 ## Reference Materials
 
-**Feature design patterns:** See `references/feature-design-car-hiring.md` for:
-- carbar.com.au UX exploration patterns
+**Feature design patterns:** See project references for:
+- UX exploration patterns for reference sites
 - SQLAlchemy model conventions (UUID PKs, Numeric precision, Enum storage)
 - Cascade patterns and bidirectional relationship patching
 - Snapshot pricing pattern for immutable transaction pricing
-- Separate model decisions (HiringPayment vs Payment, HiringDocument vs Document)
+- Separate model decisions for domain-specific entities
 
 ## Remember
 

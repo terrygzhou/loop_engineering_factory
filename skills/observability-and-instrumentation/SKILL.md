@@ -152,7 +152,7 @@ Docker compose integration:
 ```yaml
 services:
   api:
-    image: gloryev-api
+    image: app-api
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
       interval: 10s

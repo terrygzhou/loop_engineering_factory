@@ -2,8 +2,8 @@
 PLAN node: Generate implementation plan, tasks, analysis, and architecture diagrams.
 Outputs: $project_folder/build/solution.md — complete solution design with diagrams.
 
-Skills: writing-plans → speckit-tasks → speckit-analyze → doubt-driven-development → 
-         speckit-checklist → architecture-diagram-generator
+Skill chain:
+  writing-plans → doubt-driven-development → architecture-diagram-generator
 """
 import os
 import re
@@ -41,41 +41,21 @@ def _estimate_arch_uncertainty(artifacts: dict) -> float:
     Derive architectural uncertainty from actual plan artifacts.
     Lower = more confident. Scoring starts at 0.6 and reduces:
     - Has plan with >200 chars: -0.15
-    - Has tasks with >5 items: -0.15
-    - Has analysis: -0.1
     - Has doubt_resolution: -0.1
-    - Has checklist: -0.05
     - Has diagrams: -0.1
     Range: [0.0, 1.0]
     """
     score = 0.6
     plan_text = artifacts.get("plan", "")
-    tasks_text = artifacts.get("tasks", "")
-    analysis_text = artifacts.get("analysis", "")
     doubt_text = artifacts.get("doubt_resolution", "")
-    checklist_text = artifacts.get("checklist", "")
+    diagrams = artifacts.get("diagrams", {})
 
     if len(plan_text) > 200:
         score -= 0.15
-    task_items = len(re.findall(r'^\s*[-*]\s*[\-\[]', tasks_text, re.MULTILINE)) + len(re.findall(r'^\s*\d+\.\s', tasks_text, re.MULTILINE))
-    if task_items >= 5:
-        score -= 0.15
-    elif task_items >= 1:
-        score -= 0.1
-    if len(analysis_text) > 50:
-        score -= 0.1
     if len(doubt_text) > 50:
         score -= 0.1
-    if len(checklist_text) > 50:
-        score -= 0.05
-    diagrams = artifacts.get("diagrams", {})
     if diagrams:
         score -= 0.1
-    analysis_lower = analysis_text.lower()
-    if any(kw in analysis_lower for kw in ["low risk", "solid", "clear path", "straightforward"]):
-        score -= 0.05
-    if any(kw in analysis_lower for kw in ["unclear", "unknown", "high risk", "major concern"]):
-        score += 0.15
     return max(0.0, min(1.0, score))
 
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
@@ -189,7 +169,10 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
 
 def plan_node(state: dict) -> dict:
     """
-    PLAN phase: Generate implementation plan, tasks, analysis, and architecture diagrams.
+    PLAN phase: Generate implementation plan using framework skill chain.
+
+    Flow:
+      writing-plans → doubt-driven-development → architecture-diagram-generator
 
     Input:
       - spec_refined: Specification from DEFINE phase
@@ -200,7 +183,8 @@ def plan_node(state: dict) -> dict:
     Output:
       - $project_folder/build/solution.md: Complete solution design with diagrams
       - $project_folder/build/diagrams/: Mermaid diagram files
-      - state["artifacts"]["plan"], "tasks", "analysis", "doubt_resolution", "checklist", "diagrams"
+      - state["artifacts"]["plan"], "tasks", "analysis", "checklist", "diagrams"
+      - state["artifacts"]["conformance"]: Spec↔plan alignment report
     """
     print("\n=== PLAN PHASE ===")
 
@@ -223,70 +207,49 @@ def plan_node(state: dict) -> dict:
     feedback_context = _load_feedback_context(state)
     state["feedback_context"] = feedback_context
 
-    # ── Step 1: Generate plan ──
+    # Build context for all skill invocations
+    spec = state.get("artifacts", {}).get("spec_refined", "")
+    interview = state.get("artifacts", {}).get("interview_notes", "")
+    context_parts = [spec]
+    if interview:
+        context_parts.append(f"Interview notes:\n{interview}")
+    if feedback_context:
+        context_parts.append(f"\n\n{feedback_context}\n")
+    base_context = "\n\n".join(context_parts)
+
+    # ── Step 1: Generate architecture/implementation plan ──
     plan_skill = skills.get("writing-plans", {})
     if plan_skill:
         print("  → Running writing-plans...")
-        spec = state.get("artifacts", {}).get("spec_refined", "")
-        context = spec
-        if feedback_context:
-            context += f"\n\n{feedback_context}\n"
-        # Context optimization — tight budget: skill+task take ~2K tokens
-        optimized = prepare_context_for_llm({"context": context}, max_tokens=bounds.context.plan_max_tokens)
-        task = f"Create implementation plan for: {state.get('spec_path', '')}. Keep it concise — focus on file structure, key components, and task breakdown. Max 3000 words."
-        result = invoke_skill(plan_skill["content"], task, optimized["context"], llm=None)
+        optimized = prepare_context_for_llm({"context": base_context}, max_tokens=bounds.context.plan_max_tokens)
+        result = invoke_skill(
+            plan_skill["content"],
+            "Create implementation plan with architecture, file structure, milestones, and task breakdown. Keep it concise — max 3000 words.",
+            optimized["context"],
+            llm=None
+        )
         state["artifacts"]["plan"] = result[:bounds.artifacts.max_plan_chars]
-        feedback.append({"skill": "writing-plans", "output": result[:bounds.feedback.max_feedback_entry_chars]})
-
-    # ── Step 2: Break into tasks ──
-    tasks_skill = skills.get("speckit-tasks", {})
-    if tasks_skill:
-        print("  → Running speckit-tasks...")
-        task = "Break the plan into actionable, dependency-ordered tasks. Be concise — 1-2 lines per task."
-        result = invoke_skill(tasks_skill["content"], task,
-                             state.get("artifacts", {}).get("plan", "")[:bounds.artifacts.max_tasks_chars],
-                             llm=None)
-        state["artifacts"]["tasks"] = result[:bounds.artifacts.max_tasks_chars]
+        # Extract task count from the plan
         task_count = result.count("- [") + result.count("1.") + result.count("2.") + result.count("3.")
         state["metrics"] = state["metrics"].model_copy(update={
             "task_count": max(task_count, 1),
         })
-        feedback.append({"skill": "speckit-tasks", "output": result[:bounds.feedback.max_feedback_entry_chars]})
+        feedback.append({"skill": "writing-plans", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
-    # ── Step 3: Analyze cross-artifact consistency ──
-    analyze_skill = skills.get("speckit-analyze", {})
-    if analyze_skill:
-        print("  → Running speckit-analyze...")
-        task = "Analyze consistency between spec, plan, and tasks. Be concise — focus on critical gaps only."
-        result = invoke_skill(analyze_skill["content"], task,
-                             state.get("artifacts", {}).get("plan", "")[:bounds.artifacts.max_analysis_chars],
-                             llm=None)
-        state["artifacts"]["analysis"] = result[:bounds.artifacts.max_analysis_chars]
-        feedback.append({"skill": "speckit-analyze", "output": result[:bounds.feedback.max_feedback_entry_chars]})
-
-    # ── Step 4: Doubt-driven development (challenge assumptions) ──
+    # ── Step 2: Doubt-driven development (challenge assumptions) ──
     doubt_skill = skills.get("doubt-driven-development", {})
     if doubt_skill:
         print("  → Running doubt-driven-development...")
-        task = "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only."
-        result = invoke_skill(doubt_skill["content"], task,
-                             state.get("artifacts", {}).get("plan", "")[:bounds.artifacts.max_analysis_chars],
-                             llm=None)
+        result = invoke_skill(
+            doubt_skill["content"],
+            "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only.",
+            state.get("artifacts", {}).get("plan", "")[:bounds.artifacts.max_analysis_chars],
+            llm=None
+        )
         state["artifacts"]["doubt_resolution"] = result[:bounds.artifacts.max_doubt_chars]
         feedback.append({"skill": "doubt-driven-development", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
-    # ── Step 5: Generate checklist ──
-    checklist_skill = skills.get("speckit-checklist", {})
-    if checklist_skill:
-        print("  → Running speckit-checklist...")
-        task = "Generate a custom checklist for this feature"
-        result = invoke_skill(checklist_skill["content"], task,
-                             state.get("artifacts", {}).get("spec_refined", ""),
-                             llm=None)
-        state["artifacts"]["checklist"] = result
-        feedback.append({"skill": "speckit-checklist", "output": result[:bounds.feedback.max_feedback_entry_chars]})
-
-    # ── Step 6: Generate architecture diagrams ──
+    # ── Step 9: Generate architecture diagrams ──
     print("  → Running architecture-diagram-generator...")
     diagrams = _generate_all_diagrams(skills, state)
 

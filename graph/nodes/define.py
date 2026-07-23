@@ -2,7 +2,7 @@
 DEFINE node: Generate spec and API contracts from interview notes collected in DISCOVER.
 Fully automatic — no user input required (interview is in DISCOVER phase).
 
-Skills: speckit-specify → api-and-interface-design
+Skills: writing-plans (spec generation) → api-and-interface-design
 """
 import re
 from pathlib import Path
@@ -16,7 +16,6 @@ from config.bounds_loader import bounds
 def _cap_list(lst: list, max_len: int) -> list:
     """Trim list to last max_len entries."""
     return lst[-max_len:]
-from config.prompt_templates import speckit_specify, api_and_interface_design
 from feedback.chroma_client import get_chroma_client, query_patterns
 
 def _load_feedback_context(state: dict) -> str:
@@ -149,9 +148,9 @@ def define_node(state: dict) -> dict:
     feedback.append({"skill": "interview-me", "output": interview_notes[:bounds.feedback.max_feedback_entry_chars] if interview_notes else "(empty)"})
 
     # ── Step 2: Generate/refine spec (structured with traceability + ToT→CoT) ──
-    specify_skill = skills.get("speckit-specify", {})
-    if specify_skill:
-        print("  → Running speckit-specify...")
+    spec_skill = skills.get("writing-plans", {})
+    if spec_skill:
+        print("  → Running writing-plans for spec generation...")
         context = f"Spec path: {state.get('spec_path', '')}\n"
         if project_context:
             context += f"Existing project context:\n{project_context}\n"
@@ -160,16 +159,17 @@ def define_node(state: dict) -> dict:
             context += f"\n\n{feedback_context}\n"
         if user_review_comments:
             context += f"\n\n## User Review Comments (from ARCH_REVIEW rejection)\n{user_review_comments}\n"
-        task = speckit_specify.format(spec_path=state.get("spec_path", ""))
 
         # Context optimization: prune before LLM call
         optimized = prepare_context_for_llm({"context": context}, max_tokens=bounds.context.define_max_tokens)
         result = invoke_skill(
-            specify_skill["content"], task, optimized["context"], llm=None,
+            spec_skill["content"],
+            "Produce a complete, actionable specification. Include user stories with acceptance criteria, edge cases, non-functional requirements, and out-of-scope items.",
+            optimized["context"], llm=None,
             workflow_id=project_name, phase="DEFINE"
         )
         state["artifacts"]["spec_refined"] = result
-        feedback.append({"skill": "speckit-specify", "output": result[:bounds.feedback.max_feedback_entry_chars]})
+        feedback.append({"skill": "writing-plans", "output": result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Step 3: API/interface design (multi-interface, contract-first + ToT→CoT) ──
     api_skill = skills.get("api-and-interface-design", {})

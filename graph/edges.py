@@ -14,9 +14,11 @@ END_MARKER = END
 _forward_paths = {
     "DISCOVER": "DEFINE",
     "DEFINE": "PLAN",
-    "PLAN": "REVIEW",
-    "REVIEW": "BUILD",
-    "BUILD": "SHIP",
+    "PLAN": "ARCH_REVIEW",
+    "ARCH_REVIEW": "BUILD",
+    "BUILD": "SEED_DATA",
+    "SEED_DATA": "VERIFY",
+    "VERIFY": "SHIP",
 }
 
 
@@ -85,10 +87,10 @@ def route_phase(state: WorkflowState) -> str:
     if phase == "PLAN":
         if m.arch_uncertainty > max_arch_uncert:
             return "PLAN"  # Loop back to resolve doubts
-        return "REVIEW"
+        return "ARCH_REVIEW"
 
-    # REVIEW -> human gate: approve → BUILD, reject → back to PLAN
-    if phase == "REVIEW":
+    # ARCH_REVIEW -> human gate: approve → BUILD, reject → back to PLAN
+    if phase == "ARCH_REVIEW":
         if state.get("artifacts", {}).get("review_approved"):
             return "BUILD"
         return "PLAN"
@@ -104,6 +106,14 @@ def route_phase(state: WorkflowState) -> str:
             return "BUILD"  # Too many revisions, needs simplification
         if m.uat_pass_rate < min_uat_pass:
             return "BUILD"  # UAT failed, rebuild inside subgraph
+        return "SEED_DATA"
+
+    # SEED_DATA -> placeholder, always forward to VERIFY
+    if phase == "SEED_DATA":
+        return "VERIFY"
+
+    # VERIFY -> placeholder, always forward to SHIP
+    if phase == "VERIFY":
         return "SHIP"
 
     # SHIP -> always reflect

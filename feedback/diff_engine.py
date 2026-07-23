@@ -121,7 +121,7 @@ def apply_yaml_diff(config_path: str, diffs: dict) -> bool:
     # Handle prompt template updates (Python file)
     for change in diffs.get("changes", []):
         skill_name = change.get("skill", "")
-        if skill_name in ("interview_me", "speckit_specify", "api_and_interface_design"):
+        if skill_name in ("interview_me", "spec_generation", "api_and_interface_design"):
             return apply_prompt_diff(skill_name, diffs)
 
     try:

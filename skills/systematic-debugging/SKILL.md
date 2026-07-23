@@ -320,7 +320,7 @@ When a full-stack issue spans multiple layers, debug **bottom-up**:
 `background: linear-gradient(...)` is a CSS shorthand that resets ALL background sub-properties (image, color, size, position, etc). It will override inline `background-image: url(...)` set in HTML templates. Fix: use specific properties like `background-color` or `background-size` separately. Verify with `getComputedStyle(el).backgroundImage` in browser console.
 
 ### Alembic migration drift — missing tables
-When SQLAlchemy models define tables (e.g., `memberships`, `membership_rewards`) but Alembic migrations don't include them, `Base.metadata.create_all()` may have created the tables at runtime, but Alembic `alembic upgrade head` won't know about them. **Always verify migrations cover ALL model tables.** Run `alembic current` and `alembic history` to check. Symptom: Alembic thinks a table doesn't exist when the DB actually has it. Fix: add the missing `CREATE TABLE` statements to the latest migration, or run `alembic revision --autogenerate` to sync.
+When SQLAlchemy models define tables (e.g., `products`, `categories`) but Alembic migrations don't include them, `Base.metadata.create_all()` may have created the tables at runtime, but Alembic `alembic upgrade head` won't know about them. **Always verify migrations cover ALL model tables.** Run `alembic current` and `alembic history` to check. Symptom: Alembic thinks a table doesn't exist when the DB actually has it. Fix: add the missing `CREATE TABLE` statements to the latest migration, or run `alembic revision --autogenerate` to sync.
 
 ### FastAPI query params vs JSON body
 When wiring frontend fetch calls to FastAPI endpoints, check the endpoint signature: `async def foo(email: str, ...)` expects query params — use `fetch('/foo?email=...')`. `async def foo(body: SomeSchema, ...)` expects JSON — use `fetch('/foo', {body: JSON.stringify(...)})`. Mismatch produces 422 errors. Check the endpoint signature first.
@@ -352,7 +352,7 @@ docker compose up -d api
 **Rule:** If `grep -rn 'kw' app/` returns zero results, the issue is container state, not source code. Always do a full `docker compose build --no-cache` after schema/dependency changes.
 
 ### FastAPI trailing slash — 307 redirect trap
-FastAPI enforces trailing slashes on collection endpoints (`GET /api/v1/vehicles/`) but NOT on action endpoints (`POST /api/v1/auth/login`). Calling `POST /login/` → 307 Temporary Redirect to `/login`. Curl without `-L` loses the redirect body → empty JSON or `Expecting value` parse error. **Always call action endpoints WITHOUT trailing slashes**, or use `curl -L` to follow redirects.
+FastAPI enforces trailing slashes on collection endpoints (`GET /api/v1/items/`) but NOT on action endpoints (`POST /api/v1/auth/login`). Calling `POST /login/` → 307 Temporary Redirect to `/login`. Curl without `-L` loses the redirect body → empty JSON or `Expecting value` parse error. **Always call action endpoints WITHOUT trailing slashes**, or use `curl -L` to follow redirects.
 
 ### Frontend "Network error" — non-JSON 500 response
 When a FastAPI endpoint returns a 500 error, the response is an HTML error page, not JSON. The frontend `fetch()` call does `res.json()` → `SyntaxError: Unexpected token < in JSON` → caught by `catch` block → displays "Network error. Please try again."
@@ -370,10 +370,10 @@ except Exception as e:
 **Verify:** After fix, test with `curl -s -X POST http://localhost:8000/api/v1/auth/login -H 'Content-Type: application/json' -d '{"email":"...","password":"..."}'` — should return JSON `{"access_token": "...", "refresh_token": "..."}`.
 
 ### FastAPI route ordering — static paths before parameterized
-FastAPI matches routes top-to-bottom. `GET /{booking_id}` will catch requests for `GET /slots`, `GET /brands`, etc. if defined first — treating the literal path as a UUID parameter → 500 error. **Always define static routes (`/slots`, `/cancel`, `/brands`) BEFORE parameterized routes (`/{id}`).** Symptom: "invalid UUID" error for a valid endpoint. Fix: move the static route above the catch-all.
+FastAPI matches routes top-to-bottom. `GET /{resource_id}` will catch requests for `GET /slots`, `GET /brands`, etc. if defined first — treating the literal path as a UUID parameter → 500 error. **Always define static routes (`/slots`, `/cancel`, `/brands`) BEFORE parameterized routes (`/{id}`).** Symptom: "invalid UUID" error for a valid endpoint. Fix: move the static route above the catch-all.
 
 ### Service method mismatch — get vs get_or_create
-When a service exposes both `get_X` and `get_or_create_X`, and the router calls `get_X`, every request returns 404 until the record is manually seeded. **Always use `get_or_create` for user-scoped optional records** (memberships, profiles, settings) — auto-enroll on first access. Symptom: "Not found" on every endpoint hit. Fix: change `get_membership()` → `get_or_create_membership()` in the router.
+When a service exposes both `get_X` and `get_or_create_X`, and the router calls `get_X`, every request returns 404 until the record is manually seeded. **Always use `get_or_create` for user-scoped optional records** (profiles, settings, preferences) — auto-enroll on first access. Symptom: "Not found" on every endpoint hit. Fix: change `get_profile()` → `get_or_create_profile()` in the router.
 
 ### `uuid.UUID()` import-style mismatch — `NameError` vs silent `AttributeError`
 When a module imports `from uuid import uuid4, UUID` (class import) instead of `import uuid` (module import), code that uses `uuid.UUID(...)` fails with `NameError: name 'uuid' is not defined`. This produces a 500 error on the affected endpoint.
@@ -395,11 +395,11 @@ from uuid import uuid4, UUID  # class import — use UUID(...)
 # import uuid                  # module import — use uuid.UUID(...)
 
 # Double conversion — WRONG
-vid = uuid.UUID(vehicle_id)
-vehicle = await db.get(Vehicle, uuid.UUID(vid))  # second UUID() on already-converted UUID
+rid = uuid.UUID(resource_id)
+resource = await db.get(Resource, uuid.UUID(rid))  # second UUID() on already-converted UUID
 
 # Double conversion — CORRECT
-vehicle = await db.get(Vehicle, UUID(vehicle_id))  # single conversion
+resource = await db.get(Resource, UUID(resource_id))  # single conversion
 ```
 
 **Scan for all instances:**
@@ -508,7 +508,7 @@ From debugging sessions:
 
 **No shortcuts. No guessing. Systematic always wins.**
 
-## Python/Docker/FastAPI Debugging Patterns (from speckit-debug)
+## Python/Docker/FastAPI Debugging Patterns
 
 When debugging Python/Docker/FastAPI projects specifically:
 
@@ -537,4 +537,3 @@ When agents fail to adopt skills from a shared directory:
 
 ## Support Files
 
-- `references/agent-skills-adoption.md` — Agent skill adoption patterns (from speckit-debug)

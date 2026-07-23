@@ -58,7 +58,7 @@ def _run_phase_eval(phase: str, chunk: Dict) -> None:
         if plan_text:
             px_evaluator.eval_plan(plan_text, spec_ref=spec_ref)
 
-    elif phase == "REVIEW":
+    elif phase == "ARCH_REVIEW":
         review_text = artifacts.get("review", "") or artifacts.get("review_notes", "")
         spec_context = artifacts.get("spec_refined", "")
         if review_text:
@@ -306,8 +306,8 @@ class WorkflowRunner:
                         if input_data.get("project_description"):
                             resume_data["project_description"] = input_data["project_description"]
 
-                elif interrupted_phase == "REVIEW":
-                    # REVIEW: approve → BUILD, reject with comments → back to PLAN
+                elif interrupted_phase == "ARCH_REVIEW":
+                    # ARCH_REVIEW: approve → BUILD, reject with comments → back to PLAN
                     if isinstance(input_data, str):
                         answer = input_data.strip().lower()
                     elif isinstance(input_data, dict):
@@ -317,7 +317,7 @@ class WorkflowRunner:
                                 "approved": answer,
                                 "feedback": input_data.get("feedback", input_data.get("user_review_comments", "")),
                             }
-                            print(f"  → REVIEW resumed: approved={answer}")
+                            print(f"  → ARCH_REVIEW resumed: approved={answer}")
                             input_state = Command(resume=[resume_data])
                             continue
                         answer = str(answer).lower()
@@ -329,7 +329,7 @@ class WorkflowRunner:
                         "approved": approved,
                         "feedback": input_data.get("feedback", "") if isinstance(input_data, dict) else "",
                     }
-                    print(f"  → REVIEW resumed: approved={approved}")
+                    print(f"  → ARCH_REVIEW resumed: approved={approved}")
                     input_state = Command(resume=[resume_data])
                     continue
 
@@ -365,7 +365,7 @@ class WorkflowRunner:
         if phase == "DISCOVER":
             return self._cli_interview(state)
 
-        if phase == "REVIEW":
+        if phase == "ARCH_REVIEW":
             return self._cli_review(state)
 
         answer = input(f"  Approve {phase}? (y/n): ").strip().lower()

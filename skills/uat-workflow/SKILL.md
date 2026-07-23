@@ -101,7 +101,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:<port>/static/<asset>
 Before browser testing, batch-test all page and API endpoints to catch 404/500 issues immediately:
 
 ```bash
-for p in / /browse /docs /api/v1/vehicles; do
+for p in / /browse /docs /api/v1/items; do
   curl -s --max-time 5 -o /dev/null -w "%{http_code}\t$p\n" http://localhost:<port>$p
 done
 ```
@@ -124,7 +124,7 @@ Any template name appearing in Python code but absent from the templates directo
 
 Status code guide: 200=OK, 307=trailing slash mismatch, 401=auth missing, 404=endpoint/template missing, 405=method mismatch, 500=server error (schema/FK/column issue).
 
-**Key pattern:** List endpoints (`/vehicles/`) often work while single-item endpoints (`/vehicles/1`) 500 due to schema serialization issues on nested objects. Always test both.
+**Key pattern:** List endpoints (`/items/`) often work while single-item endpoints (`/items/1`) 500 due to schema serialization issues on nested objects. Always test both.
 
 ### 5. Record-only mode
 
@@ -214,7 +214,7 @@ def run_uat():
 
         # === PHASE 1: Unauthenticated pages ===
         print("\n🧪 Phase 1: Public pages")
-        for path, label in [("/", "Home"), ("/browse", "Browse"), ("/care", "Customer Care")]:
+        for path, label in [("/", "Home"), ("/browse", "Browse"), ("/support", "Support")]:
             try:
                 page.goto(f"{BASE}{path}", wait_until="networkidle")
                 page.wait_for_timeout(2000)
@@ -256,7 +256,7 @@ def run_uat():
 
         # === PHASE 4: Form submission test ===
         print("\n🧪 Phase 4: Form submission")
-        # Add project-specific form tests here (test drive booking, trade-in, etc.)
+        # Add project-specific form tests here
 
         browser.close()
 
@@ -443,7 +443,7 @@ Lead with verdict (✅ PASS / ❌ FAIL), then tables. No intro paragraphs.
 |---------|-----------|-----|
 | Text duplication in cards | Template renders field twice | Deduplicate in template |
 | "Loading..." stuck indefinitely | JS fetch error or missing element ID | Check JS for syntax errors in inline scripts |
-| Spinner / skeleton forever | (1) Inline script syntax error kills IIFE. (2) API returns empty data array. (3) `renderVehicles(data)` called with `data` (object) instead of `data.items` (array) — fix: `var items = (data && data.items) || (Array.isArray(data) ? data : [])` | (1) Fix mixed `function(x) =>` patterns. (2) Handle empty arrays in template. (3) Use defensive item extraction: `items = (data && data.items) || (Array.isArray(data) ? data : [])` |
+| Spinner / skeleton forever | (1) Inline script syntax error kills IIFE. (2) API returns empty data array. (3) `renderItems(data)` called with `data` (object) instead of `data.items` (array) — fix: `var items = (data && data.items) || (Array.isArray(data) ? data : [])` | (1) Fix mixed `function(x) =>` patterns. (2) Handle empty arrays in template. (3) Use defensive item extraction: `items = (data && data.items) || (Array.isArray(data) ? data : [])` |
 | Nav / sidebar highlight wrong | Current path not passed to template context | Add `request.path` or equivalent to context |
 | CSS `background:` shorthand wipes `background-image` | `background` shorthand resets ALL sub-properties | Use `background-color` instead of `background` |
 | Image alt text shows "undefined" | API field name mismatch with template variable | Use fallback: `img.caption \|\| img.alt_text \|\| img.filename` |
@@ -492,7 +492,7 @@ Lead with verdict (✅ PASS / ❌ FAIL), then tables. No intro paragraphs.
 - **Template not found on route hit:** Route handler calls `get_template("page.html")` but the file doesn't exist in `templates/`. Returns 500 with `jinja2.exceptions.TemplateNotFound`. Fix: create the template file. Always cross-check route handlers against `find templates/ -name '*.html'` before UAT.
 - **PostgreSQL schema discovery before querying:** Never assume column names. Use `\d tablename` in `psql`. Enum fields require `::text` cast.
 - **NULL nullable fields in templates:** Template rendering `${field}` produces literal "null". Always coalesce: `field ?? 'default'`.
-- **SPA routes are NOT URL-based:** Configure & Order and Test Drive are triggered by client-side JS functions, NOT by navigating to `/vehicle/<id>/configure` (those return 404). Use `page.evaluate('configureVehicle()')` in Playwright.
+- **SPA routes are NOT URL-based:** SPA actions are triggered by client-side JS functions, NOT by navigating to `/resource/<id>/configure` (those return 404). Use `page.evaluate('configureItem()')` in Playwright.
 - **Playwright select_option() fails on dynamic dropdowns:** When `<select>` options are added by JavaScript after an API call, use `page.evaluate()` to set value directly and dispatch a `change` event. See `references/playwright-dropdown-selection.md`.
 - **Invisible elements cause 30s TimeoutError:** Always use `safe_fill()` — check `is_visible()` before `fill()`.
 
@@ -502,7 +502,7 @@ Lead with verdict (✅ PASS / ❌ FAIL), then tables. No intro paragraphs.
 |-------|-----|
 | `Locator` can't be awaited | Don't `await pg.locator("x")`; use `pg.locator("x")` directly or `await pg.query_selector_all()` |
 | Button click times out (overlay/not visible) | Use JS evaluate click or `pg.get_by_role().first.click(timeout=3000)` |
-| "Configure & Order" button invisible in snapshot | Use JS: `page.evaluate('configureVehicle()')` |
+| "Configure & Order" button invisible in snapshot | Use JS: `page.evaluate('configureItem()')` |
 | `browser_vision` returns "At most 0 images" quota error | Fallback to Playwright `page.screenshot()` for bulk capture |
 | `python3 << 'EOF'` heredoc with `&` fails | Use base64 encoding pattern (encode script, write to `/tmp`, decode+execute) |
 | `launch_context()` doesn't exist | Use `pw.chromium.launch()` → `br.new_context()` |

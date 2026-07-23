@@ -214,4 +214,3 @@ Before declaring simplification complete:
 
 **fastapi-jinja2-feature-build:** After Phase 4 (wiring up), do a simplification pass on the new code.
 
-**speckit-implement:** Run this after all tasks complete as a cleanup pass.

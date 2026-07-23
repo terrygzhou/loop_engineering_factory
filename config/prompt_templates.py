@@ -1,8 +1,9 @@
 """
-Prompt templates for the DEFINE phase.
+Prompt templates for the workflow.
 These templates can be updated by the REFLECT node between cycles.
 Each template supports ToT (Tree of Thought) + CoT (Chain of Thought) reasoning.
 """
+
 # Interview template
 interview_me = """Analyze the feature description at {spec_path} and conduct a structured interview.
 
@@ -28,7 +29,6 @@ Rules: Ask ONE question at a time. Wait for the answer. Follow up only on that a
 Flag assumptions when the user is uncertain. Never invent requirements."""
 
 # Spec generation template
-speckit_specify = """Produce a complete, actionable specification for the feature at {spec_path}.
 
 ## REASONING PHASE (Tree of Thought)
 Generate 3 candidate scope interpretations, evaluate each, and select the best:
@@ -76,3 +76,152 @@ Follow this sequential process:
 **Step 7 — Module Ownership**: Map each interface to the owning component.
 
 Use realistic data types and field names. Do not produce placeholder schemas."""
+
+
+## REASONING PHASE (Tree of Thought)
+Review the spec for:
+- Ambiguous requirements
+- Missing acceptance criteria
+- Unclear dependencies
+- Unverified assumptions
+- Incomplete error handling
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: List each underspecified area found
+**Step 2**: Write one precise clarification question per area
+**Step 3**: Explain why each clarification matters for implementation
+**Step 4**: Prioritize by impact on development
+
+Output format:
+1. [Area] Question? - Why it matters: [reason]
+2. [Area] Question? - Why it matters: [reason]
+...
+
+Limit to the 5 most critical gaps. Do not ask about things that are clearly specified."""
+
+
+## REASONING PHASE (Tree of Thought)
+Consider 3 architectural approaches, evaluate trade-offs, and select the best.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1 — Architecture**: High-level design, key components, and data flow
+**Step 2 — File Structure**: Directory layout and module organization
+**Step 3 — Dependencies**: Internal and external dependencies
+**Step 4 — Risks**: Technical risks and mitigation strategies
+**Step 5 — Milestones**: Key deliverables and completion criteria
+
+Keep it concise. Focus on what matters for implementation."""
+
+
+## REASONING PHASE (Tree of Thought)
+Analyze task dependencies and determine optimal execution order.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Group tasks by priority and dependencies
+**Step 2**: Identify which tasks can be parallelized
+**Step 3**: Create implementation sequence
+**Step 4**: Define completion criteria for each task
+
+Output a clear, actionable implementation sequence."""
+
+
+## REASONING PHASE (Tree of Thought)
+Identify potential spec↔implementation mismatches.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: List all acceptance criteria from spec
+**Step 2**: Map each to implementation evidence
+**Step 3**: Flag any gaps or mismatches
+**Step 4**: Generate test cases that verify alignment
+
+Output conformance report with pass/fail status for each criterion."""
+
+
+## REASONING PHASE (Tree of Thought)
+Analyze task complexity and dependency graph.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Break each task into implementation-ready issues
+**Step 2**: Define clear acceptance criteria per issue
+**Step 3**: Order by dependencies
+**Step 4**: Estimate effort (S/M/L/XL)
+
+Output format:
+- [ ] Issue title
+  - Acceptance: [criteria]
+  - Effort: [size]
+  - Dependencies: [list]"""
+
+
+## REASONING PHASE (Tree of Thought)
+Evaluate backlog items by priority and complexity.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Sort backlog by priority
+**Step 2**: Identify items ready for implementation
+**Step 3**: Create implementation sequence
+**Step 4**: Define tracking and completion criteria
+
+Output prioritized backlog with implementation order."""
+
+
+## REASONING PHASE (Tree of Thought)
+Identify what context has changed since last update.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Diff current spec against last agent context
+**Step 2**: Extract changed requirements
+**Step 3**: Update agent context with minimal delta
+**Step 4**: Verify consistency
+
+Output only the context delta, not the full spec."""
+
+# Backlog audit template
+backlog_audit = """Read-only audit of build/backlog.md against actual codebase.
+
+## REASONING PHASE (Tree of Thought)
+Identify discrepancies between backlog and implementation.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Parse backlog items
+**Step 2**: Check each against codebase
+**Step 3**: Flag: implemented, partial, missing
+**Step 4**: Report discrepancies
+
+Output audit report with status for each backlog item."""
+
+
+## REASONING PHASE (Tree of Thought)
+Determine what principles govern this project.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Identify core technical principles
+**Step 2**: Document non-negotiable constraints
+**Step 3**: Define quality standards
+**Step 4**: Create versioned constitution
+
+Output constitution with clear, actionable principles."""
+
+
+## REASONING PHASE (Tree of Thought)
+Determine project type and required scaffolding.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Identify project type (web, API, CLI, etc.)
+**Step 2**: Generate directory structure
+**Step 3**: Create configuration files
+**Step 4**: Set up initial project files
+
+Output complete project scaffolding."""
+
+
+## REASONING PHASE (Tree of Thought)
+Analyze backlog item dependencies and complexity.
+
+## EXECUTION PHASE (Chain of Thought)
+**Step 1**: Parse and validate backlog items
+**Step 2**: Order by dependencies and priority
+**Step 3**: Create implementation sequence
+**Step 4**: Track progress and completion
+
+Output ordered backlog with implementation plan."""

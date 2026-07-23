@@ -39,9 +39,45 @@ async def seed_table(session: AsyncSession, table_cls, data: list[dict]):
 
 ### Mixed Primary Key Types
 
-- **INTEGER PKs**: `user`, `vehicle`, `dealership`, `order`, `test_drive_booking`
-- **UUID PKs**: `customer`, `membership`, `hire`, `trade_in`, `service_record`, `review`, `notification`, `delivery`, `reward`, `maintenance_alert`, `support_ticket`, `faq`, `vehicle_image`, `vehicle_config`
+- **INTEGER PKs**: `user`, `product`, `order`, `category`, `review`
+- **UUID PKs**: `customer`, `inventory_item`, `shipping_address`, `payment_record`, `notification`, `wishlist`, `coupon`, `return_request`, `support_ticket`, `shipping_tracking`, `product_image`, `product_variant`, `order_item`
 - **FK relationships**: User (INT) → Customer (UUID) → other UUID-based tables
+
+### FK Cascade Seeding Order
+
+Seed parent tables before children to satisfy FK constraints:
+
+1. **Level 1 (no deps)**: `User`, `Category`
+2. **Level 2 (depend on L1)**: `Customer` (links to User), `Product` (links to Category)
+3. **Level 3 (depend on L2)**: `Order` (links to Customer), `ProductVariant` (links to Product), `ProductImage` (links to Product)
+4. **Level 4 (depend on L3)**: `OrderItem` (links to Order + ProductVariant), `Review` (links to Customer + Product)
+5. **Level 5 (leaf)**: `Notification`, `SupportTicket`, `Coupon`, etc.
+
+```python
+# Example: deterministic UUID from content hash
+import hashlib
+import uuid
+
+def deterministic_uuid(seed: str) -> uuid.UUID:
+    """Generate a stable UUID from a seed string for idempotent seeding."""
+    return uuid.UUID(hashlib.sha256(seed.encode()).hexdigest[:32])
+
+# Usage in seed data
+customer_data = [
+    {
+        "id": deterministic_uuid("customer:alice@example.com"),
+        "user_id": 1,
+        "email": "alice@example.com",
+        "name": "Alice Smith",
+    },
+    {
+        "id": deterministic_uuid("customer:bob@example.com"),
+        "user_id": 2,
+        "email": "bob@example.com",
+        "name": "Bob Jones",
+    },
+]
+```
 
 ### Workflow Integration
 
@@ -52,22 +88,42 @@ DEFINE → PLAN → BUILD → SEED_DATA → VERIFY → SHIP → REFLECT
 ```
 
 The SEED_DATA node:
+
 1. Generates/imports seed data
 2. Executes against target database
 3. Returns success/failure with row counts
 4. Feeds into VERIFY for UAT against populated data
 
+### Workflow State Integration
+
+After seeding, update the workflow state so downstream nodes know what data exists:
+
+```python
+workflow_state["seed"] = {
+    "status": "success",
+    "tables": {
+        "user": {"inserted": 10, "skipped": 0},
+        "customer": {"inserted": 5, "skipped": 0},
+        "product": {"inserted": 20, "skipped": 0},
+        "order": {"inserted": 15, "skipped": 0},
+        "order_item": {"inserted": 40, "skipped": 0},
+    },
+    "total_rows": 90,
+}
+```
+
 ## Pitfalls
 
-- **PG_UUID on SQLite**: SQLAlchemy's `PG_UUID(as_uuid=True)` creates `VARCHAR(36)` in SQLite - seed must provide string UUIDs, not Python UUID objects
+- **PG_UUID on SQLite**: SQLAlchemy's `PG_UUID(as_uuid=True)` creates `VARCHAR(36)` in SQLite — seed must provide string UUIDs, not Python UUID objects
 - **Timezone handling**: `dt.replace(tzinfo=None)` required for SQLite naive datetime compatibility
 - **Relationship cascade order**: Seed parent tables first (User → Customer → others), respect FK constraints
-- **Static assets**: Vehicle images must be copied to `app/static/vehicles/` before seeding references them
+- **Static assets**: Related media files (e.g. product images) must be copied to the static assets directory before seeding references them
 - **Workflow state**: Seed node must update workflow state with actual row counts for VERIFY to validate
 
 ## Verification
 
 After seeding, VERIFY should confirm:
+
 - Expected row counts per table
 - FK constraints satisfied (no orphaned records)
 - API endpoints return populated data (not empty lists)

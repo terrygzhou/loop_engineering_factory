@@ -63,6 +63,8 @@ observability:
 
 workflow:
   auto_approve: true
+  # ARCH_REVIEW is NEVER auto-approved: check graph/nodes/review.py
+  # which ignores auto_approve and always calls interrupt()
   hil_mode: auto
   max_retries: 2
   skill_registry_path: ~/.hermes/skills

@@ -154,7 +154,7 @@ Document the rollback procedure **before** deploying:
    docker-compose -f production.yml exec api alembic downgrade -1
 
 3. Redeploy previous version:
-   docker tag gloryev-api:v1.1 gloryev-api:latest
+   docker tag app-api:v1.1 app-api:latest
    docker-compose -f production.yml up -d
 
 ### Rollback verification

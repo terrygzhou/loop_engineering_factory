@@ -230,8 +230,8 @@ Each workflow phase chains specialized skills from `skills/` (29 registered). Sk
 | Phase | Skills Chained | Purpose |
 |-------|----------------|---------|
 | **DISCOVER** | `interview-me` → `coding-principles` | HIL interview (9 structured questions). Scans existing codebases for context. Generates `requirement.md`. Auto-generates defaults in auto-approve mode. |
-| **DEFINE** | `speckit-specify` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
-| **PLAN** | `writing-plans` → `speckit-tasks` → `speckit-analyze` → `doubt-driven-development` → `speckit-checklist` → `architecture-diagram-generator` | Task breakdown, architecture planning, doubt resolution, and diagram generation. Outputs `plan.md` + `diagrams.md`. |
+| **DEFINE** | `writing-plans` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
+| **PLAN** | `writing-plans` → `doubt-driven-development` → `architecture-diagram-generator` | Implementation plan, architectural doubt resolution, and diagram generation. Outputs `solution.md` + diagrams. |
 | **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → DEFINE. Max 2 retries. |
 | **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → `docker-compose-deployment` → **SuperWeb UAT** (`agent` mode default → `scripted` fallback → LLM prompt) | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. **UAT: SuperWeb agent mode** (OpenHands explores the app, generates tests) with scripted and LLM fallbacks. |
 | **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
@@ -262,10 +262,6 @@ skills/
 ├── requesting-code-review/SKILL.md
 ├── security-and-hardening/SKILL.md
 ├── shipping-and-launch/SKILL.md
-├── speckit-analyze/SKILL.md
-├── speckit-checklist/SKILL.md
-├── speckit-specify/SKILL.md
-├── speckit-tasks/SKILL.md
 ├── systematic-debugging/SKILL.md
 ├── test-driven-development/SKILL.md
 ├── uat-workflow/SKILL.md

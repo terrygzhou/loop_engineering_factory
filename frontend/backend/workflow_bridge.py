@@ -109,7 +109,7 @@ class WorkflowBridge:
     # Phases in order
     PHASES = [
         "DISCOVER", "DEFINE", "PLAN", "ARCH_REVIEW", "BUILD",
-        "SHIP", "REFLECT",
+        "SEED_DATA", "VERIFY", "SHIP", "REFLECT",
     ]
 
     # Phases where we wait for user input
