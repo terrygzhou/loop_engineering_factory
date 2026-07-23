@@ -70,9 +70,29 @@ def discover_node(state: dict) -> dict:
         # Already collected — skip pause 2
         interview_notes = state.get("interview_notes", "")
     else:
+        # Wire interview-me skill for structured elicitation
+        skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+        interview_skill = skills.get("interview-me", {})
+        
+        interview_prompts = (
+            "Ask the following questions one at a time. Wait for each answer before moving on.\n"
+            "If a question is not applicable, skip it.\n\n"
+            "Questions:\n"
+            "1. core_behavior — What does this feature do?\n"
+            "2. data_model — What entities and fields are involved?\n"
+            "3. api_surface — What HTTP methods, paths, and auth requirements?\n"
+            "4. validation — What input validation rules?\n"
+            "5. ui_template — Any Jinja2 templates or UI requirements?\n"
+            "6. integration — External services, databases, or APIs?\n"
+            "7. deployment — Docker or infrastructure implications?\n"
+            "8. edge_cases — Known edge cases?\n"
+            "9. non_functional — Performance, security, or monitoring needs?\n"
+        )
+        
         answers = interrupt({
             "type": "interview",
             "phase": "DISCOVER",
+            "instructions": interview_prompts if interview_skill else None,
             "questions": [
                 {"key": "core_behavior", "prompt": "What does this feature do?"},
                 {"key": "data_model", "prompt": "What entities and fields are involved?"},
@@ -201,11 +221,27 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
 def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder):
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     fabric_skill = skills.get("Fabric Prompt Engineering", {}) or skills.get("fabric-prompt-engineering", {})
+
+    # Wire coding-principles as context-aware refinement
+    principles_skill = skills.get("coding-principles", {})
+    principles_context = ""
+    if principles_skill and project_description:
+        principles_prompt = (
+            f"Given this project context, extract relevant coding principles:\n"
+            f"Project: {project_name}\n"
+            f"Description: {project_description}\n"
+            f"Type: {context.get('project_type', 'greenfield')}\n\n"
+            "Output key technical principles and conventions that should guide implementation."
+        )
+        principles_context = invoke_skill(principles_skill["content"], principles_prompt, "", llm=None)
+        principles_context = f"\n\n## Coding Principles\n{principles_context[:1000]}\n"
+
     if fabric_skill:
         fabric_prompt = (
             f"Generate a structured discovery report for DEFINE phase.\n\n"
             f"Project: {project_name}\nDescription: {project_description}\n"
-            f"Interview notes:\n{interview_notes}\n\n"
+            f"Interview notes:\n{interview_notes}\n"
+            f"{principles_context}\n\n"
             f"Output: Markdown with sections: Project Overview, Core Behavior, "
             f"Data Model, API Surface, Integration Requirements, Non-Functional, Edge Cases, Constraints"
         )

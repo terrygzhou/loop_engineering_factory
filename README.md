@@ -223,50 +223,46 @@ graph TB
 
 ## Skills Per Workflow State
 
-Each workflow phase chains specialized skills from `skills/` (29 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
+Each workflow phase chains specialized skills from `skills/` (20 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
 
 ### Phase-Specific Skill Chains
 
 | Phase | Skills Chained | Purpose |
 |-------|----------------|---------|
-| **DISCOVER** | `interview-me` → `coding-principles` | HIL interview (9 structured questions). Scans existing codebases for context. Generates `requirement.md`. Auto-generates defaults in auto-approve mode. |
+| **DISCOVER** | `interview-me` (HIL interrupt) → `coding-principles` (context refinement) → Fabric Prompt Engineering | Structured 9-question interview. Scans existing codebases. Generates `requirement.md`. Auto-generates defaults in auto-approve mode. |
 | **DEFINE** | `writing-plans` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
 | **PLAN** | `writing-plans` → `doubt-driven-development` → `architecture-diagram-generator` | Implementation plan, architectural doubt resolution, and diagram generation. Outputs `solution.md` + diagrams. |
 | **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → DEFINE. Max 2 retries. |
-| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → `security-and-hardening` → `requesting-code-review` → **deploy_gate** (health check) → **SuperWeb UAT** (`agent` mode default → `scripted` fallback → LLM prompt) | Per-task code generation with TDD. Aggregate passes: STRIDE security model, code review. Docker build + health check + pytest. **UAT: deploy_gate validates container health before SuperWeb agent mode** (OpenHands explores the app, generates tests) with scripted and LLM fallbacks. |
+| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → **deploy_gate** (health check) → SuperWeb UAT (`agent` mode default) → `security-and-hardening` → `requesting-code-review` → **SECURITY_GATE** | Per-task code gen with TDD. Docker build + health check. UAT: SuperWeb agent mode with scripted/LLM fallbacks. SECURITY_GATE: aggregate STRIDE security audit + code quality review. |
 | **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
-| **VERIFY** | `performance-optimization` → `systematic-debugging` → `code-simplification` | Conditional gates only — UAT moved to BUILD subgraph (SuperWeb agent mode). Performance profiling if P95 > 500ms, debugging if flakiness > 10%, simplification if review revisions > threshold. |
+| **VERIFY** | _(placeholder — pass-through to SHIP)_ | Currently a pass-through node. UAT moved to BUILD subgraph. Future: real test execution, linting, security scans, and performance profiling. |
 | **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `production-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, cloud platform configuration (AWS/Azure/GCP), version tagging. |
 | **REFLECT** | Internal `diff_engine` → `context-pruning` → `git-workflow` | Cycle analysis: aggregates metrics, queries ChromaDB patterns, generates config/guardrail diff proposals. Human approval gate for changes. |
 
-### Local Skills Registry
+### Local Skills Registry (20 skills)
 
 ```
 skills/
-├── ai-workflow-data-seeding/SKILL.md
-├── api-and-interface-design/SKILL.md
-├── architecture-diagram-generator/SKILL.md
-├── coding-principles/SKILL.md
-├── code-simplification/SKILL.md
-├── context-pruning/SKILL.md
-├── context-size-manager/SKILL.md
-├── docker-compose-deployment/SKILL.md
-├── doubt-driven-development/SKILL.md
-├── fastapi-jinja2-feature-build/SKILL.md
-├── git-workflow/SKILL.md
-├── headroom-context-compression/SKILL.md
-├── incremental-implementation/SKILL.md
-├── interview-me/SKILL.md
-├── observability-and-instrumentation/SKILL.md
-├── performance-optimization/SKILL.md
-├── requesting-code-review/SKILL.md
-├── security-and-hardening/SKILL.md
-├── production-deployment/SKILL.md
-├── shipping-and-launch/SKILL.md
-├── systematic-debugging/SKILL.md
-├── test-driven-development/SKILL.md
-├── uat-workflow/SKILL.md
-└── writing-plans/SKILL.md
+├── ai-workflow-data-seeding/SKILL.md       # SEED_DATA phase
+├── api-and-interface-design/SKILL.md        # DEFINE phase
+├── architecture-diagram-generator/SKILL.md # PLAN phase
+├── code-simplification/SKILL.md            # Standalone (future VERIFY phase)
+├── coding-principles/SKILL.md              # DISCOVER phase (context refinement)
+├── docker-compose-deployment/SKILL.md      # Standalone (local dev reference)
+├── doubt-driven-development/SKILL.md       # PLAN phase
+├── git-workflow/SKILL.md                   # SHIP + REFLECT phases
+├── incremental-implementation/SKILL.md     # BUILD phase
+├── interview-me/SKILL.md                   # DISCOVER phase
+├── observability-and-instrumentation/SKILL.md # SHIP phase
+├── performance-optimization/SKILL.md       # Standalone (future VERIFY phase)
+├── production-deployment/SKILL.md         # SHIP phase
+├── requesting-code-review/SKILL.md        # BUILD phase (SECURITY_GATE)
+├── security-and-hardening/SKILL.md        # BUILD phase (SECURITY_GATE)
+├── shipping-and-launch/SKILL.md            # SHIP phase
+├── systematic-debugging/SKILL.md          # Standalone (future VERIFY phase)
+├── test-driven-development/SKILL.md       # BUILD phase
+├── uat-workflow/SKILL.md                   # BUILD phase (fallback)
+└── writing-plans/SKILL.md                  # DEFINE + PLAN phases
 ```
 
 **Total per cycle**: ~20–35 LLM calls. BUILD loops (up to 2 retries) can increase this.
@@ -374,7 +370,7 @@ docker compose up -d --build
 
 - **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:8011`) for HIL workflow
 - **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via quality gates, OOTB `interrupt_after` for HIL pauses
-- **Skills System**: 29 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
+- **Skills System**: 20 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
 - **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; supports double-pause DISCOVER interview and ARCH_REVIEW diagram approval
 - **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
 - **Evaluation**: `service/evaluator.py` runs LLM-as-judge on DISCOVER, PLAN, and REVIEW outputs; results stream to Phoenix UI via OTel spans. Context-aware — the evaluator extracts project domain from the spec before scoring. Graceful degradation: eval failures never block the workflow.
@@ -447,7 +443,9 @@ At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. 
 |---|---|---|
 | `spec_quality` | DISCOVER | `domain_fit`, `clarity`, `completeness`, `consistency`, `actionability` |
 | `plan_score` | PLAN | `coverage`, `actionability`, `architecture`, `risk`, `domain_fit` |
-| `review_score` | REVIEW | `thoroughness`, `specificity`, `actionability`, `severity`, `domain_fit` |
+| `review_score` | ARCH_REVIEW | `thoroughness`, `specificity`, `actionability`, `severity`, `domain_fit` |
+| `build_score` | BUILD | `code_quality`, `test_coverage`, `security_posture`, `maintainability` |
+| `ship_score` | SHIP | `config_completeness`, `resilience`, `observability`, `security_hardening` |
 
 ### How It Works
 

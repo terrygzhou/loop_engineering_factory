@@ -2,13 +2,14 @@
 BUILD subgraph — structured sub-workflow for the BUILD phase.
 
 Sub-nodes:
-  IMPL_PLAN → CREATE_BACKLOG → IMPLEMENT → UNIT_TEST → INT_TEST → SEED → UAT → END
+  IMPL_PLAN → CREATE_BACKLOG → IMPLEMENT → UNIT_TEST → INT_TEST → SEED → DEPLOY_GATE → UAT → SECURITY_GATE → END
 
 Internal routing:
   UNIT_TEST pass → next backlog item (IMPLEMENT) or INT_TEST (if all done)
   UNIT_TEST fail → retry IMPLEMENT (max 3) or skip
   INT_TEST bugs → append to backlog → IMPLEMENT
   UAT fail → route back to BUILD parent (outer graph handles retry)
+  SECURITY_GATE → runs security-and-hardening + requesting-code-review aggregate passes
 """
 import re
 import json
@@ -61,6 +62,8 @@ class BuildSubState(TypedDict):
     parent_artifacts: dict         # Reference to parent artifacts dict (for writing back)
     superweb_mode: str             # "agent" (default) | "scripted"
     superweb_agent_report: dict    # Parsed agent_report.json from agent mode
+    security_review: str           # Security audit result (security-and-hardening skill)
+    code_review: str               # Code quality review result (requesting-code-review skill)
 
 MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
 
@@ -703,6 +706,72 @@ def route_build(state: BuildSubState) -> str:
 
     return END
 
+def security_review_node(state: BuildSubState) -> BuildSubState:
+    """Aggregate security review pass after all implementation items.
+
+    Runs security-and-hardening skill on the generated codebase.
+    """
+    print("  → [SECURITY_REVIEW] Running security audit...")
+    skills = state["skills"]
+    security_skill = skills.get("security-and-hardening", {})
+    if security_skill:
+        project_path = state["project_path"]
+        task = (
+            f"Run a security audit on the generated project at: {project_path}\n\n"
+            "Check for:\n"
+            "- Input validation and sanitization\n"
+            "- Authentication and authorization patterns\n"
+            "- Rate limiting and DoS protection\n"
+            "- Secret management (no hardcoded credentials)\n"
+            "- SQL injection prevention\n"
+            "- XSS protection\n"
+            "- CSRF protection\n"
+            "Report findings and score the security posture.\n"
+        )
+        from tools.llm import invoke_skill
+        result = invoke_skill(security_skill["content"], task,
+                             f"Project: {project_path}", llm=None)
+        state["security_review"] = result[:5000]
+        print(f"     ✓ Security review complete ({len(result)} chars)")
+    return state
+
+def code_review_node(state: BuildSubState) -> BuildSubState:
+    """Aggregate code quality review pass.
+
+    Runs requesting-code-review skill on the generated codebase.
+    """
+    print("  → [CODE_REVIEW] Running code quality review...")
+    skills = state["skills"]
+    review_skill = skills.get("requesting-code-review", {})
+    if review_skill:
+        project_path = state["project_path"]
+        task = (
+            f"Review the code quality of the generated project at: {project_path}\n\n"
+            "Check for:\n"
+            "- Clean architecture and separation of concerns\n"
+            "- Error handling patterns\n"
+            "- Testing readiness (unit-testable functions)\n"
+            "- Code style and naming conventions\n"
+            "- Import organization\n"
+            "Report findings and score the code quality.\n"
+        )
+        from tools.llm import invoke_skill
+        result = invoke_skill(review_skill["content"], task,
+                             f"Project: {project_path}", llm=None)
+        state.setdefault("code_review", "")
+        state["code_review"] = result[:state["skills"].get("max_review_chars", 5000)]
+        print(f"     ✓ Code review complete ({len(result)} chars)")
+    return state
+
+def security_gate_node(state: BuildSubState) -> BuildSubState:
+    """Security and code review gate before DEPLOY_GATE.
+
+    Runs security audit and code review, then proceeds to DEPLOY_GATE.
+    """
+    state = security_review_node(state)
+    state = code_review_node(state)
+    return state
+
 # ── State mapping functions (parent ↔ child) ──────────────────────
 
 def build_input_mapping(parent: dict) -> BuildSubState:
@@ -843,6 +912,7 @@ def build_subgraph() -> StateGraph:
     sub.add_node("SEED", seed_node)
     sub.add_node("DEPLOY_GATE", deploy_gate_node)
     sub.add_node("UAT", uat_node)
+    sub.add_node("SECURITY_GATE", security_gate_node)
 
     sub.add_edge(START, "IMPL_PLAN")
     sub.add_edge("IMPL_PLAN", "CREATE_BACKLOG")
@@ -852,7 +922,8 @@ def build_subgraph() -> StateGraph:
     sub.add_edge("INT_TEST", "SEED")
     sub.add_edge("SEED", "DEPLOY_GATE")
     sub.add_edge("DEPLOY_GATE", "UAT")
-    sub.add_edge("UAT", END)
+    sub.add_edge("UAT", "SECURITY_GATE")
+    sub.add_edge("SECURITY_GATE", END)
 
     return sub
 
