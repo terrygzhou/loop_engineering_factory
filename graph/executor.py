@@ -64,6 +64,50 @@ def _run_phase_eval(phase: str, chunk: Dict) -> None:
         if review_text:
             px_evaluator.eval_review(review_text, spec_context=spec_context)
 
+    elif phase == "BUILD":
+        # Aggregate BUILD artifacts for evaluation
+        build_parts = []
+        test_results = artifacts.get("test_results", "")
+        if test_results:
+            build_parts.append(f"TEST RESULTS:\n{test_results[:3000]}")
+        uat_report = artifacts.get("uat_report", "")
+        if uat_report:
+            build_parts.append(f"UAT REPORT:\n{uat_report[:3000]}")
+        build_log = artifacts.get("build_log", "")
+        if build_log:
+            build_parts.append(f"BUILD LOG:\n{build_log[:3000]}")
+        deploy_gate = artifacts.get("deploy_gate_result", "")
+        if deploy_gate:
+            build_parts.append(f"DEPLOY GATE:\n{deploy_gate}")
+        build_status = artifacts.get("build_status", "")
+        build_parts.insert(0, f"BUILD STATUS: {build_status}")
+
+        if build_parts:
+            build_artifacts = "\n\n---\n\n".join(build_parts)
+            spec_ref = artifacts.get("spec_refined", "")
+            px_evaluator.eval_build(build_artifacts, spec_ref=spec_ref)
+
+    elif phase == "SHIP":
+        # Aggregate SHIP artifacts for evaluation
+        ship_parts = []
+        obs = artifacts.get("observability", "")
+        if obs:
+            ship_parts.append(f"OBSERVABILITY CONFIG:\n{obs[:2000]}")
+        launch = artifacts.get("launch_checklist", "")
+        if launch:
+            ship_parts.append(f"LAUNCH CHECKLIST:\n{launch[:2000]}")
+        prod_deploy = artifacts.get("prod_deploy_config", "")
+        if prod_deploy:
+            ship_parts.append(f"PRODUCTION DEPLOYMENT CONFIG:\n{prod_deploy[:3000]}")
+        deploy_logs = artifacts.get("deploy_logs", "")
+        if deploy_logs:
+            ship_parts.append(f"DEPLOYMENT LOGS:\n{deploy_logs[:1000]}")
+
+        if ship_parts:
+            ship_artifacts = "\n\n---\n\n".join(ship_parts)
+            spec_ref = artifacts.get("spec_refined", "")
+            px_evaluator.eval_ship(ship_artifacts, spec_ref=spec_ref)
+
 
 def get_skills_dir() -> str:
     """Resolve skills directory — config > Docker mount > local default."""

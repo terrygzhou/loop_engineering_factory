@@ -15,6 +15,8 @@ Metrics:
   - spec_quality   (DISCOVER)   — domain-aware requirement quality
   - plan_score     (PLAN)       — project-specific plan alignment
   - review_score   (REVIEW)     — context-aware risk identification
+  - build_quality  (BUILD)      — code quality, test coverage, architecture, security
+  - ship_quality   (SHIP)       — prod config completeness, secret safety, resilience
 """
 from __future__ import annotations
 
@@ -128,6 +130,48 @@ Score dimensions:
 
 Respond JSON only: {{"score": float, "dimensions": {{"thoroughness": float, "specificity": float, "actionability": float, "severity": float, "domain_fit": float}}, "rationale": "string"}}"""
 
+BUILD_QUALITY_PROMPT = """Analyze the BUILD phase output for this project, then score the code quality.
+
+STEP 1: Identify the project type and domain from the spec.
+STEP 2: For THIS type of project, what code quality matters most? (e.g., API contract adherence for web services, data model integrity for database projects, CLI ergonomics for tools)
+STEP 3: Score the BUILD artifacts on project-specific criteria.
+
+SPEC REFERENCE (project context):
+{spec_ref}
+
+BUILD ARTIFACTS (test results, UAT report, code summary):
+{build_artifacts}
+
+Score dimensions:
+- code_quality: Clean architecture, proper separation of concerns, error handling patterns appropriate for this domain
+- test_coverage: Unit tests cover critical paths and edge cases; test isolation and determinism
+- security: No hardcoded secrets, input validation, rate limiting, proper auth patterns for this project type
+- performance: Reasonable query patterns, no N+1 problems, sensible indexing for this data model
+- maintainability: Clear naming, consistent structure, documentation, import hygiene, dependency management
+
+Respond JSON only: {{"score": float, "dimensions": {{"code_quality": float, "test_coverage": float, "security": float, "performance": float, "maintainability": float}}, "rationale": "string"}}"""
+
+SHIP_QUALITY_PROMPT = """Analyze the SHIP phase output for this project, then score the production deployment configuration.
+
+STEP 1: Identify the project type and deployment target from the context.
+STEP 2: For THIS deployment scenario, what configuration correctness matters most?
+STEP 3: Score the SHIP artifacts on production-readiness criteria.
+
+SPEC REFERENCE (project context):
+{spec_ref}
+
+SHIP ARTIFACTS (deployment configs, CI/CD pipeline, secrets, health checks):
+{ship_artifacts}
+
+Score dimensions:
+- config_completeness: All production environments covered (database, cache, secrets, TLS, monitoring) with no missing pieces
+- secret_safety: No .env references in cloud configs; proper secret manager integration (AWS Secrets Manager / Azure Key Vault / GCP Secret Manager)
+- resilience: Health check endpoints configured, auto-scaling thresholds set, rollback strategy documented
+- observability: Structured logging, RED metrics (Request/Duration/Errors), distributed tracing configured for target platform
+- deployment_automation: CI/CD pipeline is idempotent, supports blue-green or canary, handles database migrations safely
+
+Respond JSON only: {{"score": float, "dimensions": {{"config_completeness": float, "secret_safety": float, "resilience": float, "observability": float, "deployment_automation": float}}, "rationale": "string"}}"""
+
 
 # ── Evaluator class ──────────────────────────────────────────────────
 
@@ -165,6 +209,14 @@ class Evaluator:
     def eval_review(self, review_text: str, spec_context: str = "") -> EvalResult:
         """Evaluate REVIEW phase output. Score review depth against project context."""
         return self._judge("review_score", REVIEW_SCORE_PROMPT, review_text=review_text, spec_context=spec_context)
+
+    def eval_build(self, build_artifacts: str, spec_ref: str = "") -> EvalResult:
+        """Evaluate BUILD phase output. Score code quality, test coverage, security, performance, maintainability."""
+        return self._judge("build_quality", BUILD_QUALITY_PROMPT, build_artifacts=build_artifacts, spec_ref=spec_ref)
+
+    def eval_ship(self, ship_artifacts: str, spec_ref: str = "") -> EvalResult:
+        """Evaluate SHIP phase output. Score prod config completeness, secret safety, resilience, observability, deployment automation."""
+        return self._judge("ship_quality", SHIP_QUALITY_PROMPT, ship_artifacts=ship_artifacts, spec_ref=spec_ref)
 
     # ── Core judge ──
 
