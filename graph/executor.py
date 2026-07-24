@@ -156,12 +156,19 @@ def build_executor_state(
         human_approval_required=False,
         improve_mode=improve_mode,
         pending_inputs=[],
-        input_responses={},
-        input_timeout_s=300,
-        auto_approve_timeout=True,
         diagrams={},
         diagram_status="pending",
         diagram_feedback="",
+        project_folder="",
+        project_description="",
+        feedback_context="",
+        interview_notes="",
+        discover_interview_done=False,
+        trace_id="",
+        audit_entries=[],
+        build_backlog=None,
+        superweb_mode="",
+        superweb_agent_report=None,
     )
 
 

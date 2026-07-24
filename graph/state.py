@@ -16,9 +16,6 @@ class CycleMetrics(BaseModel):
     task_count: int = 0
     arch_uncertainty: float = 0.0
     launch_success: bool = False
-    seed_executed: bool = False
-    diagram_count: int = 0
-    diagram_quality_score: float = 0.0
 
 
 class WorkflowState(TypedDict):
@@ -43,9 +40,6 @@ class WorkflowState(TypedDict):
 
     # ── B-009: Non-blocking input ──
     pending_inputs: List[dict]              # Active input requests waiting for user response
-    input_responses: dict[str, dict]       # Collected responses keyed by request_id
-    input_timeout_s: int                   # Per-request timeout (default 300s)
-    auto_approve_timeout: bool              # Auto-approve on timeout
 
     # ── B-010: Architecture diagrams ──
     diagrams: dict[str, str]               # Generated diagram file paths
@@ -65,6 +59,5 @@ class WorkflowState(TypedDict):
 
     # ── BUILD subgraph state (carried through for merge) ──
     build_backlog: Optional[List[dict]]     # Backlog items from BUILD subgraph
-    build_uat_pass_rate: float              # UAT pass rate from BUILD subgraph
     superweb_mode: str                       # "agent" | "scripted" — UAT execution mode
     superweb_agent_report: Optional[dict]   # Parsed agent_report.json from agent mode

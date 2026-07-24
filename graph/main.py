@@ -58,11 +58,12 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow.add_edge("PLAN", "ARCH_REVIEW")
     workflow.add_conditional_edges("ARCH_REVIEW", route_phase)
     workflow.add_conditional_edges("BUILD", route_phase)
-    workflow.add_edge("BUILD", "SEED_DATA")
+    # Note: no unconditional add_edge("BUILD", ...) — route_phase handles all BUILD routing
+    # including BUILD→BUILD (retry), BUILD→SEED_DATA (pass), BUILD→REFLECT (fail)
     workflow.add_edge("SEED_DATA", "VERIFY")
     workflow.add_edge("VERIFY", "SHIP")
-    workflow.add_edge("SHIP", "REFLECT")
-    workflow.add_edge("REFLECT", END)
+    workflow.add_conditional_edges("SHIP", route_phase)
+    workflow.add_conditional_edges("REFLECT", route_phase)
 
     return workflow.compile(
         checkpointer=checkpointer,

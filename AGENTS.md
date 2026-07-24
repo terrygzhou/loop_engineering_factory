@@ -1,5 +1,7 @@
 # Loop Factory — Agent Instructions
 
+
+
 ## Skill Loading
 
 Before any coding task, load and follow:
@@ -17,41 +19,6 @@ When tasks span 3+ files, load:
 skill_view(name='subagent-driven-development')
 ```
 
-## Project Layout
-
-```
-loop_factory/
-├── main.py              # CLI entry (headless auto-approve)
-├── api/                 # FastAPI backend (:8011) — schemas, middleware
-├── frontend/            # Static frontend (nginx :80) + backend bridge
-├── graph/               # LangGraph engine: state.py, nodes/, edges.py
-├── config/              # Centralized config: config.yaml, bounds.yaml, bounds_loader.py
-├── tools/               # LLM dispatch, skill loader, OTel instrumentor
-├── service/             # Health check server (:8081), OTel instrumentor
-├── builder/             # Remote BUILD phase worker (:8200)
-├── skills/              # 37 SKILL.md — phase-specific skill chains
-├── feedback/            # ChromaDB pattern storage & retrieval
-├── log/                # Logging utilities
-├── models/              # Data models
-├── cron/               # Cron-driven task orchestration
-├── data/               # Runtime data: config, feedback, skills
-├── storage/             # Persistent storage: cycles, state
-├── state/               # Workflow state persistence
-├── output/              # Generated artifacts (deploy target)
-├── plan/               # Integration plans (e.g. SuperWeb UAT)
-├── specs/               # Feature specifications
-├── tests/               # Test suite: api/, e2e/, models/, service/
-├── scripts/             # Utility scripts
-├── docker-compose.yml  # Full stack (loop, chromadb, otel, phoenix, openhands, etc.)
-├── Dockerfile           # Loop container image
-├── entrypoint.sh        # Container startup script
-├── config.yaml          # Legacy root-level config (use config/config.yaml)
-├── requirements.txt     # Python dependencies
-├── README.md            # Full documentation
-├── architecture.html    # Architecture diagram (HTML)
-├── image.png            # UI dashboard screenshot
-└── langgraph-state-machine.md  # State machine reference
-```
 
 ## Key Constraints
 
