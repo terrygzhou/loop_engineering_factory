@@ -8,7 +8,7 @@ It is a Self-improving AI-driven software development engine built on LangGraph.
 
 
 ```
-DISCOVER → DEFINE → PLAN → REVIEW → BUILD → SHIP → REFLECT
+DISCOVER → DEFINE → PLAN → ARCH_REVIEW → BUILD → SEED_DATA → VERIFY → SHIP → REFLECT
 ```
 
 ### State Machine
@@ -22,15 +22,17 @@ stateDiagram-v2
     %% Fixed forward edges (graph/main.py)
     DISCOVER --> DEFINE
     DEFINE --> PLAN
-    PLAN --> REVIEW
+    PLAN --> ARCH_REVIEW
+    SEED_DATA --> VERIFY
+    VERIFY --> SHIP
     SHIP --> REFLECT
     REFLECT --> [*]
 
     %% Conditional edges (graph/edges.py route_phase)
-    REVIEW --> BUILD : approved (auto or human)
-    REVIEW --> PLAN : rejected
+    ARCH_REVIEW --> BUILD : approved
+    ARCH_REVIEW --> PLAN : rejected
 
-    BUILD --> SHIP : all gates pass
+    BUILD --> SEED_DATA : gates pass
     BUILD --> BUILD : security / revisions / UAT gate failed
     BUILD --> REFLECT : 3 consecutive build failures
 
@@ -40,63 +42,54 @@ stateDiagram-v2
 
     %% HIL interrupt points
     note right of DISCOVER : interrupt() x2<br/>project_setup + interview
-    note right of REVIEW : interrupt() x1<br/>human approve/reject
+    note right of ARCH_REVIEW : interrupt() x1<br/>human approve/reject
 
     classDef hil fill:#FFD700,stroke:#B8860B,stroke-width:2px,color:#000
     classDef gate fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
     classDef normal fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
-    class DISCOVER,REVIEW hil
+    class DISCOVER,ARCH_REVIEW hil
     class DEFINE,PLAN,BUILD gate
-    class SHIP,REFLECT normal
+    class SEED_DATA,VERIFY,SHIP,REFLECT normal
 ```
 
-> **Note**: The code implements 7 phases. `ARCH_REVIEW`, `SEED_DATA`, and `VERIFY` nodes exist as files (`graph/nodes/seed_data.py`) but are **not wired** into `graph/main.py`. The `BUILD` subgraph (`build_subgraph.py`) handles seed/UAT internally.
+#### BUILD Phase: OpenHands Agent Delegation
 
-#### BUILD Phase Subgraph
-
-The BUILD node delegates to a subgraph that implements the full build pipeline:
+The BUILD node delegates to the OpenHands agent-server via the Gateway API (OpenAI-compatible). Falls back to the local legacy subgraph if the agent-server is unreachable.
 
 ```mermaid
 graph LR
-    START([START]) --> IMPL_PLAN
+    START([START]) --> OH_CHECK["OpenHands health\ncheck"]
 
-    IMPL_PLAN[&nbsp;IMPL_PLAN&nbsp;] --> CREATE_BACKLOG[&nbsp;CREATE_BACKLOG&nbsp;]
-    CREATE_BACKLOG --> IMPLEMENT[&nbsp;IMPLEMENT&nbsp;]
+    OH_CHECK -->|healthy| CREATE_CONV["Create conversation\nPOST /v1/chat/completions"]
+    OH_CHECK -->|unhealthy| LEGACY["Legacy subgraph\nbuild_subgraph_legacy.py"]
 
-    IMPLEMENT --> UNIT_TEST[&nbsp;UNIT_TEST&nbsp;]
+    CREATE_CONV --> POLL["Poll conversation\nGET /api/conversations/{id}"]
+    POLL -->|finished| PARSE["Parse assistant text"]
+    POLL -->|timeout| LEGACY
 
-    UNIT_TEST -->|test pass| IMPLEMENT_NEXT[&nbsp;next item&nbsp;]
-    UNIT_TEST -->|test fail<br/>retry&lt;3| RETRY[&nbsp;retry&nbsp;]
-    UNIT_TEST -->|retry max| SKIP[&nbsp;skip item&nbsp;]
+    PARSE --> WRITE_FILES["Write files to disk"]
+    WRITE_FILES --> END([END])
 
-    IMPLEMENT_NEXT --> IMPLEMENT
-    RETRY --> IMPLEMENT
-    SKIP --> IMPLEMENT
+    LEGACY --> LEGACY_RUN["Legacy build subgraph\nIMPL_PLAN → IMPLEMENT\nUNIT_TEST → UAT"]
+    LEGACY_RUN --> END
 
-    UNIT_TEST -->|all items done| INT_TEST[&nbsp;INT_TEST&nbsp;]
-    INT_TEST --> SEED[&nbsp;SEED&nbsp;]
-    SEED --> UAT[&nbsp;UAT&nbsp;]
-    UAT --> END([END])
-
-    classDef pass fill:#4CAF50,stroke:#2E7D32,stroke-width:1px,color:#fff
-    classDef fail fill:#F44336,stroke:#C62828,stroke-width:1px,color:#fff
-    classDef loop fill:#FF9800,stroke:#E65100,stroke-width:1px,color:#fff
+    classDef agent fill:#90EE90,stroke:#2E8B57,stroke-width:2px,color:#000
+    classDef fallback fill:#FF9800,stroke:#E65100,stroke-width:1px,color:#000
     classDef node fill:#2196F3,stroke:#1565C0,stroke-width:1px,color:#fff
-    class IMPL_PLAN,CREATE_BACKLOG,IMPLEMENT,UNIT_TEST,INT_TEST,SEED,UAT node
-    class RETRY,SKIP loop
+    class OH_CHECK,CREATE_CONV,POLL,PARSE,WRITE_FILES node
+    class LEGACY,LEGACY_RUN fallback
 ```
 
-| Sub-Node | Purpose | Gateway |
-|-----------|---------|---------|
-| `IMPL_PLAN` | Generate implementation plan from spec + tasks | — |
-| `CREATE_BACKLOG` | Parse tasks into backlog items | — |
-| `IMPLEMENT` | Generate code + tests per backlog item | LLM + skill registry |
-| `UNIT_TEST` | Docker build → pytest → pass/fail | retry ≤ `{max_item_retries}` |
-| `INT_TEST` | Aggregate integration health check | HTTP status 2xx |
-| `SEED` | Generate & run seed data script | AST valid + DB insert OK |
-| `UAT` | SuperWeb UAT — agent mode (OpenHands) → scripted (Playwright) → LLM fallback | `uat_pass_rate ≥ 0.8` |
+| Step | Implementation | Notes |
+|------|---------------|-------|
+| Health check | `GET /health` | Falls back to legacy on any failure |
+| Create conversation | `POST /v1/chat/completions` | Profile `build_agent` created idempotently |
+| Poll | `GET /api/conversations/{id}` | 5s interval, 1h timeout |
+| Parse | Regex → file blocks + test results | Derives `build_status`: pass/partial/fail |
+| Write files | Disk I/O to `project_path` | Downstream phases (SEED_DATA, VERIFY) read from disk |
+| Legacy fallback | `build_subgraph_legacy.py` | Full IMPL_PLAN → IMPLEMENT → UNIT_TEST → UAT pipeline |
 
-**Outer graph routing** (from `edges.py`): BUILD self-loops if `security_findings > 0`, `review_revisions > max`, or `uat_pass_rate < min`. After 3 consecutive build failures, routes directly to `REFLECT` to skip `SHIP`.
+**Outer graph routing** (from `edges.py`): BUILD self-loops if `security_findings > 0`, `review_revisions > max`, or `uat_pass_rate < min`. After 3 consecutive build failures, routes to `REFLECT` to skip `SEED_DATA`/`VERIFY`/`SHIP`.
 
 Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop) review gates, and self-improvement via ChromaDB pattern storage. CLI and Web UI share the same `WorkflowRunner` — identical node execution, different UX layers.
 
@@ -120,29 +113,30 @@ graph LR
         end
 
         subgraph Engine["LangGraph Engine"]
-            Graph["StateGraph\nWorkflow"]
-            Nodes["9 Phase Nodes"]
-            Bridge["HIL Bridge\nSSE Events"]
-            UATNode["UAT Node\n(SuperWeb CLI)"]
+            Graph["StateGraph\n9 Phases"]
+            Nodes["Phase Nodes\ng/nodes/*.py"]
+            Bridge["HIL Bridge\nCommand(resume)"]
+            BuildProxy["BUILD proxy\nopenhands_build.py"]
         end
 
         subgraph Tools["Tool Layer"]
-            LLM["LLM Tool\n(langchain)"]
-            Skills["Skill Loader\n(29 SKILL.md)"]
-            ChromaC["ChromaDB Client"]
+            LLM["LLM Tool\n(tools/llm.py)"]
+            Skills["Skill Loader\n(20 SKILL.md)"]
+            ChromaC["ChromaDB Client\n(feedback/)"]
         end
     end
 
     subgraph External["External Services"]
         LLM_Srv["LLM Server\n(vLLM :8080)"]
         Docker["Docker Engine"]
-        Chroma["ChromaDB :8000"]
-        OpenHands["OpenHands\n(:3005)\nAgent Server"]
+        Chroma["ChromaDB :8000\n(internal)"]
+        OpenHands["OpenHands\n(:8000)\nAgent Server"]
+        Builder["Builder\n(:8200)\nRemote build worker"]
     end
 
     U -->|browser| WebUI
     U -->|terminal| CLI
-    CLI -->|REST| Graph
+    CLI -->|stream| Graph
     WebUI -->|SSE| Bridge
     Bridge --> Graph
     Graph --> Nodes
@@ -154,20 +148,16 @@ graph LR
     ChromaC <--> Chroma
     WebUI --> Nginx
 
-    %% SuperWeb UAT flows (agent → scripted → LLM fallback)
-    Nodes -->|"BUILD: UAT"| UATNode
-    UATNode -->|"agent mode"| OpenHands
-    UATNode -->|"scripted"| Docker
-    UATNode -->|"fallback"| LLM
+    %% BUILD: OpenHands agent delegation with legacy fallback
+    Nodes -->|"BUILD"| BuildProxy
+    BuildProxy -->|"agent mode"| OpenHands
+    BuildProxy -->|"fallback"| Docker
 
     classDef default fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
     classDef hil fill:#FFD700,stroke:#B8860B,stroke-width:2px,color:#000
-    classDef gate fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
-    classDef normal fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
-    classDef external fill:#E8E8E8,stroke:#666,stroke-width:1px,color:#000
     classDef agent fill:#90EE90,stroke:#2E8B57,stroke-width:2px,color:#000
-    class UATNode agent
-    class OpenHands external
+    class BuildProxy agent
+    class OpenHands,Builder external
 ```
 
 ### Deployment Architecture
@@ -178,28 +168,27 @@ graph TB
 
     subgraph Host["Host Machine"]
         LLM_C[("LLM Server\nvLLM :8080")]
-        DB[("PostgreSQL\n:5432")]
 
         subgraph DockerStack["Docker Compose Stack"]
             LC[("Loop Container\n:80 / :8011 / :8081")]
-            CC[("ChromaDB\n:8000")]
+            BLD[("Builder\n:8200")]
+            CC[("ChromaDB\n:8000 internal")]
             OC[("OTel Collector\n:4318")]
-            PC[("Prometheus\n:9090")]
-            GC[("Grafana\n:3000")]
             PH[("Phoenix\n:6006")]
+            OH[("OpenHands\n:8000 → :3005")]
             PT[("Promtail")]
         end
     end
 
-    U -->|"HTTP :8011"| LC
+    U -->|"HTTP :80 / :8011"| LC
     LC -->|"gRPC :8000"| CC
-    LC -->|"gRPC :4318"| OC
+    LC -->|"OTLP :4318"| OC
     LC -->|"HTTP :8080"| LLM_C
-    LC -->|"TCP :5432"| DB
+    LC -->|"Gateway"| OH
+    LC -->|"build"| BLD
+    OH -->|"HTTP :8080"| LLM_C
     OC -->|"HTTP :6006"| PH
-    OC -->|"HTTP :9090"| PC
-    PC -->|"scrapes :9090"| GC
-    PT -->|"logs"| GC
+    PT -->|"logs"| PH
 ```
 
 ### Component Overview
@@ -232,7 +221,7 @@ Each workflow phase chains specialized skills from `skills/` (20 registered). Sk
 | **DISCOVER** | `interview-me` (HIL interrupt) → `coding-principles` (context refinement) → Fabric Prompt Engineering | Structured 9-question interview. Scans existing codebases. Generates `requirement.md`. Auto-generates defaults in auto-approve mode. |
 | **DEFINE** | `writing-plans` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
 | **PLAN** | `writing-plans` → `doubt-driven-development` → `architecture-diagram-generator` | Implementation plan, architectural doubt resolution, and diagram generation. Outputs `solution.md` + diagrams. |
-| **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → DEFINE. Max 2 retries. |
+|| **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → PLAN. |
 | **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → **deploy_gate** (health check) → SuperWeb UAT (`agent` mode default) → `security-and-hardening` → `requesting-code-review` → **SECURITY_GATE** | Per-task code gen with TDD. Docker build + health check. UAT: SuperWeb agent mode with scripted/LLM fallbacks. SECURITY_GATE: aggregate STRIDE security audit + code quality review. |
 | **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
 | **VERIFY** | _(placeholder — pass-through to SHIP)_ | Currently a pass-through node. UAT moved to BUILD subgraph. Future: real test execution, linting, security scans, and performance profiling. |
