@@ -5,17 +5,15 @@
 # ── Context size limits (per LLM call) ──────────────────────────
 context:
   # Max tokens for DEFINE phase LLM calls (spec generation)
-  define_max_tokens: 16000
+  define_max_tokens: 32768
   # Max tokens for PLAN phase LLM calls (plan/task generation)
-  plan_max_tokens: 10000
-  # Max tokens for BUILD phase LLM calls (code generation per item)
-  build_max_tokens: 12000
+  plan_max_tokens: 24576
   # Max chars for diagram generation context (per input source)
   diagram_context:
-    spec_chars: 3000
-    plan_chars: 8000
-    tasks_chars: 5000
-    doubt_chars: 3000
+    spec_chars: 8000
+    plan_chars: 16000
+    tasks_chars: 12000
+    doubt_chars: 6000
 
 # ── Artifact accumulation limits ─────────────────────────────────
 artifacts:

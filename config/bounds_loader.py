@@ -48,7 +48,6 @@ class Bounds:
         # Max tokens per LLM call by phase
         define_max_tokens: int = _resolve(_bounds_data, "context.define_max_tokens", 16000)
         plan_max_tokens: int = _resolve(_bounds_data, "context.plan_max_tokens", 10000)
-        build_max_tokens: int = _resolve(_bounds_data, "context.build_max_tokens", 12000)
 
         # Diagram context char limits
         diagram_spec_chars: int = _resolve(_bounds_data, "context.diagram_context.spec_chars", 3000)
