@@ -145,7 +145,7 @@ class BuildProxy:
 # ── Fallback: local build via build_subgraph ──────────────────────
 def _build_local(state: dict) -> dict:
     """Run the build locally using the existing build_subgraph."""
-    from graph.nodes.build_subgraph import (
+    from graph.nodes.build_subgraph_legacy import (
         build_input_mapping,
         build_output_mapping,
         build_subgraph,

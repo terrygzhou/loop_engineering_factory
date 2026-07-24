@@ -323,32 +323,50 @@ class WorkflowRunner:
 
                 # Build resume payload based on phase
                 if interrupted_phase == "DISCOVER":
-                    # Extract interview notes
-                    if isinstance(input_data, str):
-                        notes = input_data
-                    elif isinstance(input_data, dict):
-                        notes = input_data.get("interview_notes") or input_data.get("raw_input") or ""
-                    else:
-                        notes = str(input_data)
-
-                    # Build update for OOTB resume
-                    existing = (current_chunk.get("artifacts") or {}).copy()
-                    existing["user_input"] = input_data
-                    existing["interview_notes"] = notes
-                    existing["discover_interview_done"] = True
-                    existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
-
-                    resume_data = {
-                        "human_approval_required": False,
-                        "interview_notes": notes or "",
-                        "discover_interview_done": True,
-                        "artifacts": existing,
-                    }
+                    # Determine which pause fired: project_setup (Pause 1) or interview (Pause 2)
+                    # Check the _pause marker from the CLI handler, or fall back to
+                    # checking if interview_keys are present in the data.
                     if isinstance(input_data, dict):
-                        if input_data.get("project_name"):
-                            resume_data["project_name"] = input_data["project_name"]
-                        if input_data.get("project_description"):
-                            resume_data["project_description"] = input_data["project_description"]
+                        pause_type = input_data.get("_pause", "")
+                    else:
+                        pause_type = ""
+
+                    is_interview_pause = pause_type == "interview"
+                    is_setup_pause = pause_type == "project_setup" or not is_interview_pause
+
+                    if is_setup_pause:
+                        # Pause 1 resolved: project_name, project_description, context_folder
+                        existing = (current_chunk.get("artifacts") or {}).copy()
+                        existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
+
+                        resume_data = {
+                            "human_approval_required": False,
+                            "artifacts": existing,
+                        }
+                        if isinstance(input_data, dict):
+                            if input_data.get("project_name"):
+                                resume_data["project_name"] = input_data["project_name"]
+                            if input_data.get("project_description"):
+                                resume_data["project_description"] = input_data["project_description"]
+                            if "context_folder" in input_data:
+                                resume_data["context_folder"] = input_data["context_folder"]
+                        # Do NOT set discover_interview_done — Pause 2 still needs to fire
+
+                    elif is_interview_pause:
+                        # Pause 2 resolved: actual interview answers
+                        notes = input_data.get("interview_notes", "") if isinstance(input_data, dict) else ""
+
+                        existing = (current_chunk.get("artifacts") or {}).copy()
+                        existing["interview_notes"] = notes
+                        existing["discover_interview_done"] = True
+                        existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
+
+                        resume_data = {
+                            "human_approval_required": False,
+                            "interview_notes": notes,
+                            "discover_interview_done": True,
+                            "artifacts": existing,
+                        }
 
                 elif interrupted_phase == "ARCH_REVIEW":
                     # ARCH_REVIEW: approve → BUILD, reject with comments → back to PLAN
@@ -407,6 +425,11 @@ class WorkflowRunner:
         print(f"\n  === {phase}: Human Input Required ===")
 
         if phase == "DISCOVER":
+            # Determine which interrupt fired by checking the suspended state
+            # for discover_hil_count — Pause 1 = 0, Pause 2 = 1+
+            hil_count = (state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0
+            if hil_count == 0:
+                return self._cli_project_setup(state)
             return self._cli_interview(state)
 
         if phase == "ARCH_REVIEW":
@@ -420,8 +443,63 @@ class WorkflowRunner:
             return {"approved": False, "feedback": feedback}
         return {"approved": True}
 
+    def _cli_project_setup(self, state=None) -> Dict[str, str]:
+        """Pause 1: collect project name, description, context folder."""
+        answers = {}
+
+        project_name = (state or {}).get("project_name", "") or ""
+        while not project_name:
+            project_name = input("  Project name: ").strip()
+        answers["project_name"] = project_name
+
+        project_description = (state or {}).get("project_description", "") or ""
+        while not project_description:
+            project_description = input("  Project description: ").strip()
+        answers["project_description"] = project_description
+
+        default_context = (state or {}).get("context_folder", "") or ""
+        hint = default_context or "(leave empty for greenfield)"
+        context_folder = input(f"  Existing codebase path [{hint}]: ").strip()
+        if not context_folder and default_context:
+            context_folder = default_context
+        answers["context_folder"] = context_folder
+
+        # Mark this as project_setup response (not interview)
+        answers["_pause"] = "project_setup"
+        return answers
+
+    def _cli_interview(self, state=None) -> Dict[str, str]:
+        """Pause 2: collect detailed interview answers."""
+        answers = {}
+
+        questions = [
+            ("core_behavior", "What does this feature do?"),
+            ("data_model", "What entities and fields are involved?"),
+            ("api_surface", "What HTTP methods, paths, and auth requirements?"),
+            ("validation", "What input validation rules?"),
+            ("ui_template", "Any Jinja2 templates or UI requirements?"),
+            ("integration", "External services, databases, or APIs?"),
+            ("deployment", "Docker or infrastructure implications?"),
+            ("edge_cases", "Known edge cases?"),
+            ("non_functional", "Performance, security, or monitoring needs?"),
+        ]
+
+        for key, q in questions:
+            val = input(f"  {q} (or Enter to skip): ").strip()
+            if val:
+                answers[key] = val
+
+        lines = ["Interview answers:"]
+        for key, val in answers.items():
+            lines.append(f"  {key}: {val}")
+        answers["interview_notes"] = "\n".join(lines)
+
+        # Mark this as interview response
+        answers["_pause"] = "interview"
+        return answers
+
     def _cli_review(self, state) -> dict:
-        """CLI handler for REVIEW phase — render artifacts for human review."""
+        """CLI handler for ARCH_REVIEW phase — render artifacts for human review."""
         artifacts = (state or {}).get("artifacts", {})
         diagrams = artifacts.get("diagrams", {})
         diagram_pngs = artifacts.get("diagram_pngs", {})
@@ -454,51 +532,5 @@ class WorkflowRunner:
             feedback = input("  Feedback for PLAN (will be sent back for regeneration): ").strip()
             return {"approved": False, "feedback": feedback}
         return {"approved": True, "feedback": ""}
-
-    def _cli_interview(self, state=None) -> Dict[str, str]:
-        """Ask for project name, description, and interview questions."""
-        answers = {}
-
-        project_name = (state or {}).get("project_name", "") or ""
-        while not project_name:
-            project_name = input("  Project name: ").strip()
-        answers["project_name"] = project_name
-
-        project_description = (state or {}).get("project_description", "") or ""
-        while not project_description:
-            project_description = input("  Project description: ").strip()
-        answers["project_description"] = project_description
-
-        default_context = (state or {}).get("context_folder", "") or ""
-        hint = default_context or "(leave empty for greenfield)"
-        context_folder = input(f"  Existing codebase path [{hint}]: ").strip()
-        if not context_folder and default_context:
-            context_folder = default_context
-        answers["context_folder"] = context_folder
-
-        questions = [
-            ("core_behavior", "What does this feature do?"),
-            ("data_model", "What entities and fields are involved?"),
-            ("api_surface", "What HTTP methods, paths, and auth requirements?"),
-            ("validation", "What input validation rules?"),
-            ("ui_template", "Any Jinja2 templates or UI requirements?"),
-            ("integration", "External services, databases, or APIs?"),
-            ("deployment", "Docker or infrastructure implications?"),
-            ("edge_cases", "Known edge cases?"),
-            ("non_functional", "Performance, security, or monitoring needs?"),
-        ]
-
-        for key, q in questions:
-            val = input(f"  {q} (or Enter to skip): ").strip()
-            if val:
-                answers[key] = val
-
-        lines = ["Interview answers:"]
-        for key, val in answers.items():
-            if key not in ("project_name", "project_description"):
-                lines.append(f"  {key}: {val}")
-        answers["interview_notes"] = "\n".join(lines)
-        answers["approved"] = True
-        return answers
 
 

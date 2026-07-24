@@ -137,6 +137,15 @@ class Config:
         class Observability:
             port: int = int(_resolve("OBSERVABILITY_PORT", _config, "observability.port", "8081"))
 
+        class OpenHands:
+            url: str = _resolve("OH_URL", _config, "openhands.url", "http://openhands:8000")
+            secret_key: str = _resolve("OH_SECRET_KEY", _config, "openhands.secret_key", "changeme")
+            workspace_path: str = _resolve("OH_WORKSPACE", _config, "openhands.workspace_path", "/opt/workspace_base/output")
+            timeout: int = int(_resolve("OH_TIMEOUT", _config, "openhands.timeout", "3600"))
+            poll_interval: int = int(_resolve(None, _config, "openhands.poll_interval", "5"))
+            prompt_char_limit: int = int(_resolve(None, _config, "openhands.prompt_char_limit", "16000"))
+            profile_name: str = _resolve(None, _config, "openhands.profile_name", "build_agent")
+
         llm = LLM()
         chroma = Chroma()
         otel = OTEL()
@@ -146,6 +155,7 @@ class Config:
         loop_api = LoopAPI()
         product = Product()
         observability = Observability()
+        openhands = OpenHands()
 
     class Observability:
         prometheus_port: int = int(_resolve(None, _config, "observability.prometheus_port", "9090"))

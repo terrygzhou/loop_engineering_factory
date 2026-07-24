@@ -12,7 +12,7 @@ from graph.nodes.discover import discover_node
 from graph.nodes.define import define_node
 from graph.nodes.plan import plan_node
 from graph.nodes.review import review_node
-from graph.nodes.build_proxy import build_proxy_node
+from graph.nodes.openhands_build import openhands_build_proxy_factory
 from graph.nodes.seed_data import seed_data_node
 from graph.nodes.verify import verify_node
 from graph.nodes.ship import ship_node
@@ -41,8 +41,8 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow.add_node("PLAN", plan_node)
     workflow.add_node("ARCH_REVIEW", review_node)
 
-    # BUILD: proxy to remote builder service (with local fallback)
-    workflow.add_node("BUILD", build_proxy_node())
+    # BUILD: OpenHands agent delegation via Gateway API (with legacy fallback)
+    workflow.add_node("BUILD", openhands_build_proxy_factory())
 
     # SEED_DATA & VERIFY: placeholders — pass-through to be implemented
     workflow.add_node("SEED_DATA", seed_data_node)

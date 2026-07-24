@@ -63,8 +63,8 @@ observability:
 
 workflow:
   auto_approve: true
-  # ARCH_REVIEW is NEVER auto-approved: check graph/nodes/review.py
-  # which ignores auto_approve and always calls interrupt()
+  # When auto_approve=true, ARCH_REVIEW is auto-approved (no human pause).
+  # Set to false for HIL mode — the node will interrupt() for human review.
   hil_mode: auto
   max_retries: 2
   skill_registry_path: ~/.hermes/skills
@@ -75,3 +75,9 @@ superweb:
   openhands_port: 3005
   agent_conversations: 3
   agent_timeout_seconds: 3600
+
+openhands:
+  url: http://openhands:8000
+  secret_key: changeme  # MUST be changed to a strong secret before production
+  workspace_path: /opt/workspace_base/output
+  timeout: 3600

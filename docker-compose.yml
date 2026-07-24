@@ -90,7 +90,7 @@ services:
       - phoenix_data:/var/lib/phoenix
     restart: unless-stopped
 
-  # ── OpenHands: AI agent for SuperWeb UAT (agent mode) ──
+  # ── OpenHands: AI agent for Gateway API (OpenAI-compatible) ──
   openhands:
     image: ghcr.io/openhands/agent-server:1.30.0-python
     container_name: openhands-server
@@ -100,15 +100,18 @@ services:
     volumes:
       - ~/.openhands:/.openhands
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./output:/opt/workspace_base/output
     environment:
-      - LLM_BASE_URL=http://pop-os:8080/v1
+      - LLM_BASE_URL=http://host.docker.internal:8080/v1
       - LLM_MODEL=Qwen3.6-27B
+      - OH_SECRET_KEY=changeme
       - SANDBOX_USER_ID=1000
       - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
       - AGENT_SERVER_IMAGE_TAG=1.30.0-python
       - WORKSPACE_BASE=/opt/workspace_base
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "pop-os:host-gateway"
     depends_on:
       - loop
   promtail:

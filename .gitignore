@@ -72,3 +72,8 @@ skills/SKILLS_INDEX.json
 
 # README screenshot (large binary, not version-controlled)
 # image.png
+
+# Research, design docs, and planning artifacts (not version-controlled)
+docs/
+plan/
+superweb_output/
