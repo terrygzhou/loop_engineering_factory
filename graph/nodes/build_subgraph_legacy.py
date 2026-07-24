@@ -788,11 +788,8 @@ def build_input_mapping(parent: dict) -> BuildSubState:
     docker_proj = find_docker_project(project_path)
 
     from config import loader as config_loader
-
-    skills = parent.get("artifacts", {}).get("skill_registry")
-    if skills is None:
-        from tools.loader import build_skill_registry
-        skills = build_skill_registry(config_loader.config.workflow.skill_registry_path)
+    from tools.loader import build_skill_registry
+    skills = build_skill_registry(config_loader.config.workflow.skill_registry_path)
 
     return BuildSubState({
         "sub_phase": "IMPL_PLAN",

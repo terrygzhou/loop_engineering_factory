@@ -47,7 +47,6 @@ class BuildProxy:
             "spec_text": artifacts.get("spec_refined", ""),
             "tasks_text": artifacts.get("tasks", ""),
             "backlog": state.get("build_backlog") or [],
-            "skills": artifacts.get("skill_registry", {}),
             "solution_md": solution_md,
         }
 

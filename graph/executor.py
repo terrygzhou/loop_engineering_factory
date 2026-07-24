@@ -129,10 +129,7 @@ def build_executor_state(
     context_folder: str = "",
     improve_mode: bool = False,
 ) -> WorkflowState:
-    """Build initial WorkflowState with pre-loaded skill registry."""
-    skills_dir = get_skills_dir()
-    skill_registry = build_skill_registry(skills_dir)
-
+    """Build initial WorkflowState. Skill registry is lazy-loaded per-node via build_skill_registry()."""
     skip_discover = not bool(context_folder) and not improve_mode
 
     return WorkflowState(
@@ -147,7 +144,6 @@ def build_executor_state(
         ),
         config_version="1",
         artifacts={
-            "skill_registry": skill_registry,
             "loop_counts": {},
             "project_name": project_name,
         },

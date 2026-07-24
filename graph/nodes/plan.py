@@ -195,12 +195,8 @@ def plan_node(state: dict) -> dict:
         "has_interview": bool(state.get("artifacts", {}).get("interview_notes")),
     })
 
-    # ── Load skills ──
-    skills = state.get("artifacts", {}).get("skill_registry")
-    if skills is None:
-        print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-        state.setdefault("artifacts", {})["skill_registry"] = skills
+    # ── Load skills (lazy-load via cached registry) ──
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     feedback = []
 
     # ── Load historical feedback context ──

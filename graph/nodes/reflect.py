@@ -19,11 +19,7 @@ def reflect_node(state: dict) -> dict:
     This is the self-improvement loop closure point.
     """
     print("\n=== REFLECT PHASE ===")
-    skills = state.get("artifacts", {}).get("skill_registry")
-    if skills is None:
-        print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(config.workflow.skill_registry_path)
-        state.setdefault("artifacts", {})["skill_registry"] = skills
+    skills = build_skill_registry(config.workflow.skill_registry_path)
     feedback = []
 
     # Step 1: Record cycle data

@@ -109,12 +109,8 @@ def define_node(state: dict) -> dict:
     else:
         print("  ⚠ No project_name — using config default")
 
-    # ── Load skills ──
-    skills = state.get("artifacts", {}).get("skill_registry")
-    if skills is None:
-        print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry()
-        state.setdefault("artifacts", {})["skill_registry"] = skills
+    # ── Load skills (lazy-load via cached registry) ──
+    skills = build_skill_registry()
     feedback = []
 
     # ── Load project context from DISCOVER ──

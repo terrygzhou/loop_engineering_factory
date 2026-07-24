@@ -17,11 +17,7 @@ def ship_node(state: dict) -> dict:
     commit with git workflow.
     """
     print("\n=== SHIP PHASE ===")
-    skills = state.get("artifacts", {}).get("skill_registry")
-    if skills is None:
-        print("  → No skill_registry in state — building from disk...")
-        skills = build_skill_registry(config.workflow.skill_registry_path)
-        state.setdefault("artifacts", {})["skill_registry"] = skills
+    skills = build_skill_registry(config.workflow.skill_registry_path)
     feedback = []
 
     project_path = state.get("project_path", "")
