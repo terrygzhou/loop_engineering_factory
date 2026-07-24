@@ -1,6 +1,6 @@
 # Loop Engineering — Configurable Context & Memory Bounds
 # Prevents OOM by capping unbounded accumulation patterns.
-# Resolution: ENV_VAR > this file > built-in default
+# Resolution: this file > built-in default
 
 # ── Context size limits (per LLM call) ──────────────────────────
 context:
@@ -31,10 +31,6 @@ artifacts:
   max_analysis_chars: 15000
   # Max chars for doubt_resolution artifact stored in state
   max_doubt_chars: 15000
-  # Max chars for spec_refined in subgraph input
-  max_spec_subgraph_chars: 30000
-  # Max chars for tasks in subgraph input
-  max_tasks_subgraph_chars: 15000
 
 # ── Build pipeline limits ────────────────────────────────────────
 build:
@@ -65,29 +61,3 @@ feedback:
   max_error_entries: 10
   # Max historical feedback patterns to load (top_k for ChromaDB)
   max_chroma_patterns: 3
-
-# ── Memory budget (for monitoring) ────────────────────────────────
-memory_budget:
-  # Orchestrator container memory limit (bytes)
-  orchestrator_limit_bytes: 1073741824    # 1 GiB
-  # Builder container memory limit (bytes)
-  builder_limit_bytes: 6442450944          # 6 GiB
-  # Warning threshold percentage (alert when usage exceeds this %)
-  warning_threshold_pct: 75
-  # Critical threshold percentage (trigger emergency pruning)
-  critical_threshold_pct: 90
-
-# ── SuperWeb UAT settings ─────────────────────────────────────────
-superweb:
-  # Execution mode: "agent" (default) or "scripted"
-  mode: "agent"
-  # Timeout for scripted mode (seconds)
-  timeout_seconds: 600
-  # Timeout for agent mode (seconds) — OpenHands conversations
-  agent_timeout_seconds: 3600
-  # Number of test data variations per form (scripted mode)
-  variations: 3
-  # Fallback to LLM-prompt UAT if SuperWeb fails
-  fallback_to_llm: true
-  # Pass rate threshold for UAT verdict
-  pass_rate_threshold: 0.8

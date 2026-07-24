@@ -64,8 +64,6 @@ class Bounds:
         max_tasks_chars: int = _resolve(_bounds_data, "artifacts.max_tasks_chars", 20000)
         max_analysis_chars: int = _resolve(_bounds_data, "artifacts.max_analysis_chars", 15000)
         max_doubt_chars: int = _resolve(_bounds_data, "artifacts.max_doubt_chars", 15000)
-        max_spec_subgraph_chars: int = _resolve(_bounds_data, "artifacts.max_spec_subgraph_chars", 30000)
-        max_tasks_subgraph_chars: int = _resolve(_bounds_data, "artifacts.max_tasks_subgraph_chars", 15000)
 
     class Build:
         # Retry & failure limits
@@ -85,32 +83,10 @@ class Bounds:
         max_error_entries: int = _resolve(_bounds_data, "feedback.max_error_entries", 10)
         max_chroma_patterns: int = _resolve(_bounds_data, "feedback.max_chroma_patterns", 3)
 
-    class MemoryBudget:
-        orchestrator_limit_bytes: int = _resolve(_bounds_data, "memory_budget.orchestrator_limit_bytes", 1073741824)
-        builder_limit_bytes: int = _resolve(_bounds_data, "memory_budget.builder_limit_bytes", 6442450944)
-        warning_threshold_pct: int = _resolve(_bounds_data, "memory_budget.warning_threshold_pct", 75)
-        critical_threshold_pct: int = _resolve(_bounds_data, "memory_budget.critical_threshold_pct", 90)
-
-    class Workflow:
-        # Workflow-level settings
-        auto_approve: bool = True
-
-    class SuperWeb:
-        # UAT settings
-        mode: str = _resolve(_bounds_data, "superweb.mode", "agent")
-        timeout_seconds: int = _resolve(_bounds_data, "superweb.timeout_seconds", 600)
-        agent_timeout_seconds: int = _resolve(_bounds_data, "superweb.agent_timeout_seconds", 3600)
-        variations: int = _resolve(_bounds_data, "superweb.variations", 3)
-        fallback_to_llm: bool = _resolve(_bounds_data, "superweb.fallback_to_llm", True)
-        pass_rate_threshold: float = _resolve(_bounds_data, "superweb.pass_rate_threshold", 0.8)
-
     context = Context()
     artifacts = Artifacts()
     build = Build()
     feedback = Feedback()
-    memory_budget = MemoryBudget()
-    workflow = Workflow()
-    superweb = SuperWeb()
 
 
 bounds = Bounds()
