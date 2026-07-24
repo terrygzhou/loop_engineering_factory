@@ -77,3 +77,5 @@ skills/SKILLS_INDEX.json
 docs/
 plan/
 superweb_output/
+state/
+.state/
