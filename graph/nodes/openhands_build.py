@@ -433,7 +433,7 @@ def _merge_results(state: dict, parsed: dict) -> dict:
             }
 
     # -- Next phase --
-    next_phase = "SHIP" if status == "pass" else None
+    next_phase = "SEED_DATA" if status == "pass" else None
 
     update: dict = {
         "phase": "BUILD",

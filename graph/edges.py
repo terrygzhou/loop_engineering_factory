@@ -66,14 +66,23 @@ def route_phase(state: WorkflowState) -> str:
     # Loop counters are INCREMENTED BY NODES, not edges.
     # Nodes persist via model_copy(update={}) which survives LangGraph state updates.
     # Edges only READ the counter to decide where to route.
+    # However, BUILD self-loops need edge-side increment because the BUILD node
+    # doesn't always persist loop_counts before hitting the edge router.
+    if phase == "BUILD":
+        # Increment counter on self-loop (edges don't persist normally,
+        # but for BUILD we track in state so route_phase can see it)
+        new_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
+        new_counts["BUILD"] = new_counts.get("BUILD", 0) + 1
+        state["artifacts"] = {**state.get("artifacts", {}), "loop_counts": new_counts}
+
     loop_count = _get_loop_count(state, phase)
     max_loops = 2
     if loop_count >= max_loops:
         return _forward_paths.get(phase, END)
 
-    # If there's an error AND no more retries available, end the workflow
-    if error and loop_count >= max_loops:
-        return END
+    # If there's an error, route to REFLECT for human inspection
+    if error:
+        return "REFLECT"
 
     # DISCOVER -> always forward to DEFINE (no quality gate needed)
     if phase == "DISCOVER":

@@ -30,3 +30,11 @@ skill_view(name='subagent-driven-development')
 - **Artifacts**: generated projects land in `output/`
 - **Skills**: 37 SKILL.md files in `skills/`; loaded by `tools/loader.py`
 - **HIL flow**: Mandatory — OOTB `interrupt()` inside nodes. DISCOVER (2 pauses: setup + interview), ARCH_REVIEW (1 pause: architecture review gate). Graph-level `interrupt_after=[]`; HIL is node-level. `auto_approve=true` in config bypasses HIL for headless runs.
+
+## Auto-Handoff Instructions
+
+During long coding sessions:
+1. Every 10 turns, save progress to `PROJECT/HANDOFF.md`
+2. When compression fires, immediately save handoff
+3. Keep handoff ≤50 lines, commit after update
+4. New sessions read handoff + git status first

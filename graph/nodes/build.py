@@ -6,7 +6,7 @@ now uses build_subgraph directly with input/output mappings, so this
 file's build_node() simply re-exports the subgraph entry function.
 
 DEPRECATED: No longer imported by any active code. The BUILD node is
-handled via build_proxy_node() -> build_subgraph(). Kept for historical
+handled via openhands_build_proxy_factory() -> build_subgraph(). Kept for historical
 reference — import is blocked to prevent accidental usage.
 """
 

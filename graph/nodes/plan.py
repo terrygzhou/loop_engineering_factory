@@ -102,7 +102,7 @@ def plan_node(state: dict) -> dict:
     audit.log_file_write("PLAN", str(solution_path), "markdown", len(solution_md))
     print(f"  → solution.md written: {solution_path} ({len(solution_md)} chars)")
 
-    # Store in artifacts for build_proxy to pick up
+    # Store in artifacts for openhands_build to pick up
     artifacts_delta["solution_md"] = solution_md
     artifacts_delta["solution_path"] = str(solution_path)
     artifacts_delta["diagrams"] = diagrams
