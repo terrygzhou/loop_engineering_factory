@@ -4,7 +4,7 @@ Self-improving AI-driven software development engine built on LangGraph.
 
 > **Pipeline**: `DISCOVER → DEFINE → PLAN → ARCH_REVIEW → BUILD → SEED_DATA → VERIFY → SHIP → REFLECT`
 
-Each cycle runs through 9 phase nodes with quality gates, Human-in-the-Loop review, and self-improvement via ChromaDB pattern storage. CLI (`main.py`) and Web UI (FastAPI `:8011`) share the same `WorkflowRunner` — identical node execution, different UX layers.
+Each cycle runs through 9 logical phases mapped to 12 graph nodes with quality gates, Human-in-the-Loop review, and self-improvement via ChromaDB pattern storage. CLI (`main.py`) and Web UI (FastAPI `:8011`) share the same `WorkflowRunner` — identical node execution, different UX layers. DISCOVER is split into two nodes (`DISCOVER_SETUP` + `DISCOVER_INTERVIEW`), each with one `interrupt()` call, so resume only re-runs ~30 lines instead of the full ~100-line discovery node.
 
 ---
 
@@ -14,14 +14,16 @@ Each cycle runs through 9 phase nodes with quality gates, Human-in-the-Loop revi
 stateDiagram-v2
     direction LR
 
-    [*] --> DISCOVER
+    [*] --> DISCOVER_SETUP
 
-    %% Fixed forward edges (graph/main.py)
-    DISCOVER --> DEFINE
+    %% DISCOVER split: two nodes, each with ONE interrupt() (graph/main.py)
+    DISCOVER_SETUP --> DISCOVER_INTERVIEW
+    DISCOVER_INTERVIEW --> DEFINE
+
+    %% Fixed forward edges
     DEFINE --> PLAN
     PLAN --> ARCH_REVIEW
     SEED_DATA --> VERIFY
-    VERIFY --> SHIP
 
     %% Conditional edges (graph/edges.py route_phase)
     ARCH_REVIEW --> BUILD : approved
@@ -29,26 +31,47 @@ stateDiagram-v2
 
     BUILD --> SEED_DATA : gates pass
     BUILD --> BUILD : security / review / UAT gate failed
-    BUILD --> REFLECT : 3 consecutive build failures
+    BUILD --> REFLECT : explicit next_phase + error (e.g. 3 failures)
 
-    SHIP --> REFLECT
+    VERIFY --> SHIP
+
+    %% Conditional: route_phase
+    SHIP --> REFLECT : reflect
     REFLECT --> [*]
 
     %% Self-loops (quality gates)
-    DEFINE --> DEFINE : spec_confidence < 0.9 (max 2 loops)
-    PLAN --> PLAN : arch_uncertainty > 0.8 (max 2 loops)
+    DEFINE --> DEFINE : spec_confidence < threshold (max 2 loops)
+    PLAN --> PLAN : arch_uncertainty > threshold (max 2 loops)
 
-    %% HIL interrupt points
-    note right of DISCOVER : interrupt() x2<br/>project_setup + interview
-    note right of ARCH_REVIEW : interrupt() x1<br/>human approve/reject
+    %% HIL interrupt points — OOTB interrupt() + Command(resume=...)
+    note right of DISCOVER_SETUP : interrupt() — project_setup
+    note right of DISCOVER_INTERVIEW : interrupt() — interview
+    note right of ARCH_REVIEW : interrupt() — approve/reject
 
     classDef hil fill:#FFD700,stroke:#B8860B,stroke-width:2px,color:#000
     classDef gate fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
     classDef normal fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
-    class DISCOVER,ARCH_REVIEW hil
+    class DISCOVER_SETUP,DISCOVER_INTERVIEW,ARCH_REVIEW hil
     class DEFINE,PLAN,BUILD gate
     class SEED_DATA,VERIFY,SHIP,REFLECT normal
 ```
+
+### Actual Graph Nodes (`graph/main.py`)
+
+| Node | Phase | Interrupt? | Conditional? |
+|---|---|---|---|
+| `DISCOVER_SETUP` | DISCOVER | `interrupt()` — project_setup | No |
+| `DISCOVER_INTERVIEW` | DISCOVER | `interrupt()` — interview | No |
+| `DEFINE` | DEFINE | No | No |
+| `PLAN` | PLAN | No | No |
+| `ARCH_REVIEW` | ARCH_REVIEW | `interrupt()` — approve/reject | Yes (`route_phase`) |
+| `BUILD` | BUILD | No (OpenHands proxy) | Yes (`route_phase`) |
+| `SEED_DATA` | SEED_DATA | No | No |
+| `VERIFY` | VERIFY | No | No |
+| `SHIP` | SHIP | No | Yes (`route_phase`) |
+| `REFLECT` | REFLECT | No | Yes (`route_phase`) |
+
+DISCOVER is split into two nodes so resume only re-runs the paused node (~30 lines vs ~100). Each node has exactly one `interrupt()` call — LangGraph OOTB pattern with `Command(resume=...)`.
 
 ### Routing Logic
 
@@ -467,6 +490,7 @@ Install: baked into Docker image via `docker compose up -d --build`.
 
 ## Recent Changes
 
+- **LangGraph 1.2+ conformance** — Removed `audit_entries` from `WorkflowState` (OOM risk), verified all `invoke_skill()` calls use `prepare_context_for_llm()`, confirmed `interrupt()` OOTB pattern, `Command(resume=...)` resume, custom `SqliteSaver` with `dumps_typed()` API
 - **Lazy skill registry** — `tools/loader.py` hot-reload; removed ~49K token overhead from WorkflowState init
 - **Context bounds cleanup** — Removed dead `build_max_tokens`, `superweb`, `memory_budget`, `subgraph` entries from `bounds.yaml`
 - **OpenHands BUILD** — Agent delegation via Gateway API with legacy subgraph fallback

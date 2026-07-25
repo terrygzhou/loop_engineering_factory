@@ -12,7 +12,9 @@ END_MARKER = END
 # Per-cycle loop counts stored in state["artifacts"]["loop_counts"] — never global.
 # Forward paths for forced progression after max retries (prevents livelock).
 _forward_paths = {
-    "DISCOVER": "DEFINE",
+    "DISCOVER": "DEFINE",            # legacy: DISCOVER was single node, now split
+    "DISCOVER_SETUP": "DISCOVER_INTERVIEW",
+    "DISCOVER_INTERVIEW": "DEFINE",
     "DEFINE": "PLAN",
     "PLAN": "ARCH_REVIEW",
     "ARCH_REVIEW": "BUILD",

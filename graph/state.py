@@ -1,8 +1,14 @@
 """
 WorkflowState definition for the self-improving AI loop.
 """
-from typing import TypedDict, List, Optional
+import operator
+from typing import Annotated, Dict, List, Optional, TypedDict
 from pydantic import BaseModel
+
+
+def _dict_merge(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
+    """Reducer: merge two dicts (right wins on conflict)."""
+    return {**left, **right}
 
 
 class CycleMetrics(BaseModel):
@@ -20,44 +26,46 @@ class CycleMetrics(BaseModel):
 
 class WorkflowState(TypedDict):
     """LangGraph state for the self-improving AI loop."""
-    cycle_id: str                          # Unique ID for this cycle
-    phase: str                             # Current phase: DISCOVER/DEFINE/PLAN/BUILD/SEED_DATA/VERIFY/SHIP/REFLECT
-    artifacts: dict[str, str]              # spec.yaml, tasks.md, code diffs, logs, etc.
-    metrics: CycleMetrics                  # Collected metrics
-    feedback: List[dict]                   # LLM review comments, debug traces, etc.
-    feedback_context: str                  # Historical patterns from past cycles (populated by ChromaDB)
-    config_version: str                    # Git commit hash of skill configs
-    human_approval_required: bool          # True if next action needs human approval
-    next_phase: Optional[str]              # Suggested next phase (edges can override)
-    project_name: str                      # User-provided project name (captured in DISCOVER)
-    project_path: str                      # Path to the target project ($project_folder)
-    project_folder: str                   # Canonical project directory (e.g., ~/workspace/projects/xyz)
-    spec_path: str                         # Path to the spec directory
-    project_description: str                # User's project description (input to DISCOVER)
-    skip_discover: bool                    # True if no context folder (greenfield mode)
-    context_folder: str                    # Path to existing codebase for discovery
-    error: Optional[str]                   # Error message if phase failed
+    cycle_id: str
+    phase: str
+    metrics: CycleMetrics
+    feedback: Annotated[List[dict], operator.add]
+    feedback_context: str
+    config_version: str
+    human_approval_required: bool
+    next_phase: Optional[str]
+    project_name: str
+    project_path: str
+    project_folder: str
+    spec_path: str
+    project_description: str
+    skip_discover: bool
+    context_folder: str
+    error: Optional[str]
 
     # ── B-009: Non-blocking input ──
-    pending_inputs: List[dict]              # Active input requests waiting for user response
+    pending_inputs: Annotated[List[dict], operator.add]
 
     # ── B-010: Architecture diagrams ──
-    diagrams: dict[str, str]               # Generated diagram file paths
-    diagram_status: str                    # "pending" / "approved" / "rejected"
-    diagram_feedback: str                  # User feedback on rejection
+    diagrams: Annotated[Dict[str, str], _dict_merge]
+    diagram_status: str
+    diagram_feedback: str
 
-    # ── Improve mode: connect factory to running product ──
-    improve_mode: bool                       # True when --improve: load live.json, skip interview, use running product as context
+    # ── Improve mode ──
+    improve_mode: bool
 
     # ── DISCOVER: interview notes ──
-    interview_notes: str                     # Collected interview answers (persists across GraphInterrupt resume)
-    discover_interview_done: bool            # Top-level flag: survives LangGraph shallow merge on resume
+    interview_notes: str
+    discover_interview_done: bool
 
     # ── Audit trail ──
-    trace_id: str                            # Correlation ID for all logs in this workflow
-    audit_entries: List[dict]               # Accumulated audit log entries
+    trace_id: str
+    # NOTE: audit_entries exists in state but NOT populated by nodes (OOM risk).
+    # AuditLog persists to disk (build/audit_logs/interactions.jsonl).
+    audit_entries: Annotated[List[dict], operator.add]
 
     # ── BUILD subgraph state (carried through for merge) ──
-    build_backlog: Optional[List[dict]]     # Backlog items from BUILD subgraph
-    superweb_mode: str                       # "agent" | "scripted" — UAT execution mode
-    superweb_agent_report: Optional[dict]   # Parsed agent_report.json from agent mode
+    build_backlog: Optional[Annotated[List[dict], operator.add]]
+    superweb_mode: str
+    superweb_agent_report: Optional[dict]
+    artifacts: Annotated[Dict[str, str], _dict_merge]

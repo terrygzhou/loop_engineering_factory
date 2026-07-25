@@ -15,23 +15,12 @@ from config.bounds_loader import bounds
 from langgraph.types import interrupt
 from tools.audit_logger import AuditLog
 
+
 def review_node(state: dict) -> dict:
     """
     ARCH_REVIEW phase: Human architecture review gate between PLAN and BUILD.
 
-    Input (from PLAN):
-      - spec_refined, api_contract, plan, tasks, analysis, doubt_resolution, checklist
-      - diagrams (Mermaid paths), diagram_pngs (PNG paths)
-      - arch_uncertainty, task_count, diagram_count metrics
-
-    Interrupt payload:
-      - All plan artifacts for display in CLI/Web UI
-      - Diagram PNG paths for visual review
-      - Key metrics summary
-
-    On resume:
-      - resume_data["approved"] == True  → forward to BUILD
-      - resume_data["approved"] == False  → back to PLAN with user_review_comments
+    Returns partial update dict (LangGraph reducer merges).
     """
     print("\n=== ARCH_REVIEW PHASE ===")
 
@@ -47,22 +36,20 @@ def review_node(state: dict) -> dict:
     auto_approve = _cfg.workflow.auto_approve
     if auto_approve:
         print("  → Auto-approve mode — skipping review gate")
-        state["artifacts"]["review_approved"] = True
-        state["diagram_status"] = "approved"
-        state["phase"] = "ARCH_REVIEW"
-        state["next_phase"] = "BUILD"
         audit.log_node_output("ARCH_REVIEW", {"approved": True, "reason": "auto_approve"})
-        return state
-
-    # ── Set phase ──
-    state["phase"] = "ARCH_REVIEW"
+        return {
+            "phase": "ARCH_REVIEW",
+            "next_phase": "BUILD",
+            "diagram_status": "approved",
+            "artifacts": {"review_approved": True},
+        }
 
     # ── Build interrupt payload ──
     artifacts = state.get("artifacts", {})
     diagrams = artifacts.get("diagrams", {})
     diagram_pngs = artifacts.get("diagram_pngs", {})
 
-    # Build diagram display info (PNG paths for UI, Mermaid for reference)
+    # Build diagram display info
     diagram_display = {}
     for dtype, mmd_path in diagrams.items():
         diagram_display[dtype] = {
@@ -117,22 +104,25 @@ def review_node(state: dict) -> dict:
     approved = resume_data.get("approved", True)
     user_review_comments = resume_data.get("feedback", resume_data.get("user_review_comments", ""))
 
-    state["artifacts"]["review_approved"] = approved
-
     if approved:
-        state["diagram_status"] = "approved"
-        state["next_phase"] = "BUILD"
         print("  ✓ ARCH_REVIEW approved — proceeding to BUILD")
         audit.log_node_output("ARCH_REVIEW", {"approved": True, "comments": ""})
         audit.log_node_transition("ARCH_REVIEW", "BUILD", "plan approved")
+        return {
+            "phase": "ARCH_REVIEW",
+            "next_phase": "BUILD",
+            "diagram_status": "approved",
+            "artifacts": {"review_approved": True},
+        }
     else:
-        state["diagram_status"] = "rejected"
-        state["diagram_feedback"] = user_review_comments
-        state["user_review_comments"] = user_review_comments
-        state["next_phase"] = "PLAN"
         print(f"  ✗ ARCH_REVIEW rejected — sending back to PLAN with feedback ({len(user_review_comments)} chars)")
         audit.log_node_output("ARCH_REVIEW", {"approved": False, "comments": user_review_comments[:bounds.feedback.max_review_comments_chars]})
         audit.log_node_transition("ARCH_REVIEW", "PLAN", "plan rejected with feedback")
-
-    state["phase"] = "ARCH_REVIEW"
-    return state
+        return {
+            "phase": "ARCH_REVIEW",
+            "next_phase": "PLAN",
+            "diagram_status": "rejected",
+            "diagram_feedback": user_review_comments,
+            "user_review_comments": user_review_comments,
+            "artifacts": {"review_approved": False},
+        }

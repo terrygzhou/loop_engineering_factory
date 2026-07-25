@@ -8,7 +8,7 @@ Uses LangGraph OOTB APIs:
 from langgraph.graph import StateGraph, START, END
 
 from graph.state import WorkflowState
-from graph.nodes.discover import discover_node
+from graph.nodes.discover import discover_setup_node, discover_interview_node
 from graph.nodes.define import define_node
 from graph.nodes.plan import plan_node
 from graph.nodes.review import review_node
@@ -36,7 +36,9 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow = StateGraph(WorkflowState)
 
     # Register nodes
-    workflow.add_node("DISCOVER", discover_node)
+    # DISCOVER split into two nodes (setup + interview) — each has ONE interrupt
+    workflow.add_node("DISCOVER_SETUP", discover_setup_node)
+    workflow.add_node("DISCOVER_INTERVIEW", discover_interview_node)
     workflow.add_node("DEFINE", define_node)
     workflow.add_node("PLAN", plan_node)
     workflow.add_node("ARCH_REVIEW", review_node)
@@ -52,8 +54,9 @@ def build_graph(checkpointer=None, auto_approve=False):
     workflow.add_node("REFLECT", reflect_node)
 
     # Wire edges
-    workflow.add_edge(START, "DISCOVER")
-    workflow.add_edge("DISCOVER", "DEFINE")
+    workflow.add_edge(START, "DISCOVER_SETUP")
+    workflow.add_edge("DISCOVER_SETUP", "DISCOVER_INTERVIEW")
+    workflow.add_edge("DISCOVER_INTERVIEW", "DEFINE")
     workflow.add_edge("DEFINE", "PLAN")
     workflow.add_edge("PLAN", "ARCH_REVIEW")
     workflow.add_conditional_edges("ARCH_REVIEW", route_phase)

@@ -12,15 +12,16 @@ from feedback.aggregator import FeedbackAggregator
 from feedback.diff_engine import generate_config_diffs, dry_run_validation
 from feedback.chroma_client import get_chroma_client, store_pattern, query_patterns
 
+
 def reflect_node(state: dict) -> dict:
     """
     REFLECT phase: Analyze the completed cycle, compare against historical patterns,
     generate proposed skill config updates, request human approval, and archive.
-    This is the self-improvement loop closure point.
+
+    Returns partial update dict (LangGraph reducer merges).
     """
     print("\n=== REFLECT PHASE ===")
     skills = build_skill_registry(config.workflow.skill_registry_path)
-    feedback = []
 
     # Step 1: Record cycle data
     print("  → Recording cycle data...")
@@ -32,7 +33,7 @@ def reflect_node(state: dict) -> dict:
         artifacts=state.get("artifacts", {}),
         feedback=state.get("feedback", []),
     )
-    feedback.append({"action": "cycle_recorded", "cycle_id": state["cycle_id"]})
+    feedback_entries: list[dict] = [{"action": "cycle_recorded", "cycle_id": state["cycle_id"]}]
 
     # Step 2: Load guardrails
     print("  → Loading guardrails...")
@@ -79,7 +80,7 @@ def reflect_node(state: dict) -> dict:
     llm = get_llm()
 
     diffs = generate_config_diffs(cycle_records, guardrails, llm=llm)
-    state["artifacts"]["proposed_diffs"] = json.dumps(diffs, indent=2)
+    artifacts_delta: dict[str, str] = {"proposed_diffs": json.dumps(diffs, indent=2)}
 
     changes = diffs.get("changes", [])
     if changes:
@@ -89,15 +90,19 @@ def reflect_node(state: dict) -> dict:
     else:
         print("     No config changes proposed")
 
-    feedback.append({"action": "diff_generated", "change_count": len(changes),
-                     "details": diffs.get("overall_assessment", "")})
+    feedback_entries.append({"action": "diff_generated", "change_count": len(changes),
+                             "details": diffs.get("overall_assessment", "")})
 
     # Step 5: Dry-run validation
     if changes and not dry_run_validation(diffs):
         print("  ⚠ Dry-run validation failed — changes blocked")
-        feedback.append({"action": "dry_run_failed", "changes": len(changes)})
-        state["next_phase"] = "END"
-        return state
+        feedback_entries.append({"action": "dry_run_failed", "changes": len(changes)})
+        return {
+            "phase": "REFLECT",
+            "feedback": feedback_entries,
+            "next_phase": "END",
+            "artifacts": artifacts_delta,
+        }
 
     # Step 6: Human approval gate (CLI)
     if changes:
@@ -130,22 +135,24 @@ def reflect_node(state: dict) -> dict:
                     f"Commit approved config changes for cycle {state['cycle_id']}. "
                     f"Changes: {json.dumps(diffs, indent=2, default=str)}",
                     "", llm=get_llm())
-                state["artifacts"]["git_commit"] = result
-                feedback.append({"action": "git_committed", "details": result[:200]})
+                artifacts_delta["git_commit"] = result
+                feedback_entries.append({"action": "git_committed", "details": result[:200]})
             else:
                 print("  ⚠ git-workflow skill not available — manual commit required")
-                feedback.append({"action": "git_skipped", "reason": "skill not found"})
-            feedback.append({"action": "changes_applied", "count": len(changes)})
+                feedback_entries.append({"action": "git_skipped", "reason": "skill not found"})
+            feedback_entries.append({"action": "changes_applied", "count": len(changes)})
         else:
             print("  ✗ Changes rejected by human")
-            feedback.append({"action": "changes_rejected", "count": len(changes)})
+            feedback_entries.append({"action": "changes_rejected", "count": len(changes)})
 
-    # Step 7: Update config version
-    state["config_version"] = f"{state['cycle_id']}-reflected"
-
-    state["phase"] = "REFLECT"
-    state["feedback"] = state.get("feedback", []) + feedback
-    state["next_phase"] = "END"
+    # Build partial update
+    update: dict = {
+        "phase": "REFLECT",
+        "feedback": feedback_entries,
+        "next_phase": "END",
+        "config_version": f"{state['cycle_id']}-reflected",
+        "artifacts": artifacts_delta,
+    }
 
     print(f"\n  ✓ Reflection complete — cycle {state['cycle_id']} archived")
-    return state
+    return update

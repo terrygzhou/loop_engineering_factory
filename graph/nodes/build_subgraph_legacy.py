@@ -197,6 +197,11 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         state["sub_phase"] = "ALL_ITEMS_DONE"
         return state
 
+    # Guard against empty backlog or out-of-bounds index
+    if idx >= len(state["backlog"]):
+        state["sub_phase"] = "ALL_ITEMS_DONE"
+        return state
+
     item = state["backlog"][idx]
     if item["status"] == "failed":
         state["backlog_idx"] = idx + 1
@@ -795,8 +800,8 @@ def build_input_mapping(parent: dict) -> BuildSubState:
         "sub_phase": "IMPL_PLAN",
         "project_path": project_path,
         "docker_proj": docker_proj,
-        "spec_text": parent.get("artifacts", {}).get("spec_refined", "")[:bounds.artifacts.max_spec_subgraph_chars],
-        "tasks_text": parent.get("artifacts", {}).get("tasks", "")[:bounds.artifacts.max_tasks_subgraph_chars],
+        "spec_text": (parent.get("artifacts", {}).get("spec_refined", "") or "")[:16_000],
+        "tasks_text": (parent.get("artifacts", {}).get("tasks", "") or "")[:8_000],
         "skills": skills,
         "backlog": [],
         "backlog_idx": 0,

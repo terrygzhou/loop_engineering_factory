@@ -16,6 +16,146 @@ from tools.context_manager import prepare_context_for_llm
 from tools.audit_logger import AuditLog
 from feedback.chroma_client import get_chroma_client, query_patterns
 
+
+def plan_node(state: dict) -> dict:
+    """
+    PLAN phase: Generate implementation plan using framework skill chain.
+
+    Flow:
+      writing-plans → doubt-driven-development → architecture-diagram-generator
+
+    Returns partial update dict (LangGraph reducer merges).
+    """
+    print("\n=== PLAN PHASE ===")
+
+    # ── Audit logging ──
+    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input("PLAN", {
+        "has_spec": bool(state.get("artifacts", {}).get("spec_refined")),
+        "has_interview": bool(state.get("artifacts", {}).get("interview_notes")),
+    })
+
+    # ── Load skills (lazy-load via cached registry) ──
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+    feedback_entries: list[dict] = []
+
+    # ── Load historical feedback context ──
+    feedback_context = _load_feedback_context(state)
+
+    # Build context for all skill invocations
+    spec = state.get("artifacts", {}).get("spec_refined", "")
+    interview = state.get("artifacts", {}).get("interview_notes", "")
+    context_parts = [spec]
+    if interview:
+        context_parts.append(f"Interview notes:\n{interview}")
+    if feedback_context:
+        context_parts.append(f"\n\n{feedback_context}\n")
+    base_context = "\n\n".join(context_parts)
+
+    artifacts_delta: dict[str, str] = {}
+
+    # ── Step 1: Generate architecture/implementation plan ──
+    plan_skill = skills.get("writing-plans", {})
+    plan_result = None
+    if plan_skill:
+        print("  → Running writing-plans...")
+        optimized = prepare_context_for_llm({"context": base_context}, max_tokens=bounds.context.plan_max_tokens)
+        plan_result = invoke_skill(
+            plan_skill["content"],
+            "Create implementation plan with architecture, file structure, milestones, and task breakdown. Keep it concise — max 3000 words.",
+            optimized["context"],
+            llm=None
+        )
+        artifacts_delta["plan"] = plan_result[:bounds.artifacts.max_plan_chars]
+        feedback_entries.append({"skill": "writing-plans", "output": plan_result[:bounds.feedback.max_feedback_entry_chars]})
+
+    # ── Step 2: Doubt-driven development (challenge assumptions) ──
+    doubt_skill = skills.get("doubt-driven-development", {})
+    doubt_result = None
+    if doubt_skill:
+        print("  → Running doubt-driven-development...")
+        doubt_result = invoke_skill(
+            doubt_skill["content"],
+            "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only.",
+            artifacts_delta.get("plan", state.get("artifacts", {}).get("plan", ""))[:bounds.artifacts.max_analysis_chars],
+            llm=None
+        )
+        artifacts_delta["doubt_resolution"] = doubt_result[:bounds.artifacts.max_doubt_chars]
+        feedback_entries.append({"skill": "doubt-driven-development", "output": doubt_result[:bounds.feedback.max_feedback_entry_chars]})
+
+    # ── Step 9: Generate architecture diagrams ──
+    print("  → Running architecture-diagram-generator...")
+    diagrams = _generate_all_diagrams(skills, state)
+
+    # ── Convert diagrams to PNG ──
+    png_paths = _convert_diagrams_to_png(diagrams)
+    artifacts_delta["diagram_pngs"] = png_paths
+
+    # ── Persist solution.md to $project_folder/build/ ──
+    project_folder = state.get("project_folder", state.get("project_path", ""))
+    build_dir = Path(project_folder) / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    solution_md = _generate_solution_md(state, artifacts_delta)
+    solution_path = build_dir / "solution.md"
+    solution_path.write_text(solution_md)
+    audit.log_file_write("PLAN", str(solution_path), "markdown", len(solution_md))
+    print(f"  → solution.md written: {solution_path} ({len(solution_md)} chars)")
+
+    # Store in artifacts for build_proxy to pick up
+    artifacts_delta["solution_md"] = solution_md
+    artifacts_delta["solution_path"] = str(solution_path)
+    artifacts_delta["diagrams"] = diagrams
+
+    diagram_count = len(diagrams)
+    # Extract task count
+    task_count = 1
+    if plan_result:
+        task_count = plan_result.count("- [") + plan_result.count("1.") + plan_result.count("2.") + plan_result.count("3.")
+
+    # ── Derive architectural uncertainty ──
+    merged_artifacts = {**state.get("artifacts", {}), **artifacts_delta}
+    arch_uncertainty = _estimate_arch_uncertainty(merged_artifacts)
+
+    # ── Audit output ──
+    audit.log_node_output("PLAN", {
+        "solution_path": str(solution_path),
+        "diagram_count": diagram_count,
+        "task_count": task_count,
+        "arch_uncertainty": arch_uncertainty,
+    })
+    audit.log_node_transition("PLAN", "BUILD", "plan generation complete")
+
+    # Update metrics
+    current_metrics = state.get("metrics")
+    metrics_update = None
+    if current_metrics and hasattr(current_metrics, "model_copy"):
+        metrics_update = current_metrics.model_copy(update={
+            "task_count": max(task_count, 1),
+            "diagram_count": diagram_count,
+            "arch_uncertainty": arch_uncertainty,
+        })
+
+    print(f"  ✓ task_count={task_count}, arch_uncertainty={arch_uncertainty:.2f}, diagrams={diagram_count}")
+
+    # Build partial update
+    update: dict = {
+        "phase": "PLAN",
+        "feedback_context": feedback_context,
+        "diagrams": diagrams,
+        "diagram_status": "pending",
+        "feedback": feedback_entries,
+        "next_phase": "BUILD",
+        "human_approval_required": False,
+    }
+    if artifacts_delta:
+        update["artifacts"] = artifacts_delta
+    if metrics_update:
+        update["metrics"] = metrics_update
+
+    return update
+
+
 def _load_feedback_context(state: dict) -> str:
     """Query ChromaDB for historical patterns relevant to this project type."""
     try:
@@ -36,15 +176,8 @@ def _load_feedback_context(state: dict) -> str:
     except Exception as e:
         return ""
 
+
 def _estimate_arch_uncertainty(artifacts: dict) -> float:
-    """
-    Derive architectural uncertainty from actual plan artifacts.
-    Lower = more confident. Scoring starts at 0.6 and reduces:
-    - Has plan with >200 chars: -0.15
-    - Has doubt_resolution: -0.1
-    - Has diagrams: -0.1
-    Range: [0.0, 1.0]
-    """
     score = 0.6
     plan_text = artifacts.get("plan", "")
     doubt_text = artifacts.get("doubt_resolution", "")
@@ -58,8 +191,8 @@ def _estimate_arch_uncertainty(artifacts: dict) -> float:
         score -= 0.1
     return max(0.0, min(1.0, score))
 
+
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
-    """Generate a specific diagram type from workflow artifacts."""
     arch_skill = skills.get("architecture-diagram-generator", {})
     if not arch_skill:
         return f"# {diagram_type} - skill not available"
@@ -79,8 +212,8 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     )
     return diagram
 
+
 def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
-    """Generate all architecture diagrams and save to build/diagrams/."""
     project_folder = state.get("project_folder", state.get("project_path", ""))
     diagrams_dir = Path(project_folder) / "build" / "diagrams"
     diagrams_dir.mkdir(parents=True, exist_ok=True)
@@ -100,13 +233,8 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
         diagrams[dtype] = str(filepath)
     return diagrams
 
-def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
-    """Convert .mmd diagrams to PNG for UI rendering (single browser session).
 
-    Returns dict[str, str] mapping dtype → first PNG path (backward-compatible).
-    If a .mmd file contains multiple mermaid blocks, only the first block is rendered.
-    Additional PNGs are stored in state["diagram_extra_pngs"] as dict[str, list[str]].
-    """
+def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
     import asyncio
     import os
     import sys as _sys
@@ -115,7 +243,6 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
     _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent))
     from tools.convert_diagrams import extract_mermaid, extract_mermaids, make_html
 
-    # Collect all (type, html_path, png_path, is_primary) tuples
     conversions: list[tuple[str, _Path, _Path, bool]] = []
     for dtype, mmd_path_str in diagrams.items():
         mmd_path = Path(mmd_path_str)
@@ -159,7 +286,6 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
 
     result, extra_pngs = asyncio.run(_batch_convert(conversions))
 
-    # Clean up temp HTML files
     for _, tmp_html, _, _ in conversions:
         try:
             os.unlink(str(tmp_html))
@@ -167,218 +293,64 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
             pass
     return result
 
-def plan_node(state: dict) -> dict:
-    """
-    PLAN phase: Generate implementation plan using framework skill chain.
 
-    Flow:
-      writing-plans → doubt-driven-development → architecture-diagram-generator
-
-    Input:
-      - spec_refined: Specification from DEFINE phase
-      - interview_notes: Interview results
-      - feedback_context: Historical patterns
-      - project_folder: Target directory
-
-    Output:
-      - $project_folder/build/solution.md: Complete solution design with diagrams
-      - $project_folder/build/diagrams/: Mermaid diagram files
-      - state["artifacts"]["plan"], "tasks", "analysis", "checklist", "diagrams"
-      - state["artifacts"]["conformance"]: Spec↔plan alignment report
-    """
-    print("\n=== PLAN PHASE ===")
-
-    # ── Audit logging ──
-    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
-    audit.log_node_input("PLAN", {
-        "has_spec": bool(state.get("artifacts", {}).get("spec_refined")),
-        "has_interview": bool(state.get("artifacts", {}).get("interview_notes")),
-    })
-
-    # ── Load skills (lazy-load via cached registry) ──
-    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    feedback = []
-
-    # ── Load historical feedback context ──
-    feedback_context = _load_feedback_context(state)
-    state["feedback_context"] = feedback_context
-
-    # Build context for all skill invocations
-    spec = state.get("artifacts", {}).get("spec_refined", "")
-    interview = state.get("artifacts", {}).get("interview_notes", "")
-    context_parts = [spec]
-    if interview:
-        context_parts.append(f"Interview notes:\n{interview}")
-    if feedback_context:
-        context_parts.append(f"\n\n{feedback_context}\n")
-    base_context = "\n\n".join(context_parts)
-
-    # ── Step 1: Generate architecture/implementation plan ──
-    plan_skill = skills.get("writing-plans", {})
-    if plan_skill:
-        print("  → Running writing-plans...")
-        optimized = prepare_context_for_llm({"context": base_context}, max_tokens=bounds.context.plan_max_tokens)
-        result = invoke_skill(
-            plan_skill["content"],
-            "Create implementation plan with architecture, file structure, milestones, and task breakdown. Keep it concise — max 3000 words.",
-            optimized["context"],
-            llm=None
-        )
-        state["artifacts"]["plan"] = result[:bounds.artifacts.max_plan_chars]
-        # Extract task count from the plan
-        task_count = result.count("- [") + result.count("1.") + result.count("2.") + result.count("3.")
-        state["metrics"] = state["metrics"].model_copy(update={
-            "task_count": max(task_count, 1),
-        })
-        feedback.append({"skill": "writing-plans", "output": result[:bounds.feedback.max_feedback_entry_chars]})
-
-    # ── Step 2: Doubt-driven development (challenge assumptions) ──
-    doubt_skill = skills.get("doubt-driven-development", {})
-    if doubt_skill:
-        print("  → Running doubt-driven-development...")
-        result = invoke_skill(
-            doubt_skill["content"],
-            "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only.",
-            state.get("artifacts", {}).get("plan", "")[:bounds.artifacts.max_analysis_chars],
-            llm=None
-        )
-        state["artifacts"]["doubt_resolution"] = result[:bounds.artifacts.max_doubt_chars]
-        feedback.append({"skill": "doubt-driven-development", "output": result[:bounds.feedback.max_feedback_entry_chars]})
-
-    # ── Step 9: Generate architecture diagrams ──
-    print("  → Running architecture-diagram-generator...")
-    diagrams = _generate_all_diagrams(skills, state)
-
-    # ── Convert diagrams to PNG ──
-    png_paths = _convert_diagrams_to_png(diagrams)
-    state["artifacts"]["diagram_pngs"] = png_paths
-
-    state["artifacts"]["diagrams"] = diagrams
-    state["diagrams"] = diagrams
-    state["diagram_status"] = "pending"
-    diagram_count = len(diagrams)
-    state["metrics"] = state["metrics"].model_copy(update={
-        "diagram_count": diagram_count,
-    })
-    feedback.append({"skill": "architecture-diagram-generator", "output": f"Generated {diagram_count} diagrams + {len(png_paths)} PNGs"})
-
-    # ── Derive architectural uncertainty ──
-    arch_uncertainty = _estimate_arch_uncertainty(state["artifacts"])
-    state["metrics"] = state["metrics"].model_copy(update={
-        "arch_uncertainty": arch_uncertainty,
-    })
-
-    # ── Persist solution.md to $project_folder/build/ ──
-    project_folder = state.get("project_folder", state.get("project_path", ""))
-    build_dir = Path(project_folder) / "build"
-    build_dir.mkdir(parents=True, exist_ok=True)
-
-    solution_md = _generate_solution_md(state)
-    solution_path = build_dir / "solution.md"
-    solution_path.write_text(solution_md)
-    audit.log_file_write("PLAN", str(solution_path), "markdown", len(solution_md))
-    print(f"  → solution.md written: {solution_path} ({len(solution_md)} chars)")
-
-    # Store in artifacts for build_proxy to pick up
-    state["artifacts"]["solution_md"] = solution_md
-    state["artifacts"]["solution_path"] = str(solution_path)
-
-    # ── Audit output ──
-    audit.log_node_output("PLAN", {
-        "solution_path": str(solution_path),
-        "diagram_count": diagram_count,
-        "task_count": state["metrics"].task_count,
-        "arch_uncertainty": arch_uncertainty,
-    })
-    audit.log_node_transition("PLAN", "BUILD", "plan generation complete")
-
-    state["phase"] = "PLAN"
-    state["feedback"] = state.get("feedback", [])[-bounds.artifacts.max_feedback_entries:] + feedback
-    state["next_phase"] = "BUILD"
-    state["human_approval_required"] = False
-
-    print(f"  ✓ task_count={state['metrics'].task_count}, arch_uncertainty={arch_uncertainty:.2f}, diagrams={diagram_count}")
-    return state
-
-def _generate_solution_md(state: dict) -> str:
+def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
     """Generate comprehensive solution.md from all PLAN artifacts."""
+    merged = {**state.get("artifacts", {}), **artifacts_delta}
     lines = ["# Solution Design", ""]
 
-    # Title
     project_name = state.get("project_name", "Project")
     lines.append(f"## {project_name} — Solution Design")
     lines.append("")
 
-    # Specification summary
-    spec = state.get("artifacts", {}).get("spec_refined", "")
+    spec = merged.get("spec_refined", "")
     if spec:
-        lines.append("## Specification")
-        lines.append(spec)
-        lines.append("")
+        lines.extend(["## Specification", spec, ""])
 
-    # Implementation plan
-    plan = state.get("artifacts", {}).get("plan", "")
+    plan = merged.get("plan", "")
     if plan:
-        lines.append("## Implementation Plan")
-        lines.append(plan)
-        lines.append("")
+        lines.extend(["## Implementation Plan", plan, ""])
 
-    # Task breakdown
-    tasks = state.get("artifacts", {}).get("tasks", "")
+    tasks = merged.get("tasks", "")
     if tasks:
-        lines.append("## Task Breakdown")
-        lines.append(tasks)
-        lines.append("")
+        lines.extend(["## Task Breakdown", tasks, ""])
 
-    # Analysis
-    analysis = state.get("artifacts", {}).get("analysis", "")
+    analysis = merged.get("analysis", "")
     if analysis:
-        lines.append("## Cross-Artifact Analysis")
-        lines.append(analysis)
-        lines.append("")
+        lines.extend(["## Cross-Artifact Analysis", analysis, ""])
 
-    # Doubt resolution
-    doubt = state.get("artifacts", {}).get("doubt_resolution", "")
+    doubt = merged.get("doubt_resolution", "")
     if doubt:
-        lines.append("## Doubt Resolution")
-        lines.append(doubt)
-        lines.append("")
+        lines.extend(["## Doubt Resolution", doubt, ""])
 
-    # Checklist
-    checklist = state.get("artifacts", {}).get("checklist", "")
+    checklist = merged.get("checklist", "")
     if checklist:
-        lines.append("## Implementation Checklist")
-        lines.append(checklist)
-        lines.append("")
+        lines.extend(["## Implementation Checklist", checklist, ""])
 
-    # Architecture diagrams (embedded as mermaid)
-    diagrams = state.get("artifacts", {}).get("diagrams", {})
+    diagrams = merged.get("diagrams", {})
     if diagrams:
-        lines.append("## Architecture Diagrams")
-        lines.append("")
+        lines.extend(["## Architecture Diagrams", ""])
         for dtype, filepath in diagrams.items():
             lines.append(f"### {dtype.replace('-', ' ').title()}")
-            lines.append(f"``````mermaid")
+            lines.append("```mermaid")
             try:
                 diagram_content = Path(filepath).read_text()
                 lines.append(diagram_content)
             except Exception:
                 lines.append(f"(diagram file: {filepath})")
-            lines.append("``````")
+            lines.append("```")
             lines.append("")
 
-    # Metrics
-    lines.append("## Metrics")
-    metrics = state.get("metrics", {})
+    lines.extend(["## Metrics", ""])
+    metrics = state.get("metrics")
     if hasattr(metrics, "model_dump"):
         md = metrics.model_dump()
     else:
-        md = metrics
+        md = metrics or {}
     lines.append(f"- **Architectural Uncertainty**: {md.get('arch_uncertainty', 'N/A'):.2f}")
     lines.append(f"- **Task Count**: {md.get('task_count', 'N/A')}")
     lines.append(f"- **Diagram Count**: {md.get('diagram_count', 'N/A')}")
     lines.append("")
-
     lines.append("---")
     lines.append("*Generated by Loop Engineering PLAN phase*")
 

@@ -17,25 +17,21 @@ def seed_data_node(state: dict) -> dict:
 
     Currently passes through. Future: generate and insert seed data,
     fixtures, and initial database state based on project models.
+
+    Returns partial update dict (LangGraph reducer merges).
     """
-    state["phase"] = "SEED_DATA"
-    state["next_phase"] = "VERIFY"
-
-    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
-    audit.log_node_input("SEED_DATA", {
-        "is_placeholder": True,
-    })
-
     print("\n=== SEED_DATA PHASE (placeholder) ===")
     print("  → Seed data seeding not yet implemented — pass-through to VERIFY")
 
-    # Placeholder: no actual seeding performed yet
-    state["artifacts"].setdefault("seed_data", "").setdefault("status", "skipped_placeholder")
-    state["artifacts"]["seed_data_status"] = "skipped_placeholder"
-
+    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input("SEED_DATA", {"is_placeholder": True})
     audit.log_node_output("SEED_DATA", {
         "status": "skipped_placeholder",
         "note": "Will be implemented with real seeding logic",
     })
 
-    return state
+    return {
+        "phase": "SEED_DATA",
+        "next_phase": "VERIFY",
+        "artifacts": {"seed_data_status": "skipped_placeholder"},
+    }

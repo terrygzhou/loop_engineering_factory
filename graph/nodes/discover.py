@@ -1,12 +1,13 @@
 """
-DISCOVER node: Accept project description, collect user input via interview,
+DISCOVER nodes: Accept project description, collect user input via interview,
 generate discovery artifact for DEFINE phase.
 
-Uses LangGraph OOTB interrupt() for double-pause:
-  1. Project setup (name + description)
-  2. Interview questions (requirements gathering)
+Split into two nodes, each with ONE interrupt:
+  1. discover_setup_node — project setup (name + description + context folder)
+  2. discover_interview_node — interview questions + requirement.md generation
 
-Output: $project_folder/requirement.md — structured discovery artifact
+On resume, only the paused node re-runs (~30 lines vs ~100 lines in the old
+single-node design).
 """
 import json
 import os
@@ -20,60 +21,120 @@ from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
 
-def discover_node(state: dict) -> dict:
-    """
-    DISCOVER phase: Double-pause OOTB interrupt() node.
 
-    Pause 1: Project setup (name + description)
-    Pause 2: Interview questions (requirements gathering)
-
-    On resume, both values are available and the node completes normally.
+def discover_setup_node(state: dict) -> dict:
     """
-    # ── Auto-approve mode (headless Docker) ──
+    DISCOVER phase — Setup node.
+
+    Purpose: Collect project name, description, context folder.
+    Interrupt: Project setup form (once).
+    """
     auto_approve = _cfg.workflow.auto_approve
 
+    # ── Auto-approve: generate defaults ──
     if auto_approve:
-        return _discover_auto_approve(state)
-
-    # ── Set phase ──
-    state["phase"] = "DISCOVER"
-    state["next_phase"] = "DEFINE"
-
-    # ── Pause 1: Project setup ──
-    # Check if project_name is already in state (from previous resume)
-    project_name = state.get("project_name", "") or state.get("project_description", "")
-    if project_name:
-        # Already collected — skip pause 1, use state values
-        project_name = state["project_name"]
+        project_name = state.get("project_name") or "Untitled"
         project_description = state.get("project_description", "")
         context_folder = state.get("context_folder", "")
     else:
-        setup = interrupt({
-            "type": "project_setup",
-            "fields": [
-                {"key": "project_name", "label": "Project name", "required": True},
-                {"key": "project_description", "label": "Project description", "required": True},
-                {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
-            ],
-        })
-        project_name = setup.get("project_name", "")
-        project_description = setup.get("project_description", "")
-        context_folder = setup.get("context_folder", "")
+        # ── Check if already collected (resume skip) ──
+        if state.get("project_name"):
+            project_name = state["project_name"]
+            project_description = state.get("project_description", "")
+            context_folder = state.get("context_folder", "")
+        else:
+            # ── Pause: Project setup ──
+            setup = interrupt({
+                "type": "project_setup",
+                "fields": [
+                    {"key": "project_name", "label": "Project name", "required": True},
+                    {"key": "project_description", "label": "Project description", "required": True},
+                    {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
+                ],
+            })
+            project_name = setup.get("project_name", "")
+            project_description = setup.get("project_description", "")
+            context_folder = setup.get("context_folder", "")
 
-    state["project_name"] = project_name
-    state["project_description"] = project_description
-    state["context_folder"] = context_folder
+    # ── Derive project_folder ──
+    project_folder = state.get("project_folder", "")
+    if not project_folder:
+        workspace = _cfg.paths.workspace_dir
+        project_folder = os.path.join(workspace, project_name)
 
-    # ── Pause 2: Interview questions ──
-    # Check if interview already completed
-    if state.get("discover_interview_done") or state.get("interview_notes"):
-        # Already collected — skip pause 2
+    # ── Improve mode: override with live deployment ──
+    if state.get("improve_mode"):
+        telemetry = _load_improve_telemetry(state, project_name)
+        if telemetry:
+            deployed_path = telemetry["project_path"]
+            context_folder = deployed_path
+            project_folder = deployed_path
+            # Create project dirs for improve mode
+            project_dir = Path(project_folder)
+            project_dir.mkdir(parents=True, exist_ok=True)
+            (project_dir / "specs").mkdir(parents=True, exist_ok=True)
+            (project_dir / "build").mkdir(parents=True, exist_ok=True)
+            (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
+            return {
+                "project_name": project_name,
+                "project_description": project_description,
+                "context_folder": context_folder,
+                "project_folder": project_folder,
+                "project_path": project_folder,
+                "phase": "DISCOVER",
+                "next_phase": "DEFINE",
+                "artifacts": {"improve_telemetry": json.dumps(telemetry, indent=2)},
+            }
+
+    # ── Create project directories ──
+    project_dir = Path(project_folder)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "specs").mkdir(parents=True, exist_ok=True)
+    (project_dir / "build").mkdir(parents=True, exist_ok=True)
+    (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
+
+    return {
+        "project_name": project_name,
+        "project_description": project_description,
+        "context_folder": context_folder,
+        "project_folder": project_folder,
+        "project_path": project_folder,
+        "phase": "DISCOVER",
+        "next_phase": "DEFINE",
+    }
+
+
+def discover_interview_node(state: dict) -> dict:
+    """
+    DISCOVER phase — Interview node.
+
+    Purpose: Ask interview questions, generate requirement.md.
+    Interrupt: Interview questions (once).
+    """
+    auto_approve = _cfg.workflow.auto_approve
+
+    project_name = state.get("project_name", "Untitled")
+    project_description = state.get("project_description", "")
+    context_folder = state.get("context_folder", "")
+    project_folder = state.get("project_folder", "")
+    project_dir = Path(project_folder)
+
+    # ── Auto-approve: skip interview, generate defaults ──
+    if auto_approve:
+        interview_notes = (
+            f"Auto-generated interview for '{project_name}':\n"
+            f"Description: {project_description}\n"
+            f"Core behavior: Standard CRUD operations\n"
+            f"API surface: RESTful endpoints\n"
+        )
+    # ── Check if interview already completed (resume skip) ──
+    elif state.get("discover_interview_done") or state.get("interview_notes"):
         interview_notes = state.get("interview_notes", "")
     else:
-        # Wire interview-me skill for structured elicitation
+        # ── Pause: Interview questions ──
         skills = build_skill_registry(_cfg.workflow.skill_registry_path)
         interview_skill = skills.get("interview-me", {})
-        
+
         interview_prompts = (
             "Ask the following questions one at a time. Wait for each answer before moving on.\n"
             "If a question is not applicable, skip it.\n\n"
@@ -88,7 +149,7 @@ def discover_node(state: dict) -> dict:
             "8. edge_cases — Known edge cases?\n"
             "9. non_functional — Performance, security, or monitoring needs?\n"
         )
-        
+
         answers = interrupt({
             "type": "interview",
             "phase": "DISCOVER",
@@ -106,32 +167,6 @@ def discover_node(state: dict) -> dict:
             ],
         })
         interview_notes = answers.get("interview_notes", "")
-        state["discover_interview_done"] = True
-
-    # ── Derive project_folder ──
-    project_folder = state.get("project_folder", "")
-    if not project_folder:
-        workspace = _cfg.paths.workspace_dir
-        project_folder = os.path.join(workspace, project_name)
-        state["project_folder"] = project_folder
-    state["project_path"] = project_folder
-
-    # ── Improve mode
-    if state.get("improve_mode"):
-        telemetry = _load_improve_telemetry(state, project_name)
-        if telemetry:
-            deployed_path = telemetry["project_path"]
-            context_folder = deployed_path
-            project_folder = deployed_path
-            state["context_folder"] = deployed_path
-            state.setdefault("artifacts", {})["improve_telemetry"] = json.dumps(telemetry, indent=2)
-
-    # ── Create project directories ──
-    project_dir = Path(project_folder)
-    project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "specs").mkdir(parents=True, exist_ok=True)
-    (project_dir / "build").mkdir(parents=True, exist_ok=True)
-    (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
 
     # ── Scan existing codebase ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
@@ -149,52 +184,53 @@ def discover_node(state: dict) -> dict:
     req_path = project_dir / "requirement.md"
     req_path.write_text(requirement_md)
 
-    # Store artifacts
-    state["artifacts"]["project_context"] = json.dumps(context, indent=2, default=str)
-    state["artifacts"]["requirement_md"] = requirement_md
-    state["artifacts"]["requirement_path"] = str(req_path)
-    state["interview_notes"] = interview_notes
-    state["artifacts"]["interview_notes"] = interview_notes
-    state["discover_interview_done"] = True
+    # ── Return partial updates (reducers merge via _dict_merge) ──
+    artifacts = {
+        "project_context": json.dumps(context, indent=2, default=str),
+        "requirement_md": requirement_md,
+        "requirement_path": str(req_path),
+        "interview_notes": interview_notes,
+    }
 
     audit.log_node_output("DISCOVER", {
         "requirement_path": str(req_path),
-        "project_context_size": len(state["artifacts"]["project_context"]),
+        "project_context_size": len(artifacts["project_context"]),
         "interview_notes_collected": bool(interview_notes),
     })
 
-    state["phase"] = "DISCOVER"
-    state["next_phase"] = "DEFINE"
-    return state
+    return {
+        "interview_notes": interview_notes,
+        "discover_interview_done": True,
+        "artifacts": artifacts,
+        "phase": "DISCOVER",
+        "next_phase": "DEFINE",
+    }
+
+
+# ── Backward compatibility: alias to old single-node function ──
+
+def discover_node(state: dict) -> dict:
+    """Backward-compatible wrapper — delegates to setup then interview."""
+    result = discover_setup_node(state)
+    merged = {**state, **result}
+    return discover_interview_node(merged)
+
 
 def _discover_auto_approve(state: dict) -> dict:
-    """Auto-approve mode: generate default interview notes from project description."""
-    project_name = state.get("project_name", "Untitled")
-    project_description = state.get("project_description", "")
-    interview_notes = (
-        f"Auto-generated interview for '{project_name}':\n"
-        f"Description: {project_description}\n"
-        f"Core behavior: Standard CRUD operations\n"
-        f"API surface: RESTful endpoints\n"
-    )
-    state["interview_notes"] = interview_notes
-    state.setdefault("artifacts", {})["interview_notes"] = interview_notes
-    state["discover_interview_done"] = True
-    state["phase"] = "DISCOVER"
-    state["next_phase"] = "DEFINE"
-    from config.loader import config as _cfg
-    project_folder = state.get("project_folder", "") or os.path.join(
-        os.path.expanduser(_cfg.paths.workspace_dir),
-        project_name or "Untitled"
-    )
-    project_dir = Path(project_folder)
-    project_dir.mkdir(parents=True, exist_ok=True)
-    req_md = f"# {project_name} — Discovery Report\n\n## Overview\n{project_description}\n\n## Requirements\n{interview_notes}\n"
-    req_path = project_dir / "requirement.md"
-    req_path.write_text(req_md)
-    state["artifacts"]["requirement_md"] = req_md
-    state["artifacts"]["requirement_path"] = str(req_path)
-    return state
+    """Backward-compatible: auto-approve via the two-node pipeline."""
+    state = {
+        **state,
+        "phase": "DISCOVER",
+        "next_phase": "DEFINE",
+    }
+    if not state.get("project_name"):
+        state["project_name"] = "Untitled"
+    if not state.get("project_description"):
+        state["project_description"] = ""
+    result = discover_setup_node(state)
+    merged = {**state, **result}
+    return discover_interview_node(merged)
+
 
 # ── Helpers (unchanged) ──
 

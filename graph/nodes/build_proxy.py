@@ -22,7 +22,10 @@ class BuildProxy:
         self.client = httpx.AsyncClient(timeout=timeout)
 
     async def build(self, state: dict) -> dict:
-        """Submit a build to the builder service and poll until complete."""
+        """Submit a build to the builder service and poll until complete.
+
+        Returns partial update dict (LangGraph reducer merges).
+        """
         build_id = (
             f"{state['project_name']}-{state.get('cycle_id', 'local')}"
             f"-{uuid.uuid4().hex[:8]}"
@@ -30,8 +33,7 @@ class BuildProxy:
 
         artifacts = state.get("artifacts", {}) or {}
 
-        # ── Build request payload ──────────────────────────────────
-        # Load solution.md from PLAN phase — authority for tech stack detection
+        # ── Build request payload ──
         solution_md = artifacts.get("solution_md", "")
         if not solution_md and artifacts.get("solution_path"):
             try:
@@ -50,7 +52,7 @@ class BuildProxy:
             "solution_md": solution_md,
         }
 
-        # ── Submit build to builder ───────────────────────────────
+        # ── Submit build to builder ──
         response = await self.client.post(
             f"{self.builder_url}/api/build",
             json=req,
@@ -58,7 +60,7 @@ class BuildProxy:
         response.raise_for_status()
         print(f"  → [BUILD_PROXY] Build {build_id} submitted to builder")
 
-        # ── Poll until complete ───────────────────────────────────
+        # ── Poll until complete ──
         loop = asyncio.get_running_loop()
         start = loop.time()
 
@@ -81,10 +83,10 @@ class BuildProxy:
             elapsed = loop.time() - start
             if elapsed > BUILD_TIMEOUT:
                 print(f"  → [BUILD_PROXY] Build {build_id} timed out")
-                state["error"] = (
-                    f"Build proxy timeout after {BUILD_TIMEOUT}s"
-                )
-                return state
+                return {
+                    "error": f"Build proxy timeout after {BUILD_TIMEOUT}s",
+                    "phase": "BUILD",
+                }
 
             print(
                 f"  → [BUILD_PROXY] Build status: "
@@ -92,56 +94,65 @@ class BuildProxy:
                 f"({status.get('sub_phase', 'unknown')})"
             )
 
-    # ── Result merging ────────────────────────────────────────────
+    # ── Result merging ──
 
     @staticmethod
     def _merge_results(state: dict, build_status: dict) -> dict:
-        """Merge builder results back into the workflow state."""
-        artifacts = state.setdefault("artifacts", {})
+        """Merge builder results back as a partial state update."""
+        # Artifacts delta
+        artifacts_delta: dict[str, str] = {
+            "build_status": build_status["status"],
+            "build_progress": build_status.get("progress", []),
+            "build_errors": build_status.get("errors", []),
+            "build_artifacts": build_status.get("artifacts", {}),
+        }
 
-        artifacts["build_status"] = build_status["status"]
-        artifacts["build_progress"] = build_status.get("progress", [])
-        artifacts["build_errors"] = build_status.get("errors", [])
-        artifacts["build_artifacts"] = build_status.get("artifacts", {})
+        # Metrics update
+        current_metrics = state.get("metrics")
+        metrics_update = None
+        if current_metrics and hasattr(current_metrics, "model_copy"):
+            metrics_update = current_metrics.model_copy()
 
-        state["build_backlog"] = build_status.get("progress", [])
-
-        # Update metrics (CycleMetrics from pydantic)
-        metrics = state.get("metrics")
-        if metrics is not None and hasattr(metrics, "model_copy"):
-            state["metrics"] = metrics.model_copy()
-
-        state["phase"] = "BUILD"
-        # ── Retry guard: abort on consecutive failures ────────────
-        # Track at STATE top level so LangGraph shallow copy preserves it
+        # Retry guard
         fail_count = state.get("_build_fail_count", 0)
-        if build_status["status"] == "fail":
+        status = build_status["status"]
+        if status == "fail":
             fail_count += 1
-            state["_build_fail_count"] = fail_count
             if fail_count >= 3:
-                state["error"] = (
-                    f"Build failed {fail_count} times consecutively — "
-                    f"aborting to prevent infinite retry loop. "
-                    f"Errors: {build_status.get('errors', [])}"
-                )
-                state["next_phase"] = "REFLECT"  # Skip SHIP, go to REFLECT for diagnosis
-                return state
-        else:
-            state["_build_fail_count"] = 0
+                return {
+                    "phase": "BUILD",
+                    "error": (
+                        f"Build failed {fail_count} times consecutively — "
+                        f"aborting to prevent infinite retry loop. "
+                        f"Errors: {build_status.get('errors', [])}"
+                    ),
+                    "next_phase": "REFLECT",
+                    "artifacts": artifacts_delta,
+                    "_build_fail_count": fail_count,
+                }
 
-        state["next_phase"] = (
-            "SHIP" if build_status["status"] == "pass" else None
-        )
+        update: dict = {
+            "phase": "BUILD",
+            "artifacts": artifacts_delta,
+            "build_backlog": build_status.get("progress", []),
+        }
+        if metrics_update:
+            update["metrics"] = metrics_update
 
-        return state
+        if status == "pass":
+            update["next_phase"] = "SHIP"
+        elif status == "fail":
+            update["_build_fail_count"] = fail_count
 
-    # ── Lifecycle ─────────────────────────────────────────────────
+        return update
+
+    # ── Lifecycle ──
 
     async def close(self):
         await self.client.aclose()
 
 
-# ── Fallback: local build via build_subgraph ──────────────────────
+# ── Fallback: local build via build_subgraph ──
 def _build_local(state: dict) -> dict:
     """Run the build locally using the existing build_subgraph."""
     from graph.nodes.build_subgraph_legacy import (
@@ -156,7 +167,7 @@ def _build_local(state: dict) -> dict:
     return build_output_mapping(result)
 
 
-# ── Public factory ────────────────────────────────────────────────
+# ── Public factory ──
 def build_proxy_node(
     builder_url: str = "http://builder:8200",
 ) -> Callable[[dict], dict]:
@@ -165,11 +176,12 @@ def build_proxy_node(
 
     Tries the remote builder first. If unreachable, falls back to
     the local build_subgraph so the orchestrator never dead-ends.
+
+    Returns partial update dict (LangGraph reducer merges).
     """
     def _node(state: dict) -> dict:
         proxy = BuildProxy(builder_url)
         try:
-            # Try the remote builder
             loop = asyncio.new_event_loop()
             result = loop.run_until_complete(proxy.build(state))
             loop.run_until_complete(proxy.client.aclose())

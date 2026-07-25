@@ -286,14 +286,7 @@ def openhands_build_node(state: dict) -> dict:
     """
     LangGraph node: delegate BUILD to OpenHands agent-server.
 
-    Steps:
-    1. Configure client + ensure profile exists
-    2. POST /v1/chat/completions with build prompt
-    3. Poll for completion
-    4. Parse assistant text -> WorkflowState artifacts
-    5. Fallback if OpenHands fails
-
-    Returns: updated state dict with BUILD artifacts populated.
+    Returns partial update dict (LangGraph reducer merges).
     """
     oh_cfg = config.services.openhands
     gateway_url = oh_cfg.url
@@ -364,7 +357,6 @@ def openhands_build_node(state: dict) -> dict:
                     "  -> [OPENHANDS] Conversation %s timed out",
                     conv_id,
                 )
-                # Attempt fallback
                 return _fallback_legacy_build(state)
 
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
@@ -389,76 +381,73 @@ def openhands_build_node(state: dict) -> dict:
 
 def _merge_results(state: dict, parsed: dict) -> dict:
     """
-    Merge OpenHands parsed results into WorkflowState.
+    Merge OpenHands parsed results into WorkflowState as a partial update.
 
     This is the bridge between OpenHands text response and
     executor.py / edges.py quality gates.
     """
-    artifacts = state.setdefault("artifacts", {})
+    # -- Write files to disk immediately --
+    _write_generated_files(state, parsed.get("generated_code", []))
 
-    # -- Core artifacts (consumed by executor.py eval + edges.py gates) --
-    artifacts["build_status"] = parsed["build_status"]
-    artifacts["build_log"] = parsed["build_log"]
-    artifacts["test_results"] = parsed["test_results"]
-
-    # -- Generated code (for downstream phases) --
-    # Store as JSON-serializable list of file dicts
-    artifacts["generated_code_files"] = parsed["files_created"]
-    if parsed["generated_code"]:
-        # Write files to disk immediately (avoids in-memory accumulation)
-        _write_generated_files(state, parsed["generated_code"])
+    # -- Core artifacts delta --
+    artifacts_delta: dict[str, str] = {
+        "build_status": parsed["build_status"],
+        "build_log": parsed["build_log"],
+        "test_results": parsed["test_results"],
+        "generated_code_files": parsed["files_created"],
+        "build_errors": parsed["errors"],
+    }
 
     # -- UAT proxy: derive pass_rate from build_status --
-    # OpenHands runs real tests -- map status to pass rate
     status = parsed["build_status"]
     if status == "pass":
-        artifacts["uat_report"] = f"OpenHands agent completed successfully.\n{parsed['build_log']}"
-        state["metrics"] = state.get("metrics") or {}
-        if hasattr(state.get("metrics"), "model_copy"):
-            # Pydantic model -- update via model_copy
-            m = state["metrics"]
-            state["metrics"] = m.model_copy(update={"uat_pass_rate": 1.0})
-        else:
-            state["metrics"]["uat_pass_rate"] = 1.0
+        artifacts_delta["uat_report"] = f"OpenHands agent completed successfully.\n{parsed['build_log']}"
+        uat_pass_rate = 1.0
     elif status == "partial":
-        artifacts["uat_report"] = f"OpenHands agent completed with issues.\nErrors:\n" + "\n".join(parsed["errors"][:5])
-        state["metrics"] = state.get("metrics") or {}
-        if hasattr(state.get("metrics"), "model_copy"):
-            m = state["metrics"]
-            state["metrics"] = m.model_copy(update={"uat_pass_rate": 0.5})
-        else:
-            state["metrics"]["uat_pass_rate"] = 0.5
+        artifacts_delta["uat_report"] = f"OpenHands agent completed with issues.\nErrors:\n" + "\n".join(parsed["errors"][:5])
+        uat_pass_rate = 0.5
     else:
-        artifacts["uat_report"] = f"OpenHands agent failed.\nErrors:\n" + "\n".join(parsed["errors"])
-        state["metrics"] = state.get("metrics") or {}
-        if hasattr(state.get("metrics"), "model_copy"):
-            m = state["metrics"]
-            state["metrics"] = m.model_copy(update={"uat_pass_rate": 0.0})
-        else:
-            state["metrics"]["uat_pass_rate"] = 0.0
+        artifacts_delta["uat_report"] = f"OpenHands agent failed.\nErrors:\n" + "\n".join(parsed["errors"])
+        uat_pass_rate = 0.0
 
-    # -- Error tracking --
-    artifacts["build_errors"] = parsed["errors"]
+    # -- UAT pass rate via metrics update --
+    current_metrics = state.get("metrics")
+    metrics_update = None
+    if current_metrics and hasattr(current_metrics, "model_copy"):
+        metrics_update = current_metrics.model_copy(update={"uat_pass_rate": uat_pass_rate})
 
-    # -- Retry guard (same as build_proxy.py) --
+    # -- Retry guard --
     fail_count = state.get("_build_fail_count", 0)
     if status == "fail":
         fail_count += 1
-        state["_build_fail_count"] = fail_count
         if fail_count >= 3:
-            state["error"] = (
-                f"Build failed {fail_count} times consecutively -- "
-                f"aborting. Errors: {parsed['errors'][:3]}"
-            )
-            state["next_phase"] = "REFLECT"
-            return state
-    else:
-        state["_build_fail_count"] = 0
+            return {
+                "phase": "BUILD",
+                "error": (
+                    f"Build failed {fail_count} times consecutively -- "
+                    f"aborting. Errors: {parsed['errors'][:3]}"
+                ),
+                "next_phase": "REFLECT",
+                "artifacts": artifacts_delta,
+                "_build_fail_count": fail_count,
+            }
 
     # -- Next phase --
-    state["next_phase"] = "SHIP" if status == "pass" else None
-    state["phase"] = "BUILD"
-    state["superweb_mode"] = "agent"  # Tag: this build used agent mode
+    next_phase = "SHIP" if status == "pass" else None
+
+    update: dict = {
+        "phase": "BUILD",
+        "artifacts": artifacts_delta,
+        "superweb_mode": "agent",
+    }
+    if next_phase:
+        update["next_phase"] = next_phase
+    if metrics_update:
+        update["metrics"] = metrics_update
+    if status == "fail":
+        update["_build_fail_count"] = fail_count
+    else:
+        update["_build_fail_count"] = 0
 
     logger.info(
         "  -> [OPENHANDS] BUILD complete: status=%s, files=%d, errors=%d",
@@ -467,16 +456,15 @@ def _merge_results(state: dict, parsed: dict) -> dict:
         len(parsed["errors"]),
     )
 
-    return state
+    return update
 
 
-def _write_generated_files(state: dict, files: list[dict]) -> None:
+def _write_generated_files(state: dict, files: list[dict]) -> list[str]:
     """
     Write generated files to disk immediately.
 
     Writes to the project_path so downstream phases (SEED_DATA, VERIFY)
-    can access them. Also records file_paths in artifacts for Phase 2
-    filesystem-backed state.
+    can access them. Returns list of written paths.
     """
     project_path = state.get("project_path", "")
     written = []
@@ -494,8 +482,8 @@ def _write_generated_files(state: dict, files: list[dict]) -> None:
             logger.warning("Failed to write %s: %s", rel_path, e)
 
     if written:
-        state.setdefault("artifacts", {})["file_paths"] = written
         logger.info("  -> [OPENHANDS] Wrote %d files to disk", len(written))
+    return written
 
 
 # -- Public factory (same interface as build_proxy_node) --------------
