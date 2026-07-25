@@ -112,15 +112,12 @@ def reflect_node(state: dict) -> dict:
             print(f"  {i}. [{c.get('risk_level', 'high')}] {c.get('skill', '?')}: {c.get('change', '?')}")
             print(f"     Rationale: {c.get('rationale', 'N/A')}")
 
-        from api.input_manager import InputManager
-        im = InputManager()
-        request_id = im.request_input(
-            label="Apply config changes?",
-            prompt=f"Proposed {len(changes)} change(s). Apply? [y/N]",
-            timeout=300
-        )
-        response = im.wait_for_response(request_id)
-        approved = (response and response.strip().lower() in ('y', 'yes'))
+        from langgraph.types import interrupt as _interrupt
+        try:
+            resp = _interrupt({"type": "reflect_approval", "changes": changes})
+            approved = isinstance(resp, dict) and resp.get("approved", False)
+        except Exception:
+            approved = False  # Non-HIL mode: auto-reject
 
         if approved:
             print("  ✓ Changes approved — applying config diffs...")
