@@ -89,6 +89,7 @@ class WorkflowService:
             )
             state["artifacts"]["discover_hil_count"] = 0
             state["discover_interview_done"] = False
+            state["auto_approve_override"] = False  # Web UI always uses HIL
             wf["state"] = state
 
             current_phase = None

@@ -366,7 +366,7 @@ def openhands_build_node(state: dict) -> dict:
         )
         return _fallback_legacy_build(state)
     except httpx.HTTPStatusError as e:
-        if e.response.status_code in (502, 503, 504):
+        if e.response.status_code in (404, 502, 503, 504):
             logger.warning(
                 "  -> [OPENHANDS] Server error %d -- fallback",
                 e.response.status_code,

@@ -164,6 +164,7 @@ def build_executor_state(
         feedback_context="",
         interview_notes="",
         discover_interview_done=False,
+        auto_approve_override=None,
         trace_id="",
         audit_entries=[],
         build_backlog=None,
@@ -228,6 +229,7 @@ class WorkflowRunner:
             context_folder=context_folder,
             improve_mode=improve_mode,
         )
+        state["auto_approve_override"] = auto_approve
         if auto_approve:
             state["diagram_status"] = "approved"
 

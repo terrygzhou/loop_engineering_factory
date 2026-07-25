@@ -54,6 +54,9 @@ class WorkflowState(TypedDict):
     # ── Improve mode ──
     improve_mode: bool
 
+    # ── HIL control ──
+    auto_approve_override: Optional[bool]
+
     # ── DISCOVER: interview notes ──
     interview_notes: str
     discover_interview_done: bool

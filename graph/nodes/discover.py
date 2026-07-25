@@ -29,7 +29,8 @@ def discover_setup_node(state: dict) -> dict:
     Purpose: Collect project name, description, context folder.
     Interrupt: Project setup form (once).
     """
-    auto_approve = _cfg.workflow.auto_approve
+    # State override wins (Web UI forces HIL), then config fallback (CLI headless)
+    auto_approve = state.get("auto_approve_override", _cfg.workflow.auto_approve)
 
     # ── Auto-approve: generate defaults ──
     if auto_approve:
@@ -111,7 +112,8 @@ def discover_interview_node(state: dict) -> dict:
     Purpose: Ask interview questions, generate requirement.md.
     Interrupt: Interview questions (once).
     """
-    auto_approve = _cfg.workflow.auto_approve
+    # State override wins (Web UI forces HIL), then config fallback (CLI headless)
+    auto_approve = state.get("auto_approve_override", _cfg.workflow.auto_approve)
 
     project_name = state.get("project_name", "Untitled")
     project_description = state.get("project_description", "")

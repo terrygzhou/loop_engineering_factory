@@ -192,10 +192,45 @@ def _estimate_arch_uncertainty(artifacts: dict) -> float:
     return max(0.0, min(1.0, score))
 
 
+# ── Inline skill instructions for diagram generation (fallback) ──
+_DIAGRAM_SKILL_INSTRUCTIONS = """You are an architecture diagram generator. Your job is to produce valid Mermaid syntax diagrams.
+
+Rules:
+- Output ONLY a Mermaid code block, nothing else.
+- Use the appropriate Mermaid diagram type for the request.
+- Include all components, relationships, and data flows mentioned in the context.
+- Mark assumed components with a note.
+
+Diagram type mappings:
+- "component" → use `graph TD` with subgraphs for modules/boundaries
+- "sequence" → use `sequenceDiagram` with participant interactions
+- "data flow" → use `graph LR` or `graph TD` showing entity relationships and data movement
+- "deployment" → use `graph TD` with infrastructure nodes (servers, containers, networks)"""
+
+def _load_local_diagram_skill() -> str | None:
+    """Load architecture-diagram-generator skill from local project skills dir."""
+    local_path = Path(__file__).resolve().parent.parent.parent / "skills" / "architecture-diagram-generator" / "SKILL.md"
+    if local_path.exists():
+        return local_path.read_text().split("---", 2)[-1].strip()
+    return None
+
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
+    # 1) Try the registered skill first
     arch_skill = skills.get("architecture-diagram-generator", {})
-    if not arch_skill:
-        return f"# {diagram_type} - skill not available"
+    skill_content = arch_skill.get("content", "") if arch_skill else ""
+
+    # 2) Fall back to local project skill
+    if not skill_content:
+        local = _load_local_diagram_skill()
+        if local:
+            print(f"  → Using local architecture-diagram-generator skill")
+            skill_content = local
+
+    # 3) Fall back to inline instructions + LLM
+    if not skill_content:
+        print(f"  → No diagram skill found; using inline LLM generation")
+        skill_content = _DIAGRAM_SKILL_INSTRUCTIONS
+
     spec = state.get("artifacts", {}).get("spec_refined", "")[:bounds.context.diagram_spec_chars]
     plan = state.get("artifacts", {}).get("plan", "")[:bounds.context.diagram_plan_chars]
     tasks = state.get("artifacts", {}).get("tasks", "")[:bounds.context.diagram_tasks_chars]
@@ -203,7 +238,7 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     context = f"Spec:\n{spec}\n\nPlan:\n{plan}\n\nTasks:\n{tasks}\n\nDoubt Resolution:\n{doubt}"
     task = f"Generate a {diagram_type} diagram as a Mermaid graph. Include all components, relationships, and data flows. Use the spec and plan as the primary source of truth."
     diagram = invoke_skill(
-        arch_skill["content"],
+        skill_content,
         task,
         context,
         llm=None,
@@ -295,14 +330,50 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
 
 
 def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
-    """Generate comprehensive solution.md from all PLAN artifacts."""
+    """Generate comprehensive solution.md from all PLAN artifacts.
+
+    Always produces meaningful output — falls back to state-level data
+    (project_description, project_context, interview_notes, requirement_md)
+    when LLM-generated artifacts are missing or empty.
+    """
     merged = {**state.get("artifacts", {}), **artifacts_delta}
+
+    # ── Diagnostic logging ──
+    artifact_keys = ["spec_refined", "plan", "tasks", "analysis", "doubt_resolution", "checklist"]
+    available = [k for k in artifact_keys if merged.get(k)]
+    missing = [k for k in artifact_keys if not merged.get(k)]
+    if missing:
+        print(f"  ⚠ Solution.md: missing artifacts: {', '.join(missing)}")
+    if available:
+        print(f"  ✓ Solution.md: has artifacts: {', '.join(available)}")
+
     lines = ["# Solution Design", ""]
 
     project_name = state.get("project_name", "Project")
     lines.append(f"## {project_name} — Solution Design")
     lines.append("")
 
+    # ── Always include project description ──
+    project_desc = state.get("project_description", "")
+    if project_desc:
+        lines.extend(["## Project Description", project_desc, ""])
+
+    # ── Always include interview notes (source requirements from DISCOVER) ──
+    interview = merged.get("interview_notes", "")
+    if interview:
+        lines.extend(["## Interview Notes", interview, ""])
+
+    # ── Always include project context from DISCOVER (if spec not generated) ──
+    project_context = merged.get("project_context", "")
+    if project_context and not merged.get("spec_refined"):
+        lines.extend(["## Project Context (from DISCOVER)", project_context, ""])
+
+    # ── Always include requirement_md (if spec not generated) ──
+    requirement_md = merged.get("requirement_md", "")
+    if requirement_md and not merged.get("spec_refined"):
+        lines.extend(["## Requirements", requirement_md, ""])
+
+    # ── LLM-generated artifacts (spec, plan, tasks, etc.) ──
     spec = merged.get("spec_refined", "")
     if spec:
         lines.extend(["## Specification", spec, ""])
@@ -327,6 +398,12 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
     if checklist:
         lines.extend(["## Implementation Checklist", checklist, ""])
 
+    # ── API contract (from DEFINE phase) ──
+    api_contract = merged.get("api_contract", "")
+    if api_contract:
+        lines.extend(["## API Contract", api_contract, ""])
+
+    # ── Architecture diagrams ──
     diagrams = merged.get("diagrams", {})
     if diagrams:
         lines.extend(["## Architecture Diagrams", ""])
@@ -341,16 +418,34 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
             lines.append("```")
             lines.append("")
 
+    # ── Metrics (safe formatting — handles non-numeric values) ──
     lines.extend(["## Metrics", ""])
     metrics = state.get("metrics")
     if hasattr(metrics, "model_dump"):
         md = metrics.model_dump()
     else:
         md = metrics or {}
-    lines.append(f"- **Architectural Uncertainty**: {md.get('arch_uncertainty', 'N/A'):.2f}")
-    lines.append(f"- **Task Count**: {md.get('task_count', 'N/A')}")
-    lines.append(f"- **Diagram Count**: {md.get('diagram_count', 'N/A')}")
+
+    arch_unc = md.get("arch_uncertainty", "N/A")
+    if isinstance(arch_unc, (int, float)):
+        lines.append(f"- **Architectural Uncertainty**: {arch_unc:.2f}")
+    else:
+        lines.append(f"- **Architectural Uncertainty**: {arch_unc}")
+
+    task_count = md.get("task_count", "N/A")
+    lines.append(f"- **Task Count**: {task_count}")
+    diagram_count = md.get("diagram_count", "N/A")
+    lines.append(f"- **Diagram Count**: {diagram_count}")
     lines.append("")
+
+    # ── Note about missing artifacts ──
+    if missing:
+        lines.extend([
+            "## Notes",
+            f"*Artifacts not generated (may need LLM connection or skill configuration):* {', '.join(missing)}",
+            "",
+        ])
+
     lines.append("---")
     lines.append("*Generated by Loop Engineering PLAN phase*")
 

@@ -6,6 +6,17 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _truncate(value, limit: int = 500):
+    """Safely truncate any value type for JSON storage."""
+    if isinstance(value, str):
+        return value[:limit]
+    if isinstance(value, dict):
+        return json.dumps(value)[:limit]
+    if isinstance(value, list):
+        return json.dumps(value)[:limit]
+    return str(value)[:limit]
+
+
 class FeedbackAggregator:
     """Collects and stores feedback from workflow cycles."""
 
@@ -23,7 +34,7 @@ class FeedbackAggregator:
             "phase": phase,
             "timestamp": datetime.now().isoformat(),
             "metrics": metrics,
-            "artifacts": {k: v[:500] for k, v in artifacts.items()},  # Truncate for storage
+            "artifacts": {k: _truncate(v, 500) for k, v in artifacts.items()},
             "feedback": feedback,
         }
 
