@@ -31,6 +31,8 @@ services:
       - chromadb
       - otel-collector
     restart: unless-stopped
+    networks:
+      - loop_factory_network
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
       interval: 30s
@@ -114,6 +116,8 @@ services:
       - "pop-os:host-gateway"
     depends_on:
       - loop
+    networks:
+      - loop_factory_network
   promtail:
     image: grafana/promtail:3.0.0
     volumes:
@@ -136,6 +140,8 @@ volumes:
 # Bridge to the existing Grafana observability stack (Loki, Prometheus, Grafana)
 networks:
   loop_factory_default:
+    driver: bridge
+  loop_factory_network:
     driver: bridge
   grafana-stack_observability:
     external: true

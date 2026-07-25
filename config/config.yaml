@@ -71,13 +71,13 @@ workflow:
 
 superweb:
   mode: agent
-  openhands_url: http://openhands:8000
-  openhands_port: 3005
+  openhands_url: http://openhands-server:8000
+  openhands_port: 8000
   agent_conversations: 3
   agent_timeout_seconds: 3600
 
 openhands:
-  url: http://openhands:8000
+  url: http://openhands-server:8000
   secret_key: changeme  # MUST be changed to a strong secret before production
   workspace_path: /opt/workspace_base/output
   timeout: 3600
