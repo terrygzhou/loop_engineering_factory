@@ -15,6 +15,55 @@ from config.bounds_loader import bounds
 from langgraph.types import interrupt
 from tools.audit_logger import AuditLog
 
+import re
+
+
+def _extract_task_breakdown(plan_text: str) -> list:
+    """Extract structured task items from plan text.
+
+    Matches:
+      - Checklist items: lines starting with '- [' or '- ["'
+      - Numbered lists: lines starting with '1.', '2.', etc.
+      - Lines containing 'task' or 'milestone' (case-insensitive)
+    """
+    if not plan_text:
+        return []
+    tasks: list[str] = []
+    seen: set[str] = set()
+    for line in plan_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = False
+        # Checklist items: - [ ], - [x], - [task], etc.
+        if re.match(r"^\s*-\s*\[", stripped):
+            match = True
+        # Numbered lists: 1. something, 10. something
+        elif re.match(r"^\s*\d+\.\s", stripped):
+            match = True
+        # Lines containing task/milestone keywords
+        elif re.search(r"\b(task|milestone)\b", stripped, re.IGNORECASE):
+            match = True
+        if match:
+            # Clean up leading markdown artifacts
+            clean = re.sub(r"^\s*[-*]\s*\[[ xX?\]]\s*", "", stripped)
+            clean = re.sub(r"^\s*\d+\.\s+", "", clean)
+            clean = clean.strip()
+            if clean and clean not in seen:
+                seen.add(clean)
+                tasks.append(clean)
+    return tasks
+
+
+def _spec_summary(spec_text: str, max_chars: int = 500) -> str:
+    """Return a concise summary of the spec (first N characters)."""
+    if not spec_text:
+        return ""
+    truncated = spec_text[:max_chars].strip()
+    if len(spec_text) > max_chars:
+        truncated += " ..."
+    return truncated
+
 
 def review_node(state: dict) -> dict:
     """
@@ -47,6 +96,13 @@ def review_node(state: dict) -> dict:
 
     # ── Build interrupt payload ──
     artifacts = state.get("artifacts", {})
+
+    # ── Extract task breakdown and spec summary ──
+    plan_text = artifacts.get("plan", "")
+    spec_refined_text = artifacts.get("spec_refined", "")
+    task_breakdown = _extract_task_breakdown(plan_text)
+    spec_summary = _spec_summary(spec_refined_text)
+
     diagrams = artifacts.get("diagrams", {})
     diagram_pngs = artifacts.get("diagram_pngs", {})
 
@@ -62,6 +118,7 @@ def review_node(state: dict) -> dict:
     # Key metrics
     metrics = state.get("metrics")
     arch_uncertainty = getattr(metrics, "arch_uncertainty", 0.0) if metrics else 0.0
+    spec_confidence = getattr(metrics, "spec_confidence", 0.0) if metrics else 0.0
     task_count = getattr(metrics, "task_count", 0) if metrics else 0
     diagram_count = getattr(metrics, "diagram_count", 0) if metrics else 0
 
@@ -76,8 +133,10 @@ def review_node(state: dict) -> dict:
         # Artifacts for display
         "solution_md": artifacts.get("solution_md", ""),
         "spec_refined": artifacts.get("spec_refined", ""),
+        "spec_summary": spec_summary,
         "plan": artifacts.get("plan", ""),
         "tasks": artifacts.get("tasks", ""),
+        "task_breakdown": task_breakdown,
         "analysis": artifacts.get("analysis", ""),
         "doubt_resolution": artifacts.get("doubt_resolution", ""),
         "checklist": artifacts.get("checklist", ""),
@@ -88,6 +147,7 @@ def review_node(state: dict) -> dict:
         # Metrics summary
         "metrics": {
             "arch_uncertainty": round(arch_uncertainty, 2),
+            "spec_confidence": round(spec_confidence, 2),
             "task_count": task_count,
             "diagram_count": diagram_count,
         },

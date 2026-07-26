@@ -2,7 +2,7 @@
 DEFINE node: Generate spec and API contracts from interview notes collected in DISCOVER.
 Fully automatic — no user input required (interview is in DISCOVER phase).
 
-Skills: writing-plans (spec generation) → api-and-interface-design
+Skills: spec-driven-development (spec generation) → api-and-interface-design
 """
 import re
 from pathlib import Path
@@ -81,9 +81,9 @@ def define_node(state: dict) -> dict:
 
     # ── Step 2: Generate/refine spec (structured with traceability + ToT→CoT) ──
     spec_result = None
-    spec_skill = skills.get("writing-plans", {})
+    spec_skill = skills.get("spec-driven-development", {})
     if spec_skill:
-        print("  → Running writing-plans for spec generation...")
+        print("  → Running spec-driven-development for spec generation...")
         context = f"Spec path: {state.get('spec_path', '')}\n"
         if project_context:
             context += f"Existing project context:\n{project_context}\n"
@@ -98,11 +98,11 @@ def define_node(state: dict) -> dict:
         optimized = prepare_context_for_llm({"context": context}, max_tokens=bounds.context.define_max_tokens)
         spec_result = invoke_skill(
             spec_skill["content"],
-            "Produce a complete, actionable specification. Include user stories with acceptance criteria, edge cases, non-functional requirements, and out-of-scope items.",
+            "Produce structured spec with all 6 core areas: objective, commands, project structure, code style, testing strategy, boundaries. Include success criteria and out-of-scope items.",
             optimized["context"], llm=None,
             workflow_id=project_name, phase="DEFINE"
         )
-        feedback_entries.append({"skill": "writing-plans", "output": spec_result[:bounds.feedback.max_feedback_entry_chars]})
+        feedback_entries.append({"skill": "spec-driven-development", "output": spec_result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Step 3: API/interface design (multi-interface, contract-first + ToT→CoT) ──
     api_result = None
