@@ -67,7 +67,7 @@ workflow:
   # Set to false for HIL mode — the node will interrupt() for human review.
   hil_mode: auto
   max_retries: 2
-  skill_registry_path: ~/.hermes/skills
+  skill_registry_path: /app/skills
 
 superweb:
   mode: agent
