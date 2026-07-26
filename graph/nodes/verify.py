@@ -201,6 +201,7 @@ def verify_node(state: dict) -> dict:
 
                 # ── Invoke code-review skill ──
                 print("  → Running code-review-and-quality review...")
+                cr_timer = SkillTimer(state, "code-review-and-quality")
                 review_text = invoke_skill(
                     cr_skill["content"],
                     (
@@ -215,6 +216,7 @@ def verify_node(state: dict) -> dict:
                     workflow_id=state.get("project_name", ""),
                     phase="VERIFY",
                 )
+                cr_timer.complete()
 
                 # ── Parse results ──
                 findings = _parse_review_result(review_text)

@@ -85,6 +85,7 @@ def define_node(state: dict) -> dict:
     spec_skill = skills.get("spec-driven-development", {})
     if spec_skill:
         print("  → Running spec-driven-development for spec generation...")
+        spec_timer = SkillTimer(state, "spec-driven-development")
         context = f"Spec path: {state.get('spec_path', '')}\n"
         if project_context:
             context += f"Existing project context:\n{project_context}\n"
@@ -103,6 +104,7 @@ def define_node(state: dict) -> dict:
             optimized["context"], llm=None,
             workflow_id=project_name, phase="DEFINE"
         )
+        spec_timer.complete()
         feedback_entries.append({"skill": "spec-driven-development", "output": spec_result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Step 3: Source-driven development — codebase-aware spec grounding ──
@@ -110,6 +112,7 @@ def define_node(state: dict) -> dict:
     source_skill = skills.get("source-driven-development", {})
     if source_skill:
         print("  → Running source-driven-development for codebase-aware spec generation...")
+        source_timer = SkillTimer(state, "source-driven-development")
         src_context = f"Project type: {project_context}\n"
         if spec_result:
             src_context += f"Spec draft:\n{spec_result}\n"
@@ -121,6 +124,7 @@ def define_node(state: dict) -> dict:
             src_context, llm=None,
             workflow_id=project_name, phase="DEFINE"
         )
+        source_timer.complete()
         feedback_entries.append({"skill": "source-driven-development", "output": source_result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Step 4: API/interface design (multi-interface, contract-first + ToT→CoT) ──
@@ -128,12 +132,14 @@ def define_node(state: dict) -> dict:
     api_skill = skills.get("api-and-interface-design", {})
     if api_skill:
         print("  → Running api-and-interface-design...")
+        api_timer = SkillTimer(state, "api-and-interface-design")
         task = api_and_interface_design
         api_result = invoke_skill(
             api_skill["content"], task,
             state.get("artifacts", {}).get("spec_refined", ""),
             llm=None, workflow_id=project_name, phase="DEFINE"
         )
+        api_timer.complete()
         feedback_entries.append({"skill": "api-and-interface-design", "output": api_result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Persist to $project_folder/specs/ ──

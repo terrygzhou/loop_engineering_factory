@@ -191,6 +191,7 @@ def discover_interview_node(state: dict) -> dict:
         interview_notes=interview_notes,
         context=context,
         project_folder=project_folder,
+        state=state,
     )
 
     req_path = project_dir / "requirement.md"
@@ -270,14 +271,14 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
         "git": {"branch": "greenfield"}, "docker": {"services": []}, "specs": {},
     }
 
-def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder):
+def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder, state: dict = None):
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     fabric_skill = skills.get("fabric-prompts", {})
 
     # Wire coding-principles as context-aware refinement
     principles_skill = skills.get("coding-principles", {})
     principles_context = ""
-    if principles_skill and project_description:
+    if principles_skill and project_description and state:
         principles_prompt = (
             f"Given this project context, extract relevant coding principles:\n"
             f"Project: {project_name}\n"
@@ -285,7 +286,9 @@ def _generate_requirement_via_fabric(project_name, project_description, intervie
             f"Type: {context.get('project_type', 'greenfield')}\n\n"
             "Output key technical principles and conventions that should guide implementation."
         )
+        timer = SkillTimer(state, "coding-principles")
         principles_context = invoke_skill(principles_skill["content"], principles_prompt, "", llm=None)
+        timer.complete()
         principles_context = f"\n\n## Coding Principles\n{principles_context[:1000]}\n"
 
     if fabric_skill:
@@ -297,7 +300,9 @@ def _generate_requirement_via_fabric(project_name, project_description, intervie
             f"Output: Markdown with sections: Project Overview, Core Behavior, "
             f"Data Model, API Surface, Integration Requirements, Non-Functional, Edge Cases, Constraints"
         )
+        fabric_timer = SkillTimer(state, "fabric-prompts")
         result = invoke_skill(fabric_skill["content"], fabric_prompt, "", llm=None)
+        fabric_timer.complete()
         md = result.strip()
         if md.startswith("```"):
             md = re.sub(r'^```[a-z]*\n', '', md).rstrip('`')
@@ -467,6 +472,8 @@ def _refine_idea(interview_notes: str, project_name: str, project_description: s
     )
     result = invoke_skill(refine_skill["content"], prompt, "", llm=None,
                           workflow_id=state.get("project_name", ""), phase="DISCOVER")
+    timer = SkillTimer(state, "idea-refine")
+    timer.complete()
     print(f"  → idea-refine produced {len(result)} chars")
     return result
 
@@ -488,6 +495,8 @@ def _build_context(interview_notes: str, project_name: str, project_description:
     )
     result = invoke_skill(ctx_skill["content"], prompt, "", llm=None,
                           workflow_id=state.get("project_name", ""), phase="DISCOVER")
+    ctx_timer = SkillTimer(state, "context-engineering")
+    ctx_timer.complete()
     print(f"  → context-engineering produced {len(result)} chars")
     return result
 

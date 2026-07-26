@@ -60,6 +60,7 @@ def plan_node(state: dict) -> dict:
     plan_result = None
     if plan_skill:
         print("  → Running planning-and-task-breakdown...")
+        plan_timer = SkillTimer(state, "planning-and-task-breakdown")
         optimized = prepare_context_for_llm({"context": base_context}, max_tokens=bounds.context.plan_max_tokens)
         plan_result = invoke_skill(
             plan_skill["content"],
@@ -67,6 +68,7 @@ def plan_node(state: dict) -> dict:
             optimized["context"],
             llm=None
         )
+        plan_timer.complete()
         artifacts_delta["plan"] = plan_result[:bounds.artifacts.max_plan_chars]
         # Store structured task breakdown as separate artifact for downstream phases
         # "task_breakdown" = detailed structure, "tasks" = compat key for solution.md + BUILD
@@ -79,12 +81,14 @@ def plan_node(state: dict) -> dict:
     doubt_result = None
     if doubt_skill:
         print("  → Running doubt-driven-development...")
+        doubt_timer = SkillTimer(state, "doubt-driven-development")
         doubt_result = invoke_skill(
             doubt_skill["content"],
             "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only.",
             artifacts_delta.get("plan", state.get("artifacts", {}).get("plan", ""))[:bounds.artifacts.max_analysis_chars],
             llm=None
         )
+        doubt_timer.complete()
         artifacts_delta["doubt_resolution"] = doubt_result[:bounds.artifacts.max_doubt_chars]
         feedback_entries.append({"skill": "doubt-driven-development", "output": doubt_result[:bounds.feedback.max_feedback_entry_chars]})
 
