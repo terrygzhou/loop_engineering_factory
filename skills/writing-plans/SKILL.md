@@ -45,7 +45,7 @@ Before writing tasks, produce these deliverables in sequence:
 **1. Feature Specification** (`design/<feature>_spec.md`)
 - User requirements mapped to implementation requirements
 - Integration points with existing models
-- Pricing engine, state machine, field mapping
+- Core domain logic, state transitions, data mappings
 - Constraints and decisions
 
 **2. UI Plan** (`design/<feature>_ui_plan.md`)
@@ -68,7 +68,14 @@ Before writing tasks, produce these deliverables in sequence:
 - `cascade="all, delete-orphan"` on child entities
 - Register in `__init__.py` with `__all__` list
 
-**Key conventions for FastAPI + Jinja2 SSR projects:**
+---
+
+> **Tip:** Use the "When Using FastAPI + Jinja2" section below if your project runs on that stack.
+
+## When Using FastAPI + Jinja2
+
+If your project is built on FastAPI with Jinja2 server-side rendering, consider these conventions:
+
 - Use `Depends(get_current_user_id)` for auth (not JWT middleware)
 - Use `AsyncSession` via `Depends(get_db)` (not sync sessions)
 - UUID primary keys: `Uuid, primary_key=True, default=uuid.uuid4`
@@ -76,8 +83,8 @@ Before writing tasks, produce these deliverables in sequence:
 - Enums: `SAEnum(Enum, values_callable=lambda e: [v.value for v in e])`
 - Timestamps: `server_default=func.now()`, `onupdate=func.now()`
 - Foreign keys: `index=True` on all FK columns
-- Separate models for hiring vs purchase (Payment, Document) — different lifecycles
-- Snapshot pricing on transaction entities (immutable at creation time)
+- Separate models for domain entities with different lifecycles
+- Immutable snapshots on transactional entities where historical state matters
 - Bidirectional relationship patch: place at module bottom to avoid forward reference issues
 
 ## Bite-Sized Task Granularity
@@ -391,7 +398,7 @@ When executing, use the `subagent-driven-development` skill:
 - UX exploration patterns for reference sites
 - SQLAlchemy model conventions (UUID PKs, Numeric precision, Enum storage)
 - Cascade patterns and bidirectional relationship patching
-- Snapshot pricing pattern for immutable transaction pricing
+- Snapshot patterns for immutable transactional data
 - Separate model decisions for domain-specific entities
 
 ## Remember
