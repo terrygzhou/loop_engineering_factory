@@ -5,7 +5,7 @@ description: >
   CLAIM → DOUBT → RECONCILE cycle. Before committing to any design
   decision, spawn a mental "devil's advocate" subagent to challenge
   assumptions. Prevents blind spots and groupthink in software
-  architecture. Optimized for FastAPI + Jinja2 + Docker projects.
+  architecture. Framework-agnostic.
 version: 1.0.0
 author: hermes
 triggers:
@@ -42,11 +42,12 @@ but fail under real-world conditions.
 Articulate the decision clearly and concisely:
 
 ```
-CLAIM: We should use SQLAlchemy ORM for database access in the FastAPI
-service instead of raw SQL or asyncpg directly.
+CLAIM: We should use an event-driven architecture with a message broker
+for inter-service communication instead of synchronous REST calls.
 
-REASONING: It provides type safety, migrations via Alembic, and
-integrates cleanly with Pydantic models for request/response validation.
+REASONING: Decoupling services via events improves resilience — services
+can process messages independently, scale horizontally, and survive
+temporary network partitions without cascading failures.
 ```
 
 The claim must include:
@@ -75,12 +76,14 @@ proposed decision. Ask hard questions:
 Example doubt:
 
 ```
-DOUBT: SQLAlchemy ORM adds a significant abstraction layer. For a
-FastAPI service that primarily does CRUD operations with well-defined
-schemas, raw asyncpg or SQLAlchemy Core might be simpler, faster, and
-easier to debug. The ORM's lazy loading can cause N+1 query problems
-in list endpoints, and the abstraction can make it harder to reason
-about actual SQL queries during performance tuning.
+DOUBT: Event-driven architectures add significant operational complexity.
+You now need a message broker to deploy, monitor, and maintain. Debugging
+becomes harder — trace IDs must flow across async boundaries, and
+reproducing issues requires replaying message sequences. For a system
+where most operations are straightforward request-response patterns,
+the added indirection may not be justified. Synchronous calls are
+simpler to understand, easier to test, and avoid the "event storm"
+problem where messages cascade uncontrollably.
 ```
 
 ### 3. RECONCILE — Resolve and commit
@@ -88,14 +91,15 @@ about actual SQL queries during performance tuning.
 Synthesize the claim and doubt into a final decision:
 
 ```
-RECONCILE: We'll use SQLAlchemy Core (not ORM) with Alembic migrations.
-This gives us type safety and migration management without the
-overhead and hidden complexity of the ORM. For the 20% of cases where
-we need complex joins, we'll write explicit SQL. We'll add a
-repository layer to abstract the database backend.
+RECONCILE: We'll use a hybrid approach — synchronous REST calls for
+real-time user-facing operations, and a lightweight event bus (not a
+full message broker) for background tasks and audit logging. This
+keeps the core flow simple while still decoupling non-critical work.
 
-MITIGATION: We'll add query logging in development to catch N+1 issues
-early, and define a strict interface for the repository layer.
+MITIGATION: We'll implement structured correlation IDs across both sync
+and async paths, add comprehensive integration tests for the event bus,
+and document clear boundaries for which operations are synchronous
+versus asynchronous.
 ```
 
 The reconciliation must include:
@@ -104,17 +108,17 @@ The reconciliation must include:
 - Specific mitigations for the doubts raised
 - Explicit acceptance of any remaining risks
 
-## Application to FastAPI + Jinja2 + Docker
+## Common Decision Points
 
 Common decision points that benefit from doubt-driven development:
 
-- **Database choice** — PostgreSQL vs. SQLite vs. no database
-- **Authentication** — JWT vs. session-based vs. OAuth
-- **Template strategy** — Jinja2 vs. returning JSON for a frontend
-- **Docker structure** — Single image vs. multi-stage build vs. compose
-- **Caching layer** — In-memory dict vs. Redis vs. no caching
-- **Task queue** — Background tasks vs. Celery vs. simple cron
-- **Configuration** — Environment variables vs. config files vs. both
+- **Data storage** — Relational DB vs. document store vs. in-memory cache
+- **Communication pattern** — Synchronous REST vs. message queue vs. GraphQL
+- **Service topology** — Monolith vs. modular monolith vs. microservices
+- **Deployment** — Single container vs. multi-stage build vs. service mesh
+- **Caching strategy** — In-memory vs. distributed cache (Redis/Memcached) vs. HTTP caching
+- **Background processing** — In-process workers vs. task queue vs. scheduled jobs
+- **Configuration management** — Environment variables vs. config files vs. remote config
 
 ## Pitfalls
 
