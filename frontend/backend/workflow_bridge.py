@@ -139,7 +139,7 @@ class WorkflowBridge:
         self._lock = asyncio.Lock()
         self._run_task: Optional[asyncio.Task] = None
         self._aborted = False
-        self._auto_approve = False
+        self._auto_approve = self._get_auto_approve()
         self._seen_artifacts: Dict[str, Any] = {}
         self._use_real_workflow = False
         self._build_graph = None
@@ -164,6 +164,14 @@ class WorkflowBridge:
                 "artifacts": {},
                 "messages": [],
             }
+
+    def _get_auto_approve(self) -> bool:
+        """Read auto_approve from config (CLI auto-approves; Web UI may override)."""
+        try:
+            from config.loader import config as _cfg
+            return getattr(_cfg.workflow, "auto_approve", False)
+        except Exception:
+            return False
 
     def _load_persisted_inputs(self) -> Dict[str, Any]:
         """Load persisted user inputs from disk (survives restarts)."""
@@ -935,8 +943,11 @@ class WorkflowBridge:
 
                     # DISCOVER interrupts (project_setup, interview) fire before any regular chunk
                     # arrives, so _last_phase is still None. Detect them by type.
+                    # ARCH_REVIEW interrupt fires before its phase chunk arrives too — detect by type.
                     if interrupted_type in ("project_setup", "interview"):
                         interrupted_phase = "DISCOVER"
+                    elif interrupted_type == "review":
+                        interrupted_phase = "ARCH_REVIEW"
                     else:
                         interrupted_phase = self._last_phase or state.get("phase", "UNKNOWN")
 
@@ -965,11 +976,8 @@ class WorkflowBridge:
                         await self.broadcast(ev)
                     elif interrupted_phase == "DISCOVER" and hil_type == "interview":
                         await self._send_interview(interrupted_phase)
-                    elif interrupted_phase == "ARCH_REVIEW" or interrupted_type == "review":
-                        # ARCH_REVIEW may still show phase="PLAN" in checkpoint because ARCH_REVIEW's
-                        # state["phase"]="ARCH_REVIEW" isn't visible in aget_state() until resume.
-                        # interrupted_type carries the real interrupt type ("review") from the payload.
-                        print(f"  → ARCH_REVIEW HIL detected (phase={interrupted_phase}, type={interrupted_type})", flush=True)
+                    elif interrupted_phase == "ARCH_REVIEW":
+                        print(f"  → ARCH_REVIEW HIL detected", flush=True)
                         await self._send_review_plan("ARCH_REVIEW", state)
                     else:
                         ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
@@ -1008,8 +1016,7 @@ class WorkflowBridge:
                             resume_data = {"interview_notes": user_input}
                         else:
                             resume_data = {"interview_notes": str(user_input)}
-                    elif interrupted_phase == "ARCH_REVIEW" or interrupted_type == "review":
-                        # ARCH_REVIEW may still show phase="PLAN" in checkpoint — use interrupted_type.
+                    elif interrupted_phase == "ARCH_REVIEW":
                         resume_data = {
                             "approved": bool(user_input.get("approved", True)),
                             "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
