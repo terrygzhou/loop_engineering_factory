@@ -3,7 +3,7 @@ PLAN node: Generate implementation plan, tasks, analysis, and architecture diagr
 Outputs: $project_folder/build/solution.md — complete solution design with diagrams.
 
 Skill chain:
-  writing-plans → doubt-driven-development → architecture-diagram-generator
+  planning-and-task-breakdown → doubt-driven-development → architecture-diagram-generator
 """
 import os
 import re
@@ -22,7 +22,7 @@ def plan_node(state: dict) -> dict:
     PLAN phase: Generate implementation plan using framework skill chain.
 
     Flow:
-      writing-plans → doubt-driven-development → architecture-diagram-generator
+      planning-and-task-breakdown → doubt-driven-development → architecture-diagram-generator
 
     Returns partial update dict (LangGraph reducer merges).
     """
@@ -54,20 +54,24 @@ def plan_node(state: dict) -> dict:
 
     artifacts_delta: dict[str, str] = {}
 
-    # ── Step 1: Generate architecture/implementation plan ──
-    plan_skill = skills.get("writing-plans", {})
+    # ── Step 1: Generate structured task breakdown with milestones and dependencies ──
+    plan_skill = skills.get("planning-and-task-breakdown", {})
     plan_result = None
     if plan_skill:
-        print("  → Running writing-plans...")
+        print("  → Running planning-and-task-breakdown...")
         optimized = prepare_context_for_llm({"context": base_context}, max_tokens=bounds.context.plan_max_tokens)
         plan_result = invoke_skill(
             plan_skill["content"],
-            "Create implementation plan with architecture, file structure, milestones, and task breakdown. Keep it concise — max 3000 words.",
+            "Break down the implementation into structured tasks with milestones, dependencies, effort estimates, and acceptance criteria. Use vertical slicing. Output phases (Foundation, Core Features, Polish) with checkpoints between them. Include a dependency graph, risk table, and parallelization notes.",
             optimized["context"],
             llm=None
         )
         artifacts_delta["plan"] = plan_result[:bounds.artifacts.max_plan_chars]
-        feedback_entries.append({"skill": "writing-plans", "output": plan_result[:bounds.feedback.max_feedback_entry_chars]})
+        # Store structured task breakdown as separate artifact for downstream phases
+        # "task_breakdown" = detailed structure, "tasks" = compat key for solution.md + BUILD
+        artifacts_delta["task_breakdown"] = plan_result[:bounds.artifacts.max_plan_chars]
+        artifacts_delta["tasks"] = plan_result[:bounds.artifacts.max_plan_chars]
+        feedback_entries.append({"skill": "planning-and-task-breakdown", "output": plan_result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Step 2: Doubt-driven development (challenge assumptions) ──
     doubt_skill = skills.get("doubt-driven-development", {})

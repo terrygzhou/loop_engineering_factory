@@ -104,7 +104,25 @@ def define_node(state: dict) -> dict:
         )
         feedback_entries.append({"skill": "spec-driven-development", "output": spec_result[:bounds.feedback.max_feedback_entry_chars]})
 
-    # ── Step 3: API/interface design (multi-interface, contract-first + ToT→CoT) ──
+    # ── Step 3: Source-driven development — codebase-aware spec grounding ──
+    source_result = None
+    source_skill = skills.get("source-driven-development", {})
+    if source_skill:
+        print("  → Running source-driven-development for codebase-aware spec generation...")
+        src_context = f"Project type: {project_context}\n"
+        if spec_result:
+            src_context += f"Spec draft:\n{spec_result}\n"
+        if interview_notes:
+            src_context += f"Interview notes:\n{interview_notes[:600]}\n"
+        source_result = invoke_skill(
+            source_skill["content"],
+            "Verify framework patterns against official documentation. Detect stack versions from the project, ground every design decision in official docs, and surface any conflicts between existing code patterns and current best practices.",
+            src_context, llm=None,
+            workflow_id=project_name, phase="DEFINE"
+        )
+        feedback_entries.append({"skill": "source-driven-development", "output": source_result[:bounds.feedback.max_feedback_entry_chars]})
+
+    # ── Step 4: API/interface design (multi-interface, contract-first + ToT→CoT) ──
     api_result = None
     api_skill = skills.get("api-and-interface-design", {})
     if api_skill:
@@ -139,6 +157,12 @@ def define_node(state: dict) -> dict:
         api_path.write_text(api_result)
         audit.log_file_write("DEFINE", str(api_path), "markdown", len(api_result))
 
+    # Write source_verification.md
+    if source_result:
+        source_path = specs_dir / "source_verification.md"
+        source_path.write_text(source_result)
+        audit.log_file_write("DEFINE", str(source_path), "markdown", len(source_result))
+
     # ── Build artifacts delta ──
     artifacts_delta = {}
     if project_name:
@@ -147,6 +171,8 @@ def define_node(state: dict) -> dict:
         artifacts_delta["spec_refined"] = spec_result
     if api_result:
         artifacts_delta["api_contract"] = api_result
+    if source_result:
+        artifacts_delta["source_verification"] = source_result
 
     # ── Derive spec_confidence from actual artifact quality ──
     current_artifacts = state.get("artifacts", {})

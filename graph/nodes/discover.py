@@ -177,6 +177,12 @@ def discover_interview_node(state: dict) -> dict:
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
     context = _scan_codebase(context_folder, project_name, project_folder)
 
+    # ── Idea refinement: sharpen interview notes into actionable concept ──
+    idea_refinement = _refine_idea(interview_notes, project_name, project_description, context, state)
+
+    # ── Context engineering: build focused project context ──
+    engineered_context = _build_context(interview_notes, project_name, project_description, context, state)
+
     # ── Generate discovery artifact ──
     requirement_md = _generate_requirement_via_fabric(
         project_name=project_name,
@@ -191,6 +197,8 @@ def discover_interview_node(state: dict) -> dict:
 
     # ── Return partial updates (reducers merge via _dict_merge) ──
     artifacts = {
+        "idea_refinement": idea_refinement,
+        "engineered_context": engineered_context,
         "project_context": json.dumps(context, indent=2, default=str),
         "requirement_md": requirement_md,
         "requirement_path": str(req_path),
@@ -200,6 +208,8 @@ def discover_interview_node(state: dict) -> dict:
     audit.log_node_output("DISCOVER", {
         "requirement_path": str(req_path),
         "project_context_size": len(artifacts["project_context"]),
+        "idea_refinement_size": len(idea_refinement),
+        "engineered_context_size": len(engineered_context),
         "interview_notes_collected": bool(interview_notes),
     })
 
@@ -438,3 +448,45 @@ def _discover_specs(project_path):
                 specs.append({"name": f.stem, "file": str(f.relative_to(p))})
             except Exception: pass
     return {"specs": specs}
+
+
+def _refine_idea(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
+    """Use idea-refine skill to sharpen raw interview notes into a crisp, actionable concept."""
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+    refine_skill = skills.get("idea-refine", {})
+    if not refine_skill:
+        return f"## Idea Refinement\n(Interview notes used as-is)\n\n{interview_notes[:800]}"
+    prompt = (
+        f"Refine the following project idea into a sharp, actionable concept.\n\n"
+        f"Project: {project_name}\n"
+        f"Description: {project_description}\n"
+        f"Interview notes:\n{interview_notes}\n\n"
+        f"Produce a concise one-pager with: Problem Statement, Recommended Direction, "
+        f"Key Assumptions, MVP Scope, Not Doing list, Open Questions."
+    )
+    result = invoke_skill(refine_skill["content"], prompt, "", llm=None,
+                          workflow_id=state.get("project_name", ""), phase="DISCOVER")
+    print(f"  → idea-refine produced {len(result)} chars")
+    return result
+
+
+def _build_context(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
+    """Use context-engineering skill to build comprehensive, focused project context."""
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+    ctx_skill = skills.get("context-engineering", {})
+    if not ctx_skill:
+        return f"## Project Context\n{json.dumps(context, indent=2, default=str)[:1200]}"
+    prompt = (
+        f"Build a focused project context for AI-assisted development.\n\n"
+        f"Project: {project_name}\n"
+        f"Description: {project_description}\n"
+        f"Type: {context.get('project_type', 'greenfield')}\n"
+        f"Interview notes:\n{interview_notes[:600]}\n\n"
+        f"Output a structured context block with: tech stack, commands, code conventions, "
+        f"boundaries, and key files to reference. Keep it under 2000 chars."
+    )
+    result = invoke_skill(ctx_skill["content"], prompt, "", llm=None,
+                          workflow_id=state.get("project_name", ""), phase="DISCOVER")
+    print(f"  → context-engineering produced {len(result)} chars")
+    return result
+
