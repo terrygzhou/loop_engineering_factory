@@ -131,5 +131,9 @@ def route_phase(state: WorkflowState) -> str:
     if phase == "SHIP":
         return "REFLECT"
 
+    # REFLECT -> always END (meta-agent reflection is terminal)
+    if phase == "REFLECT":
+        return END
+
     # Default: END
     return END

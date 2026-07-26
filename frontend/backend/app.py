@@ -35,6 +35,7 @@ class StartRequest(BaseModel):
     project_name: str = ""
     spec: str = ""
     context_folder: str = ""  # Path to existing codebase/docs folder; empty = skip DISCOVER
+    auto_approve: Optional[bool] = None  # None = use config.yaml default
 
 
 class WorkflowResponse(BaseModel):
@@ -163,8 +164,10 @@ async def start_workflow(req: StartRequest):
     bridge._spec_text = req.spec
     bridge._project_name = req.project_name
     bridge._context_folder = req.context_folder
-    bridge._auto_approve = False  # Let the UI flow wait for user input at HIL gates
     bridge._aborted = False
+    # auto_approve defaults from config.yaml; Web UI may override via StartRequest
+    if req.auto_approve is not None:
+        bridge._auto_approve = req.auto_approve
     bridge._run_task = asyncio.create_task(bridge.run_real())
     # Log exceptions from background task (previously silently swallowed)
     async def log_task_errors(task):

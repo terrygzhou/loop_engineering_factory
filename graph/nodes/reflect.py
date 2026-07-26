@@ -102,6 +102,7 @@ def reflect_node(state: dict) -> dict:
             "feedback": feedback_entries,
             "next_phase": "END",
             "artifacts": artifacts_delta,
+            "error": None,
         }
 
     # Step 6: Human approval gate (CLI)
@@ -149,6 +150,7 @@ def reflect_node(state: dict) -> dict:
         "next_phase": "END",
         "config_version": f"{state['cycle_id']}-reflected",
         "artifacts": artifacts_delta,
+        "error": None,
     }
 
     print(f"\n  ✓ Reflection complete — cycle {state['cycle_id']} archived")

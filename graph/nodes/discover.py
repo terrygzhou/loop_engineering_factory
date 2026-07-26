@@ -30,8 +30,9 @@ def discover_setup_node(state: dict) -> dict:
     Purpose: Collect project name, description, context folder.
     Interrupt: Project setup form (once).
     """
-    # State override wins (Web UI forces HIL), then config fallback (CLI headless)
-    auto_approve = state.get("auto_approve_override", _cfg.workflow.auto_approve)
+    # State override wins if explicitly set; None = use config fallback
+    override = state.get("auto_approve_override")
+    auto_approve = override if override is not None else _cfg.workflow.auto_approve
 
     # ── Auto-approve: generate defaults ──
     if auto_approve:
@@ -113,8 +114,9 @@ def discover_interview_node(state: dict) -> dict:
     Purpose: Ask interview questions, generate requirement.md.
     Interrupt: Interview questions (once).
     """
-    # State override wins (Web UI forces HIL), then config fallback (CLI headless)
-    auto_approve = state.get("auto_approve_override", _cfg.workflow.auto_approve)
+    # State override wins if explicitly set; None = use config fallback
+    override = state.get("auto_approve_override")
+    auto_approve = override if override is not None else _cfg.workflow.auto_approve
 
     project_name = state.get("project_name", "Untitled")
     project_description = state.get("project_description", "")
@@ -259,7 +261,7 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
 
 def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder):
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    fabric_skill = skills.get("Fabric Prompt Engineering", {}) or skills.get("fabric-prompt-engineering", {})
+    fabric_skill = skills.get("fabric-prompts", {})
 
     # Wire coding-principles as context-aware refinement
     principles_skill = skills.get("coding-principles", {})

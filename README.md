@@ -476,7 +476,7 @@ Install: baked into Docker image via `docker compose up -d --build`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/workflow/start` | Start new workflow |
+| POST | `/workflow/start` | Start workflow. Body: `{project_name, spec, context_folder, auto_approve?}`. `auto_approve` (optional bool) overrides config default. |
 | GET | `/workflow/status` | Get current status |
 | POST | `/workflow/approval` | Submit HIL approval |
 | POST | `/workflow/input` | Submit user input |
@@ -490,6 +490,10 @@ Install: baked into Docker image via `docker compose up -d --build`.
 
 ## Recent Changes
 
+- **Web UI auto_approve override** — `StartRequest.auto_approve` (Optional[bool]) lets UI clients override config default; defaults to `config.yaml` when `None`
+- **DISCOVER auto_approve null-safety** — `auto_approve_override=None` now correctly falls back to config instead of being treated as falsy
+- **REFLECT explicit routing** — `route_phase()` handles REFLECT → END explicitly; reflect_node clears `error` on success
+- **fabric-prompts skill key fix** — Discovery node loads `fabric-prompts` skill (was `fabric-prompt-engineering`)
 - **LangGraph 1.2+ conformance** — Removed `audit_entries` from `WorkflowState` (OOM risk), verified all `invoke_skill()` calls use `prepare_context_for_llm()`, confirmed `interrupt()` OOTB pattern, `Command(resume=...)` resume, custom `SqliteSaver` with `dumps_typed()` API
 - **Lazy skill registry** — `tools/loader.py` hot-reload; removed ~49K token overhead from WorkflowState init
 - **Context bounds cleanup** — Removed dead `build_max_tokens`, `superweb`, `memory_budget`, `subgraph` entries from `bounds.yaml`
