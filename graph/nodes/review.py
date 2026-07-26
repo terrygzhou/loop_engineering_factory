@@ -74,6 +74,7 @@ def review_node(state: dict) -> dict:
             "Approve to proceed to BUILD, or reject with feedback to send back to PLAN."
         ),
         # Artifacts for display
+        "solution_md": artifacts.get("solution_md", ""),
         "spec_refined": artifacts.get("spec_refined", ""),
         "plan": artifacts.get("plan", ""),
         "tasks": artifacts.get("tasks", ""),

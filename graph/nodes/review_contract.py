@@ -10,14 +10,15 @@ from typing import Any, Dict, List
 
 # Canonical section definitions — single source of truth for CLI & Web UI
 REVIEW_SECTIONS: List[Dict[str, str]] = [
+    {"key": "solution_md", "label": "Solution Design Document"},
     {"key": "spec_refined", "label": "Specification"},
-    {"key": "api_contract", "label": "API Contract"},
-    {"key": "interview_notes", "label": "Interview Notes"},
     {"key": "plan", "label": "Implementation Plan"},
     {"key": "tasks", "label": "Task Breakdown"},
     {"key": "analysis", "label": "Cross-Artifact Analysis"},
     {"key": "doubt_resolution", "label": "Doubt Resolution"},
     {"key": "checklist", "label": "Feature Checklist"},
+    {"key": "api_contract", "label": "API Contract"},
+    {"key": "interview_notes", "label": "Interview Notes"},
 ]
 
 def build_review_sections(artifacts: Dict[str, str]) -> List[Dict[str, Any]]:
