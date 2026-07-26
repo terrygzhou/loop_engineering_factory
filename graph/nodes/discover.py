@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import httpx
 from pathlib import Path
 from langgraph.types import interrupt
 from config.loader import config as _cfg
@@ -315,11 +316,11 @@ def _load_improve_telemetry(state, project_name):
         url = telemetry.get("product_url", _cfg.services.product.url)
         health = telemetry.get("health_endpoint", "/health")
         try:
-            req = urllib.request.Request(f"{url.rstrip('/')}/{health.lstrip('/')}", method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                telemetry["health_status"] = resp.status
-                telemetry["healthy"] = 200 <= resp.status < 400
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(f"{url.rstrip('/')}/{health.lstrip('/')}")
+                telemetry["health_status"] = resp.status_code
+                telemetry["healthy"] = 200 <= resp.status_code < 400
+        except (httpx.RequestError, OSError):
             telemetry["healthy"] = False
         deployed = telemetry.get("project_path", "")
         if deployed and Path(deployed).is_dir():
