@@ -215,6 +215,19 @@ def _load_local_diagram_skill() -> str | None:
     return None
 
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
+    _DIAGRAM_PLACEHOLDER = 'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
+
+    spec = state.get("artifacts", {}).get("spec_refined", "")
+    plan = state.get("artifacts", {}).get("plan", "")
+    tasks = state.get("artifacts", {}).get("tasks", "")
+    doubt = state.get("artifacts", {}).get("doubt_resolution", "")
+    combined = f"{spec}{plan}{tasks}{doubt}".strip()
+
+    # Guard: if no real context, return placeholder instead of feeding empty input to LLM
+    if not combined:
+        print(f"  ⚠ Empty context for {diagram_type} diagram; using placeholder")
+        return _DIAGRAM_PLACEHOLDER
+
     # 1) Try the registered skill first
     arch_skill = skills.get("architecture-diagram-generator", {})
     skill_content = arch_skill.get("content", "") if arch_skill else ""
@@ -231,10 +244,10 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
         print(f"  → No diagram skill found; using inline LLM generation")
         skill_content = _DIAGRAM_SKILL_INSTRUCTIONS
 
-    spec = state.get("artifacts", {}).get("spec_refined", "")[:bounds.context.diagram_spec_chars]
-    plan = state.get("artifacts", {}).get("plan", "")[:bounds.context.diagram_plan_chars]
-    tasks = state.get("artifacts", {}).get("tasks", "")[:bounds.context.diagram_tasks_chars]
-    doubt = state.get("artifacts", {}).get("doubt_resolution", "")[:bounds.context.diagram_doubt_chars]
+    spec = spec[:bounds.context.diagram_spec_chars]
+    plan = plan[:bounds.context.diagram_plan_chars]
+    tasks = tasks[:bounds.context.diagram_tasks_chars]
+    doubt = doubt[:bounds.context.diagram_doubt_chars]
     context = f"Spec:\n{spec}\n\nPlan:\n{plan}\n\nTasks:\n{tasks}\n\nDoubt Resolution:\n{doubt}"
     task = f"Generate a {diagram_type} diagram as a Mermaid graph. Include all components, relationships, and data flows. Use the spec and plan as the primary source of truth."
     diagram = invoke_skill(
@@ -252,6 +265,28 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     project_folder = state.get("project_folder", state.get("project_path", ""))
     diagrams_dir = Path(project_folder) / "build" / "diagrams"
     diagrams_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Guard: skip LLM calls if context is too thin ──
+    spec = state.get("artifacts", {}).get("spec_refined", "")
+    plan = state.get("artifacts", {}).get("plan", "")
+    interview = state.get("artifacts", {}).get("interview_notes", "")
+    context_length = len(f"{spec}{plan}{interview}".strip())
+    _DIAGRAM_PLACEHOLDER = 'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
+
+    if context_length < 200:
+        print("  ⚠ Skipping diagram generation — insufficient project context")
+        diagrams = {}
+        diagram_types = [
+            ("component", "component-diagram.mmd"),
+            ("sequence", "sequence-diagram.mmd"),
+            ("data flow", "data-flow.mmd"),
+            ("deployment", "deployment-diagram.mmd"),
+        ]
+        for dtype, filename in diagram_types:
+            filepath = diagrams_dir / filename
+            filepath.write_text(_DIAGRAM_PLACEHOLDER)
+            diagrams[dtype] = str(filepath)
+        return diagrams
 
     diagrams = {}
     diagram_types = [
@@ -407,16 +442,25 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
     diagrams = merged.get("diagrams", {})
     if diagrams:
         lines.extend(["## Architecture Diagrams", ""])
+        _DIAGRAM_PLACEHOLDER_MARKER = "Insufficient context for diagram generation"
+        has_placeholder = False
         for dtype, filepath in diagrams.items():
             lines.append(f"### {dtype.replace('-', ' ').title()}")
             lines.append("```mermaid")
             try:
                 diagram_content = Path(filepath).read_text()
+                if _DIAGRAM_PLACEHOLDER_MARKER in diagram_content:
+                    has_placeholder = True
                 lines.append(diagram_content)
             except Exception:
                 lines.append(f"(diagram file: {filepath})")
             lines.append("```")
             lines.append("")
+        if has_placeholder:
+            lines.extend([
+                "> **Note:** Architecture diagrams could not be generated — insufficient project context from DISCOVER/DEFINE phases.",
+                "",
+            ])
 
     # ── Metrics (safe formatting — handles non-numeric values) ──
     lines.extend(["## Metrics", ""])
