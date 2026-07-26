@@ -1219,6 +1219,94 @@ body {
   margin-bottom: 1rem;
 }
 
+/* ─── Skills Section (real-time progress) ─────────────────── */
+.skills-section {
+  margin-bottom: 1.5rem;
+}
+
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.75rem;
+  min-height: 2rem;
+}
+
+.skill-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  animation: skill-fade-in 0.3s ease-out;
+}
+
+@keyframes skill-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.skill-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+}
+
+.skill-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.skill-status-badge {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.skill-status-badge.running {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.skill-status-badge.completed {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+}
+
+.skill-status-badge.failed {
+  background: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+}
+
+.skill-duration {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.skill-card.completed-card {
+  border-color: rgba(63, 185, 80, 0.3);
+}
+
+.skill-card.failed-card {
+  border-color: rgba(248, 81, 73, 0.3);
+}
+
 .review-actions {
   display: flex;
   gap: 1rem;

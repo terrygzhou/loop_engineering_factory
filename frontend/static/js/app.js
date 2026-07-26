@@ -10,7 +10,7 @@ const CONFIG = {
   pollingInterval: 5000,
 };
 
-// ─── State ──────────────────────────────────────────────────────
+// ─── State ──────────────────────────────────────────────
 const state = {
   workflow: { status: 'idle', cycle: 0, phase: '', waitingFor: null, projectName: '' },
   phases: {},
@@ -25,6 +25,8 @@ const state = {
   shownArtifacts: {},
   // Track which log entries we've already rendered (by index)
   lastRenderedMsgCount: 0,
+  // Skill progress tracking (skill_name → {event, startedAt, duration_s, el})
+  skills: {},
 };
 
 // ─── DOM Elements ─────────────────────────────────────────────────
@@ -50,6 +52,9 @@ const dom = {
   projectBadge: document.getElementById('project-badge'),
   projectName: document.getElementById('project-name'),
   metricsGrid: document.getElementById('metrics-grid'),
+  // Skills section
+  skillsGrid: document.getElementById('skills-grid'),
+  skillsEmpty: document.getElementById('skills-empty'),
 };
 
 // ─── Initialization ─────────────────────────────────────────────────
@@ -202,6 +207,12 @@ function updateState(data) {
 }
 
 function handleProgressEvent(event) {
+  // Handle skill_progress events separately
+  if (event.type === 'skill_progress') {
+    handleSkillProgress(event);
+    return;
+  }
+
   state.messages.push(event);
   if (event.phase in state.phases) {
     updatePhaseState(event.phase, event.action, event.data, event);
@@ -1155,6 +1166,99 @@ function setupEventListeners() {
 
   dom.modalOverlay.addEventListener('keydown', (e) => trapFocus(e, dom.modalOverlay));
   document.getElementById('requirement-overlay').addEventListener('keydown', (e) => trapFocus(e, document.getElementById('requirement-overlay')));
+}
+
+// ─── Skill Progress (real-time) ──────────────────────────
+const SKILL_ICONS = {
+  'planning-and-task-breakdown': '📋',
+  'doubt-driven-development': '🤔',
+  'coding-principles': '📐',
+  'fabric-prompts': '🎨',
+  'idea-refine': '💡',
+  'context-engineering': '🔧',
+  'spec-driven-development': '📝',
+  'source-driven-development': '📚',
+  'api-and-interface-design': '🔌',
+  'code-review-and-quality': '✅',
+};
+
+function getSkillIcon(skill) {
+  return SKILL_ICONS[skill] || '⚡';
+}
+
+function handleSkillProgress(event) {
+  const skill = event.skill;
+  const ev = event.event;
+  const details = event.details || {};
+
+  // Hide empty state on first skill
+  if (dom.skillsEmpty && dom.skillsEmpty.style.display !== 'none') {
+    dom.skillsEmpty.style.display = 'none';
+  }
+
+  if (ev === 'running') {
+    // Create or update card to running state
+    if (!state.skills[skill]) {
+      state.skills[skill] = { startedAt: new Date(), event: 'running' };
+      renderSkillCard(skill, 'running', 0);
+    }
+  } else if (ev === 'completed' || ev === 'failed') {
+    if (state.skills[skill]) {
+      state.skills[skill].event = ev;
+      const dur = details.duration_s || 0;
+      updateSkillCard(skill, ev, dur);
+    }
+  }
+}
+
+function renderSkillCard(skill, status, duration) {
+  const icon = getSkillIcon(skill);
+  const statusLabel = status === 'running' ? 'Running' : status === 'completed' ? 'Done' : 'Failed';
+  const card = document.createElement('div');
+  card.className = `skill-card ${status === 'completed' ? 'completed-card' : ''} ${status === 'failed' ? 'failed-card' : ''}`;
+  card.id = `skill-card-${skill.replace(/[^a-zA-Z0-9]/g, '-')}`;
+  card.innerHTML = `
+    <span class="skill-icon">${icon}</span>
+    <div class="skill-info">
+      <div class="skill-name">${escapeHtml(skill)} <span class="skill-status-badge ${status}">${statusLabel}</span></div>
+      <div class="skill-duration">${status === 'running' ? 'calculating...' : duration.toFixed(1) + 's'}</div>
+    </div>
+  `;
+  // Store for live update
+  card._startTime = new Date();
+  dom.skillsGrid.appendChild(card);
+
+  // If running, start live timer
+  if (status === 'running') {
+    card._timer = setInterval(() => {
+      const elapsed = ((new Date() - card._startTime) / 1000);
+      const durEl = card.querySelector('.skill-duration');
+      if (durEl) durEl.textContent = elapsed.toFixed(1) + 's';
+    }, 200);
+  }
+}
+
+function updateSkillCard(skill, status, duration) {
+  const id = `skill-card-${skill.replace(/[^a-zA-Z0-9]/g, '-')}`;
+  const card = document.getElementById(id);
+  if (!card) return;
+
+  // Stop live timer
+  if (card._timer) {
+    clearInterval(card._timer);
+    card._timer = null;
+  }
+
+  const statusLabel = status === 'running' ? 'Running' : status === 'completed' ? 'Done' : 'Failed';
+  card.querySelector('.skill-status-badge').className = `skill-status-badge ${status}`;
+  card.querySelector('.skill-status-badge').textContent = statusLabel;
+  const durEl = card.querySelector('.skill-duration');
+  if (durEl) durEl.textContent = duration.toFixed(1) + 's';
+
+  // Add card class
+  card.classList.remove('completed-card', 'failed-card');
+  if (status === 'completed') card.classList.add('completed-card');
+  if (status === 'failed') card.classList.add('failed-card');
 }
 
 // ─── Polling ─────────────────────────────────────────────────────
