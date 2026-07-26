@@ -33,7 +33,8 @@ def review_node(state: dict) -> dict:
     })
 
     # ── Auto-approve mode (headless Docker) ──
-    auto_approve = _cfg.workflow.auto_approve
+    # State override wins (Web UI forces HIL), then config fallback (CLI headless)
+    auto_approve = state.get("auto_approve_override", _cfg.workflow.auto_approve)
     if auto_approve:
         print("  → Auto-approve mode — skipping review gate")
         audit.log_node_output("ARCH_REVIEW", {"approved": True, "reason": "auto_approve"})
