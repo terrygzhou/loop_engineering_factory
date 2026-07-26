@@ -10,6 +10,7 @@ from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.context_manager import prepare_context_for_llm
 from tools.audit_logger import AuditLog
+from graph.ui_bridge import SkillTimer
 from config.loader import config
 from config.bounds_loader import bounds
 from feedback.chroma_client import get_chroma_client, query_patterns

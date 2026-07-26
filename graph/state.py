@@ -72,3 +72,6 @@ class WorkflowState(TypedDict):
     superweb_mode: str
     superweb_agent_report: Optional[dict]
     artifacts: Annotated[Dict[str, str], _dict_merge]
+
+    # ── UI bridge ──
+    skill_callback: Optional[callable]

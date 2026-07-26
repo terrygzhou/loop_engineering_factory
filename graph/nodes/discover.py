@@ -21,6 +21,7 @@ from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
+from graph.ui_bridge import SkillTimer
 
 
 def discover_setup_node(state: dict) -> dict:

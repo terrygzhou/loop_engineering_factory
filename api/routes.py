@@ -86,6 +86,22 @@ async def get_diagrams(workflow_id: str = ""):
     return {"diagrams": diagrams}
 
 
+@router.get("/workflow/artifacts")
+async def get_artifacts(workflow_id: str = ""):
+    """Get skill output artifacts for a workflow (spec, plan, diagrams, etc.)."""
+    artifacts = workflow_service.get_artifacts(workflow_id)
+    if not artifacts:
+        return {"artifacts": {}, "keys": []}
+    return {"artifacts": artifacts, "keys": list(artifacts.keys())}
+
+
+@router.get("/workflow/skill-progress")
+async def get_skill_progress(workflow_id: str = ""):
+    """Get skill invocation progress for a workflow."""
+    progress = workflow_service.get_skill_progress(workflow_id)
+    return {"progress": progress}
+
+
 @router.post("/workflow/diagrams/review", response_model=ApprovalResponse)
 async def review_diagrams(req: ApprovalRequest):
     """Submit architecture diagram review approval/rejection."""

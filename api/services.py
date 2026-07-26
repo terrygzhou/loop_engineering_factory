@@ -24,6 +24,7 @@ class WorkflowService:
         self._input_manager = InputManager(default_timeout_s=300, auto_approve_on_timeout=True)
         self._tasks: dict[str, asyncio.Task] = {}  # workflow_id → background task
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._skill_progress: dict[str, list[dict]] = {}  # workflow_id → skill events
 
     async def start(self, project_name: str, spec_text: str = "", context_folder: Optional[str] = None) -> dict:
         """Start a new workflow and execute it in the background."""
@@ -68,6 +69,10 @@ class WorkflowService:
         wf["status"] = "running"
         self._broadcast_status(workflow_id, "running")
 
+        # Skill progress callback — nodes call this to report skill invocations
+        def skill_callback(skill_name: str, event: str, details: dict | None = None):
+            self._broadcast_skill_event(workflow_id, skill_name, event, details)
+
         try:
             # Run via astream_events(version="v3") — typed HIL projections
             from graph.executor import build_executor_state
@@ -90,6 +95,7 @@ class WorkflowService:
             state["artifacts"]["discover_hil_count"] = 0
             state["discover_interview_done"] = False
             state["auto_approve_override"] = False  # Web UI always uses HIL
+            state["skill_callback"] = skill_callback
             wf["state"] = state
 
             current_phase = None
@@ -338,15 +344,38 @@ class WorkflowService:
         """Broadcast status update to WebSocket."""
         wf = self._workflows.get(workflow_id, {})
         wf["status"] = status
+        artifacts = (wf.get("state") or {}).get("artifacts", {}) or {}
         asyncio.get_event_loop().create_task(
             self.broadcast({
                 "type": "status",
                 "workflow_id": workflow_id,
                 "status": status,
                 "phase": wf["state"].get("phase", status) if chunk is None else chunk.get("phase", ""),
+                "artifact_keys": list(artifacts.keys()),
                 "timestamp": time.time(),
             })
         )
+
+    def _broadcast_skill_event(self, workflow_id: str, skill_name: str, event: str, details: dict = None):
+        """Broadcast a skill progress event to WebSocket."""
+        wf = self._workflows.get(workflow_id)
+        if not wf:
+            return
+        payload = {
+            "type": "skill_progress",
+            "workflow_id": workflow_id,
+            "skill": skill_name,
+            "event": event,  # "running" | "completed" | "failed"
+            "phase": wf["state"].get("phase", "UNKNOWN"),
+            "timestamp": time.time(),
+        }
+        if details:
+            payload["details"] = details
+
+        # Track in memory
+        self._skill_progress.setdefault(workflow_id, []).append(payload)
+
+        asyncio.get_event_loop().create_task(self.broadcast(payload))
 
     async def handle_websocket_message(self, workflow_id: str, data: str):
         """Handle incoming WebSocket messages."""
@@ -407,6 +436,19 @@ class WorkflowService:
             if isinstance(state, dict):
                 return state.get("diagrams", {})
         return None
+
+    def get_artifacts(self, workflow_id: str = "") -> Optional[dict]:
+        """Get skill output artifacts for a workflow."""
+        wf = self._workflows.get(workflow_id)
+        if wf and "state" in wf:
+            state = wf["state"]
+            if isinstance(state, dict):
+                return state.get("artifacts", {})
+        return None
+
+    def get_skill_progress(self, workflow_id: str = "") -> list[dict]:
+        """Get skill invocation progress history."""
+        return self._skill_progress.get(workflow_id, [])
 
     def submit_diagram_review(self, workflow_id: str, approved: bool, feedback: str = "") -> dict:
         """Submit architecture diagram review approval/rejection."""
