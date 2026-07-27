@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Dict
 
+from langgraph.config import get_stream_writer
+
 # Ensure project root is on path so config.loader resolves
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
@@ -248,9 +250,11 @@ class WorkflowRunner:
         log_event(logger, "workflow.run", project=project_name, skip_discover=state.get("skip_discover"))
 
         if state.get("skip_discover"):
-            print("\n[DISCOVER] Skipped — no context folder (greenfield mode)\n")
+            writer = get_stream_writer() or (lambda **kw: None)
+            writer({"type": "progress", "phase": "DISCOVER", "step": "status", "detail": "Skipped — no context folder (greenfield mode)", "ts": time.time()})
         else:
-            print(f"\n[DISCOVER] Scanning {context_folder}...")
+            writer = get_stream_writer() or (lambda **kw: None)
+            writer({"type": "progress", "phase": "DISCOVER", "step": "status", "detail": f"Scanning {context_folder}...", "ts": time.time()})
 
         async def _run():
             last = None
@@ -298,11 +302,13 @@ class WorkflowRunner:
                             tracer.record_phase(current_phase, duration, success, project=state.get("project_name"))
                             health_module.track_phase(current_phase, duration, success)
                             _run_phase_eval(current_phase, chunk)
-                            print(f"\n[{current_phase}] Completed ({duration}s)")
+                            w = get_stream_writer() or (lambda **kw: None)
+                            w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": time.time()})
 
                         current_phase = phase
                         phase_start[phase] = time.time()
-                        print(f"[{phase}] Started...")
+                        w = get_stream_writer() or (lambda **kw: None)
+                        w({"type": "progress", "phase": phase, "step": "status", "detail": "Started...", "ts": time.time()})
                         health_module.set_current_phase(state.get("project_name"), phase)
 
                     yield chunk
@@ -310,12 +316,14 @@ class WorkflowRunner:
                 # Normal completion (stream ended without exception)
                 if current_phase:
                     duration = round(time.time() - phase_start.get(current_phase, time.time()), 3)
-                    print(f"\n[{current_phase}] Completed ({duration}s)\n")
+                    w = get_stream_writer() or (lambda **kw: None)
+                    w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": time.time()})
                 break
 
             except GraphInterrupt as e:
                 log_event(logger, "graph.interrupted", phase=current_phase, detail=str(e))
-                print(f"  → GraphInterrupt caught")
+                w = get_stream_writer() or (lambda **kw: None)
+                w({"type": "progress", "phase": current_phase or "UNKNOWN", "step": "interrupt", "detail": "GraphInterrupt caught", "ts": time.time()})
 
                 # Get the suspended state
                 graph_state = await self.graph.aget_state(config)
@@ -323,7 +331,8 @@ class WorkflowRunner:
                 # Check if this is a true suspension or normal end
                 if not graph_state.next:
                     if current_phase:
-                        print(f"\n[{current_phase}] Completed\n")
+                        w = get_stream_writer() or (lambda **kw: None)
+                        w({"type": "progress", "phase": current_phase, "step": "status", "detail": "Completed", "ts": time.time()})
                     break
 
                 # Determine the interrupted phase
@@ -396,7 +405,8 @@ class WorkflowRunner:
                                 "approved": answer,
                                 "feedback": input_data.get("feedback", input_data.get("user_review_comments", "")),
                             }
-                            print(f"  → ARCH_REVIEW resumed: approved={answer}")
+                            w = get_stream_writer() or (lambda **kw: None)
+                            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={answer}", "ts": time.time()})
                             input_state = Command(resume=[resume_data])
                             continue
                         answer = str(answer).lower()
@@ -408,7 +418,8 @@ class WorkflowRunner:
                         "approved": approved,
                         "feedback": input_data.get("feedback", "") if isinstance(input_data, dict) else "",
                     }
-                    print(f"  → ARCH_REVIEW resumed: approved={approved}")
+                    w = get_stream_writer() or (lambda **kw: None)
+                    w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={approved}", "ts": time.time()})
                     input_state = Command(resume=[resume_data])
                     continue
 
@@ -420,13 +431,15 @@ class WorkflowRunner:
                         resume_data = {"human_approval_required": False}
 
                 # OOTB resume: use Command(resume=...) to continue from interrupt()
-                print(f"  → Resuming {interrupted_phase} with Command(resume=...)")
+                w = get_stream_writer() or (lambda **kw: None)
+                w({"type": "progress", "phase": interrupted_phase, "step": "resume", "detail": "Resuming with Command(resume=...)", "ts": time.time()})
                 input_state = Command(resume=resume_data)
                 continue
 
             except Exception as e:
                 log_event(logger, "stream.error", error=str(e))
-                print(f"  → Stream error: {e}")
+                w = get_stream_writer() or (lambda **kw: None)
+                w({"type": "progress", "phase": "STREAM", "step": "error", "detail": str(e), "ts": time.time()})
                 break
 
     # ── CLI HIL handlers ──
@@ -439,7 +452,8 @@ class WorkflowRunner:
 
     def _hil_cli_sync(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """Synchronous part that actually blocks on input()."""
-        print(f"\n  === {phase}: Human Input Required ===")
+        w = get_stream_writer() or (lambda **kw: None)
+        w({"type": "progress", "phase": phase, "step": "hil", "detail": "Human Input Required", "ts": time.time()})
 
         if phase == "DISCOVER":
             # Determine which interrupt fired by checking the suspended state
@@ -526,21 +540,19 @@ class WorkflowRunner:
         tasks = artifacts.get("tasks", "")[:500]
         analysis = artifacts.get("analysis", "")[:300]
 
-        print("\n  ┌─ ARCHITECTURE & PLAN REVIEW ──────────────────────────────")
-        print(f"  │ Spec: {len(artifacts.get('spec_refined', ''))} chars")
-        print(f"  │ Plan: {len(plan)} chars preview → {plan[:120]}...")
-        print(f"  │ Tasks: {len(tasks)} chars")
+        w = get_stream_writer() or (lambda **kw: None)
+        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": "ARCHITECTURE & PLAN REVIEW", "ts": time.time()})
+        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Spec: {len(artifacts.get('spec_refined', ''))} chars", "ts": time.time()})
+        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Plan: {len(plan)} chars preview → {plan[:120]}...", "ts": time.time()})
+        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Tasks: {len(tasks)} chars", "ts": time.time()})
         if analysis:
-            print(f"  │ Analysis: {analysis[:120]}...")
-
-        # Show diagram availability
+            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Analysis: {analysis[:120]}...", "ts": time.time()})
         if diagrams:
-            print(f"  │ Diagrams: {', '.join(diagrams.keys())}")
+            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Diagrams: {', '.join(diagrams.keys())}", "ts": time.time()})
             for dtype, png_path in diagram_pngs.items():
                 status = "✓ rendered" if png_path else "✗ no PNG"
-                print(f"  │   - {dtype}: {status}")
-
-        print(f"  └────────────────────────────────────────────────────────────\n")
+                w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"- {dtype}: {status}", "ts": time.time()})
+        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": "End of review", "ts": time.time()})
 
         answer = input("  Approve architecture & plan? (y/n): ").strip().lower()
         if answer == "y":

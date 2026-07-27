@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.config import get_stream_writer
+import time
 
 from config.bounds_loader import bounds
 from graph.state import CycleMetrics
@@ -71,7 +73,8 @@ MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
 
 def impl_plan_node(state: BuildSubState) -> BuildSubState:
     """Generate implementation plan from spec + tasks."""
-    print("  → [IMPL_PLAN] Generating implementation plan...")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "IMPL_PLAN", "detail": "Generating implementation plan...", "ts": time.time()})
     skills = state["skills"]
     spec = state["spec_text"]
     tasks = state["tasks_text"]
@@ -90,12 +93,13 @@ def impl_plan_node(state: BuildSubState) -> BuildSubState:
 
     state["impl_plan"] = plan
     state["sub_phase"] = "IMPL_PLAN"
-    print(f"  → [IMPL_PLAN] Plan generated ({len(plan)} chars)")
+    w({"type": "progress", "phase": "BUILD", "step": "IMPL_PLAN", "detail": f"Plan generated ({len(plan)} chars)", "ts": time.time()})
     return state
 
 def create_backlog_node(state: BuildSubState) -> BuildSubState:
     """Parse tasks into backlog items, write backlog.md."""
-    print("  → [CREATE_BACKLOG] Creating backlog...")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "CREATE_BACKLOG", "detail": "Creating backlog...", "ts": time.time()})
     tasks_text = state["tasks_text"]
     project_folder = state["project_path"]
 
@@ -109,7 +113,7 @@ def create_backlog_node(state: BuildSubState) -> BuildSubState:
     state["backlog"] = backlog_items
     state["backlog_idx"] = 0
     state["sub_phase"] = "CREATE_BACKLOG"
-    print(f"  → [CREATE_BACKLOG] {len(backlog_items)} backlog items created")
+    w({"type": "progress", "phase": "BUILD", "step": "CREATE_BACKLOG", "detail": f"{len(backlog_items)} backlog items created", "ts": time.time()})
     return state
 
 def implement_node(state: BuildSubState) -> BuildSubState:
@@ -125,8 +129,9 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         state["sub_phase"] = "IMPLEMENT"
         return implement_node(state)  # Skip to next
 
-    print(f"  → [IMPLEMENT] Item {idx + 1}/{len(state['backlog'])}: {item['description'][:80]}")
-    print(f"     Retry: {state['retry_count']}/{bounds.build.max_item_retries}")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": f"Item {idx + 1}/{len(state['backlog'])}: {item['description'][:80]}", "ts": time.time()})
+    w({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": f"Retry: {state['retry_count']}/{bounds.build.max_item_retries}", "ts": time.time()})
 
     skills = state["skills"]
     spec = state["spec_text"]
@@ -209,12 +214,13 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return unit_test_node(state)
 
     docker_proj = state["docker_proj"]
-    print(f"  → [UNIT_TEST] Building and testing item {item['id']}...")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Building and testing item {item['id']}...", "ts": time.time()})
 
     # Write files
     combined = state["current_code"] + "\n" + state["test_code"]
     files, cmds, parse_info = parse_llm_output(combined)
-    print(f"     Parsed {len(files)} files, {len(cmds)} commands")
+    w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Parsed {len(files)} files, {len(cmds)} commands", "ts": time.time()})
 
     if not files:
         state["test_result"] = "fail"
@@ -229,7 +235,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return state
 
     written = write_files_to_project(files, docker_proj)
-    print(f"     Wrote {len(written)} files")
+    w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Wrote {len(written)} files", "ts": time.time()})
 
     # Run pre-build commands
     for desc, cmd in cmds:
@@ -237,14 +243,14 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
             continue
         rc, _, err = run_command(cmd, workdir=docker_proj)
         if rc != 0:
-            print(f"     ⚠ Command '{desc}' failed: {err[:100]}")
+            w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Command '{desc}' failed: {err[:100]}", "ts": time.time()})
 
     # Docker build
-    print("     Docker compose build...")
+    w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": "Docker compose build...", "ts": time.time()})
     _svc = resolve_app_service(docker_proj)
     rc, out, err = run_command(f"docker compose build --no-cache {_svc}", timeout=300, workdir=docker_proj)
     if rc != 0:
-        print(f"     ✗ Docker build failed: {err[:200]}")
+        w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Docker build failed: {err[:200]}", "ts": time.time()})
         state["test_result"] = "fail"
         state["test_output"] = err[:bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: Docker build failed")
@@ -258,7 +264,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     # Start container
     rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
     if rc != 0:
-        print(f"     ✗ Container start failed: {err[:200]}")
+        w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Container start failed: {err[:200]}", "ts": time.time()})
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Container start failed")
         state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
@@ -275,7 +281,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     _health_url = _cfg.services.product.url + "/"
     rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=30)
     if health_out.strip() not in ('200', '301', '302'):
-        print(f"     ✗ Health check failed: HTTP {health_out.strip()}")
+        w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Health check failed: HTTP {health_out.strip()}", "ts": time.time()})
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Health check failed")
         state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
@@ -286,7 +292,7 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return state
 
     # Run pytest
-    print("     Running pytest...")
+    w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": "Running pytest...", "ts": time.time()})
     rc, test_out, test_err = run_command(
         f"docker compose exec {_svc} python -m pytest tests/ -v --tb=short 2>&1",
         timeout=120, workdir=docker_proj,
@@ -295,14 +301,14 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     failed = len(re.findall(r'failed', test_out))
 
     if rc == 0 and failed == 0:
-        print(f"     ✓ pytest passed ({passed} tests) — item {item['id']} complete")
+        w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"pytest passed ({passed} tests) — item {item['id']} complete", "ts": time.time()})
         state["test_result"] = "pass"
         state["test_output"] = test_out[:bounds.build.max_test_output_chars]
         state["backlog"][idx]["status"] = "completed"
         state["retry_count"] = 0
         state["backlog_idx"] = idx + 1
     else:
-        print(f"     ✗ pytest: {failed} failed, {passed} passed")
+        w({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"pytest: {failed} failed, {passed} passed", "ts": time.time()})
         state["test_result"] = "fail"
         state["test_output"] = test_out[:bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: {failed} test failures (attempt {state['retry_count'] + 1})")
@@ -318,7 +324,8 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
 
 def int_test_node(state: BuildSubState) -> BuildSubState:
     """Integration test: verify Docker app is running, run aggregate checks."""
-    print("  → [INT_TEST] Running integration tests...")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": "Running integration tests...", "ts": time.time()})
     docker_proj = state["docker_proj"]
     from config.loader import config as _cfg
     _health_url = _cfg.services.product.url + "/"
@@ -341,20 +348,21 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
     if health_out.strip() in ('200', '301', '302'):
         state["int_test_result"] = "pass"
         state["int_test_output"] = f"Health check: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
-        print(f"     ✓ Integration tests passed (health: HTTP {health_out.strip()})")
+        w({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": f"Integration tests passed (health: HTTP {health_out.strip()})", "ts": time.time()})
     else:
         state["int_test_result"] = "fail"
         state["int_test_output"] = f"Health check failed: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"INT_TEST: Health check failed")
         state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
-        print(f"     ✗ Integration test failed: HTTP {health_out.strip()}")
+        w({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": f"Integration test failed: HTTP {health_out.strip()}", "ts": time.time()})
 
     state["sub_phase"] = "INT_TEST"
     return state
 
 def seed_node(state: BuildSubState) -> BuildSubState:
     """Generate and execute seed data script."""
-    print("  → [SEED] Generating and running seed data...")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Generating and running seed data...", "ts": time.time()})
     skills = state["skills"]
     docker_proj = state["docker_proj"]
     project_folder = state["project_path"]
@@ -402,7 +410,7 @@ Requirements:
     try:
         ast.parse(clean_script)
     except SyntaxError as e:
-        print(f"     ✗ Seed script syntax error: {e}")
+        w({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": f"Seed script syntax error: {e}", "ts": time.time()})
         state["seed_result"] = "fail"
         state["seed_output"] = str(e)[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"SEED: SyntaxError: {e}")
@@ -428,23 +436,23 @@ Requirements:
         )
         seed_output = result.stdout + result.stderr
         if result.returncode != 0:
-            print(f"     ✗ Seed script failed (exit {result.returncode})")
+            w({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": f"Seed script failed (exit {result.returncode})", "ts": time.time()})
             state["seed_result"] = "fail"
             state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
             state["errors"].append(f"SEED: exit {result.returncode}: {seed_output[:200]}")
             state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         else:
-            print(f"     ✓ Seed data populated successfully")
+            w({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Seed data populated successfully", "ts": time.time()})
             state["seed_result"] = "pass"
             state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
     except subprocess.TimeoutExpired:
-        print("     ✗ Seed script timed out (>60s)")
+        w({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Seed script timed out (>60s)", "ts": time.time()})
         state["seed_result"] = "fail"
         state["seed_output"] = "Timed out"
         state["errors"].append("SEED: timeout after 60s")
         state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
     except Exception as e:
-        print(f"     ✗ Seed execution failed: {e}")
+        w({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": f"Seed execution failed: {e}", "ts": time.time()})
         state["seed_result"] = "fail"
         state["seed_output"] = str(e)[:bounds.build.max_seed_output_chars]
         state["errors"].append(f"SEED: {e}")
@@ -565,7 +573,8 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
     Gate: container running, HTTP health endpoint responds, seed data exists.
     If unhealthy, skip UAT — nothing to test.
     """
-    print("  → [DEPLOY_GATE] Validating deployment health...")
+    w = get_stream_writer() or (lambda **kw: None)
+    w({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": "Validating deployment health...", "ts": time.time()})
     docker_proj = state["docker_proj"]
     from config.loader import config as _cfg
     _svc = resolve_app_service(docker_proj)
@@ -574,7 +583,7 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
     # Check 1: Container running
     rc, out, err = run_command(f"docker compose ps {_svc} --format '{{{{.Status}}}}'", workdir=docker_proj)
     if rc != 0 or "Up" not in out:
-        print(f"     ✗ Container {_svc} not running — skipping UAT")
+        w({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Container {_svc} not running — skipping UAT", "ts": time.time()})
         state["uat_result"] = "skip"
         state["uat_output"] = f"DEPLOY_GATE failed: container not running"
         state["uat_pass_rate"] = 1.0  # skip counts as pass
@@ -584,7 +593,7 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
     # Check 2: Health endpoint
     rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=15, workdir=docker_proj)
     if health_out.strip() not in ('200', '301', '302'):
-        print(f"     ✗ Health check failed: HTTP {health_out.strip()} — skipping UAT")
+        w({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Health check failed: HTTP {health_out.strip()} — skipping UAT", "ts": time.time()})
         state["uat_result"] = "skip"
         state["uat_output"] = f"DEPLOY_GATE failed: HTTP {health_out.strip()}"
         state["uat_pass_rate"] = 1.0
@@ -594,9 +603,9 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
     # Check 3: Logs for startup errors
     rc, logs, _ = run_command(f"docker compose logs {_svc} --tail=20", timeout=10, workdir=docker_proj)
     if any(kw in logs for kw in ["Traceback", "ImportError", "SyntaxError"]):
-        print("     ⚠ Container logs contain startup errors — proceeding with caution")
+        w({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": "Container logs contain startup errors — proceeding with caution", "ts": time.time()})
 
-    print(f"     ✓ Deploy gate passed: HTTP {health_out.strip()}")
+    w({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Deploy gate passed: HTTP {health_out.strip()}", "ts": time.time()})
     state["sub_phase"] = "DEPLOY_GATE"
     return state
 
