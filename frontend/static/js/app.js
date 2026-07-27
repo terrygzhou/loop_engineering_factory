@@ -254,11 +254,51 @@ function handleProgressEvent(event) {
     return;
   }
 
-  // Handle skill-driven interview (bridge sends data.fields or data.questions)
-  if (event.action === 'interview' && event.data && (event.data.fields || event.data.questions)) {
+  // Handle skill-driven interview (bridge sends data.fields, data.questions, or raw questions list)
+  if (event.action === 'interview') {
     // Skip duplicate: already showing interview for this phase
     if (state.interviewActive && state.interviewPhase === event.phase) return;
-    renderInterview(event.phase, event.data.fields || event.data.questions);
+
+    // Normalize: accept {key, prompt} or {label, question, ...} format
+    let questions = event.data;
+    if (Array.isArray(questions)) {
+      questions = questions.map(q => ({
+        category: q.key || q.category || 'general',
+        label: q.key ? q.key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : (q.label || ''),
+        question: q.prompt || q.question || '',
+        placeholder: q.placeholder || `Answer for ${q.key || q.category}...`,
+        required: false,
+      }));
+    } else if (questions && (questions.fields || questions.questions)) {
+      questions = questions.fields || questions.questions;
+    } else if (questions && Object.keys(questions).length > 0) {
+      // Plain object — treat keys as categories
+      questions = Object.entries(questions).map(([k, v]) => ({
+        category: k,
+        label: k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        question: v || `Provide details for ${k}...`,
+        placeholder: '',
+        required: false,
+      }));
+    }
+
+    if (questions && questions.length > 0) {
+      renderInterview(event.phase, questions);
+    } else {
+      // Fallback: generic input modal
+      showInputModal(event.phase);
+    }
+    return;
+  }
+
+  // Handle project setup prompt
+  if (event.action === 'setup') {
+    if (state.interviewActive && state.interviewPhase === event.phase) return;
+    renderInterview(event.phase, [
+      { category: 'project_name', label: 'Project Name', question: 'What is the project name?', placeholder: 'e.g. my-api', required: true },
+      { category: 'project_description', label: 'Description', question: 'Briefly describe what you want built.', placeholder: 'e.g. REST API for...', required: true },
+      { category: 'context_folder', label: 'Context Folder', question: 'Path to existing codebase (optional).', placeholder: '/path/to/code — leave empty for greenfield', required: false },
+    ]);
     return;
   }
 

@@ -144,6 +144,15 @@ class WorkflowService:
                 wf["status"] = f"paused:{interrupted_phase}:{pause_type}"
                 self._broadcast_status(workflow_id, f"paused:{interrupted_phase}:{pause_type}")
 
+                # Broadcast the interrupt to the frontend so UI can render input
+                await self.broadcast({
+                    "type": "action",
+                    "phase": interrupted_phase,
+                    "action": self._get_hil_action(interrupted_phase, pause_type),
+                    "data": self._build_hil_data(interrupted_phase, pause_type, interrupt_value),
+                    "timestamp": time.time(),
+                })
+
                 # Wait for user input via WebSocket
                 resume_data = await self._collect_hil_input(
                     workflow_id, interrupted_phase, pause_type, interrupt_value
@@ -228,6 +237,26 @@ class WorkflowService:
             "approved": approved,
             "feedback": feedback,
         }
+
+    def _get_hil_action(self, phase: str, pause_type: str) -> str:
+        """Map interrupt phase/pause_type to frontend action type."""
+        if phase == "DISCOVER" and pause_type == "interview":
+            return "interview"
+        if phase == "DISCOVER" and pause_type == "project_setup":
+            return "setup"
+        if phase == "ARCH_REVIEW":
+            return "review"
+        return "input"
+
+    def _build_hil_data(self, phase: str, pause_type: str, interrupt_value: dict) -> dict:
+        """Build frontend data for HIL prompts."""
+        if phase == "DISCOVER" and pause_type == "interview":
+            return interrupt_value.get("questions", []) or {}
+        if phase == "DISCOVER" and pause_type == "project_setup":
+            return interrupt_value or {}
+        if phase == "ARCH_REVIEW":
+            return interrupt_value or {}
+        return {}
 
     async def _collect_hil_input(self, workflow_id, phase, pause_type, chunk):
         """Collect HIL input from WebSocket with timeout."""
