@@ -205,6 +205,9 @@ def discover_interview_node(state: dict) -> dict:
         "requirement_md": requirement_md,
         "requirement_path": str(req_path),
         "interview_notes": interview_notes,
+        # Clear stale artifact paths from previous cycles
+        "diagrams": {},
+        "diagram_pngs": {},
     }
 
     audit.log_node_output("DISCOVER", {
