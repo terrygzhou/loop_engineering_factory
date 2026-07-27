@@ -34,7 +34,8 @@ services:
 
   postgres:
     user: postgres
-    password: postgres
+    # password is for generated projects only, not Loop Factory itself
+    password: ${DB_PASSWORD:-postgres}
     database: crm_dev
     port: 5432
     host: localhost
@@ -78,6 +79,6 @@ superweb:
 
 openhands:
   url: http://openhands-server:8000
-  secret_key: changeme  # MUST be changed to a strong secret before production
+  secret_key: ${OH_SECRET_KEY:-changeme}  # MUST be changed to a strong secret before production
   workspace_path: /opt/workspace_base/output
   timeout: 3600
