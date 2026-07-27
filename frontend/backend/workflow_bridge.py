@@ -714,14 +714,16 @@ class WorkflowBridge:
             await self.broadcast(ev)
 
     async def run_real(self):
-        """Run the actual LangGraph workflow with OOTB interrupt/resume.
+        """Run the actual LangGraph workflow using stream_events(v3).
 
-        Uses LangGraph native interrupt() + Command(resume=...) pattern:
-        1. graph.stream() for normal execution
-        2. GraphInterrupt caught → UI polling for input → Command(resume=...)
-        3. Repeat until workflow completes
+        Uses LangGraph's v3 streaming API:
+        1. graph.astream_events(input, version='v3') → AsyncGraphRunStream
+        2. Stream values (state snapshots) for progress/artifacts
+        3. Check run.interrupted() / run.interrupts() for HIL
+        4. Resume with Command(resume=...) → new astream_events call
+        5. Repeat until run.interrupted() is False
 
-        Replaces custom _astream_with_hil() with OOTB pattern.
+        Replaces manual astream(__anext__) + aget_state interrupt detection.
         """
         if not self._use_real_workflow:
             print("[Bridge] Real workflow unavailable — falling back to simulated")
@@ -734,16 +736,15 @@ class WorkflowBridge:
 
         self.status = "running"
         # On recovery (thread_id was pre-set by _recover_workflow), don't increment cycle
-        # Validate: thread_id only counts as recovery if a matching checkpoint actually exists
         has_stale_thread_id = bool(self._thread_id)
         is_recovery = has_stale_thread_id
         if has_stale_thread_id:
             try:
-                from langgraph.errors import EmptyInputError
+                from graph.executor import _get_checkpointer
+                checkpointer = _get_checkpointer()
                 test_config = {"configurable": {"thread_id": self._thread_id}}
                 cp_list = list(checkpointer.list(test_config))
                 if not cp_list:
-                    # Stale thread_id — no matching checkpoint
                     print(f"[Bridge] Stale thread_id {self._thread_id} — no checkpoint, treating as fresh", flush=True)
                     self._thread_id = None
                     is_recovery = False
@@ -760,24 +761,21 @@ class WorkflowBridge:
         print(f"[Bridge.run_real] abort cleared, is_aborted={AbortManager.get().is_aborted}", flush=True)
 
         # ── Use shared executor for graph + state (same as CLI) ──
-        from graph.executor import WorkflowRunner, _get_checkpointer
-        from langgraph.errors import GraphInterrupt
+        from graph.executor import _get_checkpointer
         from langgraph.types import Command
         import uuid as _uuid
 
-        # Fresh checkpointer for this run — store for abort cleanup
         checkpointer = _get_checkpointer()
-        # Reuse existing thread_id if set (recovery), otherwise create fresh
         if not self._thread_id:
             thread_id = str(_uuid.uuid4())
         else:
             thread_id = self._thread_id
         self._checkpointer = checkpointer
         self._thread_id = thread_id
-        self._save_persisted_inputs()  # Persist thread_id for recovery on restart
+        self._save_persisted_inputs()
         config = {"configurable": {"thread_id": thread_id}}
 
-        # Build state via shared executor — guarantees identical state for both modes
+        # Build state via shared executor
         state = self._build_executor_state(
             cycle_id=str(self.cycle),
             project_name=self._project_name,
@@ -788,115 +786,33 @@ class WorkflowBridge:
         ev = self.add_event("SYSTEM", "started", f"Cycle {self.cycle} — real workflow started for: {self._project_name or 'Untitled'}")
         await self.broadcast(ev)
 
-        # DISCOVER always runs — if project_name provided, interrupt(project_setup) is skipped automatically
         self._last_phase = None
-        completed = False
+        abort_mgr = AbortManager.get()
 
         try:
-            # ── OOTB interrupt/resume loop ──
             from graph.main import build_graph
             graph = build_graph(checkpointer=checkpointer, auto_approve=self._auto_approve)
 
-            # On recovery: pass None to resume from checkpoint; fresh run: pass input_state
-            input_state = None if is_recovery else state
-            abort_mgr = AbortManager.get()
-            while not self._aborted and not completed:
-                if self._aborted:
-                    break
+            # ── stream_events(v3) loop ──
+            current_input = None if is_recovery else state
 
-                # ── Abort-responsive stream iteration ──
-                # graph.astream() is an async generator. We iterate explicitly
-                # with AbortManager so the abort signal can break us out mid-stream.
-                stream = graph.astream(input_state, stream_mode="values", config=config)
-                interrupted_chunk = None
-                chunk_count = 0
+            while not self._aborted:
+                run = await graph.astream_events(current_input, config=config, version="v3")
 
-                while True:
+                # Race: drain values stream vs abort signal
+                abort_task = asyncio.ensure_future(abort_mgr.wait(999))
+                values_exhausted = False
+
+                async for snapshot in run.values:
                     if self._aborted:
                         break
 
-                    # Race: get next chunk OR abort signal
-                    # Timeout=999s is effectively "wait forever unless aborted"
-                    next_task = asyncio.ensure_future(stream.__anext__())
-                    abort_task = asyncio.ensure_future(abort_mgr.wait(999))
-
-                    done, pending = await asyncio.wait(
-                        {next_task, abort_task}, return_when=asyncio.FIRST_COMPLETED
-                    )
-
-                    # Clean up pending tasks
-                    for t in pending:
-                        t.cancel()
-                        try:
-                            await t
-                        except BaseException:
-                            pass
-
-                    if abort_task in done and abort_mgr.is_aborted:
-                        # Actual abort — cancel chunk fetch and break
-                        next_task.cancel()
-                        try:
-                            await next_task
-                        except BaseException:
-                            pass
+                    # Race check: if abort fired, stop processing
+                    if abort_task.done() and abort_mgr.is_aborted:
                         break
 
-                    if next_task in done:
-                        # Chunk arrived — cancel abort waiter and process
-                        abort_task.cancel()
-                        try:
-                            await abort_task
-                        except BaseException:
-                            pass
-                        try:
-                            chunk = next_task.result()
-                            chunk_count += 1
-                        except StopAsyncIteration:
-                            # StopAsyncIteration means the stream ended — check current graph state
-                            print(f"  → StopAsyncIteration detected", flush=True)
-                            # Use aget_state to read CURRENT state (not stale checkpoints)
-                            try:
-                                current = await graph.aget_state(config)
-                                next_steps = getattr(current, "next", []) or []
-                                if next_steps and len(next_steps) > 0:
-                                    # Pending next step — check for actual interrupt
-                                    meta = getattr(current, "metadata", {}) or {}
-                                    if meta and "interrupted_type" in meta:
-                                        interrupted_chunk = {"__interrupt__": meta["interrupted_type"]}
-                                    else:
-                                        # Next step but no interrupt metadata — normal transition
-                                        print(f"  → Pending next step {next_steps[0]} but no interrupt", flush=True)
-                                        interrupted_chunk = None
-                                else:
-                                    # No next step — workflow fully completed
-                                    print(f"  → No next step — workflow complete", flush=True)
-                                    interrupted_chunk = None
-                            except Exception as e:
-                                print(f"  → aget_state failed: {e}", flush=True)
-                                interrupted_chunk = None
-
-                            if interrupted_chunk is None:
-                                # No pending interrupt — normal completion (e.g., auto-approve skipped)
-                                print(f"  → No pending interrupt — normal completion", flush=True)
-                                completed = True
-                                break
-                            else:
-                                # Actual interrupt — proceed with HIL flow
-                                break
-                    else:
-                        # Both completed (rare) — re-loop
-                        print("[Bridge] both tasks completed (rare)", flush=True)
-                        continue
-
-                    # ── Process chunk (only reached when chunk arrived normally) ──
-                    # Check for interrupt signal in chunk (LangGraph yields __interrupt__ on suspend)
-                    if "__interrupt__" in chunk:
-                        print(f"  → Interrupt detected in chunk: {chunk['__interrupt__']}")
-                        interrupted_chunk = chunk
-                        break
-
-                    phase = chunk.get("phase", "UNKNOWN")
-                    artifacts = chunk.get("artifacts", {})
+                    phase = snapshot.get("phase", "UNKNOWN")
+                    artifacts = snapshot.get("artifacts", {})
 
                     # Capture artifacts
                     if artifacts and phase in self.phase_states:
@@ -922,149 +838,177 @@ class WorkflowBridge:
                         ev = self.add_event(phase, "started", f"Entering {phase} phase")
                         await self.broadcast(ev)
                         self._last_phase = phase
-
                     else:
                         ev = self.add_event(phase, "progress", f"{phase} processing...")
                         await self.broadcast(ev)
+                else:
+                    # Loop completed without break (not aborted)
+                    values_exhausted = True
 
-                # If we hit an interrupt, handle HIL flow
-                if interrupted_chunk is not None:
-                    # Determine interrupted phase — don't rely on aget_state which can fail
-                    # Determine interrupted type first — DISCOVER interrupts fire before any phase chunk
-                    interrupted_type = None
-                    if interrupted_chunk and "__interrupt__" in interrupted_chunk:
-                        raw = interrupted_chunk["__interrupt__"]
-                        if isinstance(raw, str):
-                            interrupted_type = raw
-                        else:
-                            for iv in raw:
-                                interrupted_type = iv.value.get("type")
-                                break
+                # Cancel abort waiter
+                if not abort_task.done():
+                    abort_task.cancel()
+                    try:
+                        await abort_task
+                    except BaseException:
+                        pass
 
-                    # DISCOVER interrupts (project_setup, interview) fire before any regular chunk
-                    # arrives, so _last_phase is still None. Detect them by type.
-                    # ARCH_REVIEW interrupt fires before its phase chunk arrives too — detect by type.
-                    if interrupted_type in ("project_setup", "interview"):
-                        interrupted_phase = "DISCOVER"
-                    elif interrupted_type == "review":
-                        interrupted_phase = "ARCH_REVIEW"
-                    else:
-                        interrupted_phase = self._last_phase or state.get("phase", "UNKNOWN")
+                if self._aborted:
+                    break
 
+                # Check for HIL interrupt (v3 API: async method)
+                is_interrupted = await run.interrupted()
+
+                if is_interrupted:
+                    interrupts = await run.interrupts()
+                    interrupted_type = self._extract_interrupt_type(interrupts)
+                    interrupted_phase = self._resolve_interrupt_phase(interrupted_type, state)
                     print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
 
-                    if interrupted_phase == "DISCOVER" and interrupted_type == "project_setup":
-                        hil_type = "project_setup"
-                    elif interrupted_phase == "DISCOVER" and interrupted_type == "interview":
-                        hil_type = "interview"
-                    else:
-                        hil_type = "generic"
+                    hil_type = self._classify_hil_type(interrupted_phase, interrupted_type)
+                    await self._broadcast_hil_form(interrupted_phase, hil_type, state)
 
-                    # ── Wait for user input (bridge layer) ──
-                    self.status = "waiting"
-                    self.waiting_for = interrupted_phase
-
-                    # Send appropriate form based on interrupt type
-                    if interrupted_phase == "DISCOVER" and hil_type == "project_setup":
-                        ev = self.add_event(interrupted_phase, "interview",
-                            "DISCOVER: project setup required",
-                            {"type": "project_setup", "fields": [
-                                {"key": "project_name", "label": "Project name", "required": True},
-                                {"key": "project_description", "label": "Project description", "required": True},
-                                {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
-                            ]})
-                        await self.broadcast(ev)
-                    elif interrupted_phase == "DISCOVER" and hil_type == "interview":
-                        await self._send_interview(interrupted_phase)
-                    elif interrupted_phase == "ARCH_REVIEW":
-                        print(f"  → ARCH_REVIEW HIL detected", flush=True)
-                        await self._send_review_plan("ARCH_REVIEW", state)
-                    else:
-                        ev = self.add_event(interrupted_phase, "waiting", f"Waiting for user input — {interrupted_phase}", {"type": "review_approval"})
-                        await self.broadcast(ev)
-
-                    # Poll for user input (up to 30 min)
-                    user_input = None
-                    for _ in range(1800):
-                        if self._aborted:
-                            break
-                        await asyncio.sleep(1)
-                        if interrupted_phase in self.user_inputs:
-                            user_input = self.user_inputs.pop(interrupted_phase)
-                            self._save_persisted_inputs()
-                            ev = self.add_event(interrupted_phase, "progress", "User input received")
-                            await self.broadcast(ev)
-                            break
-
+                    user_input = await self._poll_user_input(interrupted_phase)
                     if self._aborted:
                         break
 
-                    if user_input is None:
-                        user_input = {"approved": True, "interview_notes": ""}
-                        ev = self.add_event(interrupted_phase, "progress", f"{interrupted_phase} auto-approved (timeout)")
-                        await self.broadcast(ev)
-
-                    self.waiting_for = None
-
-                    # Resume: normalize user_input to a dict for the node's interrupt() return value
-                    if interrupted_phase == "DISCOVER":
-                        # Bridge stores raw value (could be str or dict from UI)
-                        # Node's interrupt() expects dict; normalize to {key: value}
-                        if isinstance(user_input, dict):
-                            resume_data = user_input
-                        elif isinstance(user_input, str):
-                            resume_data = {"interview_notes": user_input}
-                        else:
-                            resume_data = {"interview_notes": str(user_input)}
-                    elif interrupted_phase == "ARCH_REVIEW":
-                        resume_data = {
-                            "approved": bool(user_input.get("approved", True)),
-                            "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
-                        }
-                    else:
-                        resume_data = {"human_approval_required": False}
-
+                    resume_data = self._build_resume_data(interrupted_phase, user_input)
                     print(f"  → Resuming {interrupted_phase} with Command(resume=...)")
-                    # Resume workflow and update status
                     self.status = "running"
                     self.waiting_for = None
-                    input_state = Command(resume=resume_data)
+                    current_input = Command(resume=resume_data)
                     continue
-                else:
-                    # Normal completion (no interrupt)
-                    if self._last_phase:
-                        ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
-                        await self.broadcast(ev)
-                    completed = True  # Prevent outer loop from re-entering
-                    break  # break inner loop, then outer loop exits below
 
-            # Mark workflow complete
-            if not self._aborted:
+                # Not interrupted → workflow complete
+                if self._last_phase:
+                    ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
+                    await self.broadcast(ev)
+
                 self.status = "complete"
                 self.current_phase = ""
                 self.waiting_for = None
+                try:
+                    final_output = await run.output()
+                    print(f"[Bridge] Workflow complete, final state keys: {list(final_output.keys()) if isinstance(final_output, dict) else type(final_output).__name__}", flush=True)
+                except Exception:
+                    pass
                 ev = self.add_event("SYSTEM", "completed", f"Cycle {self.cycle} complete — all phases done")
                 await self.broadcast(ev)
+                break
 
         except asyncio.CancelledError:
-            # Only reset to idle if we didn't already complete successfully
             if self.status != "complete":
                 import traceback, sys
-                print(f"[Bridge] CancelledError caught (non-fatal, already completed) — stacktrace:", flush=True)
+                print(f"[Bridge] CancelledError caught (non-fatal) — stacktrace:", flush=True)
                 traceback.print_exc()
-                exc_type, exc_value, exc_tb = sys.exc_info()
-                print(f"[Bridge] CancelledError origin: {exc_tb}", flush=True)
                 self.status = "idle"
                 self.current_phase = ""
                 self.waiting_for = None
             else:
-                # Already marked complete — keep status="complete"
                 print(f"[Bridge] CancelledError ignored (status=complete)", flush=True)
         except Exception as e:
             self.status = "error"
             ev = self.add_event("SYSTEM", "error", f"Workflow failed: {str(e)[:200]}")
             await self.broadcast(ev)
             raise
+
+    def _extract_interrupt_type(self, interrupts):
+        """Extract interrupt type from v3 interrupt list."""
+        if not interrupts:
+            return None
+        first = interrupts[0]
+        if isinstance(first, str):
+            return first
+        # Could be interrupt objects or dicts
+        if hasattr(first, 'value'):
+            val = first.value
+        else:
+            val = first if isinstance(first, dict) else str(first)
+        if isinstance(val, dict):
+            return val.get("type")
+        if isinstance(val, str):
+            return val
+        return str(val)
+
+    def _resolve_interrupt_phase(self, interrupted_type, state):
+        """Map interrupt type to phase name."""
+        if interrupted_type in ("project_setup", "interview"):
+            return "DISCOVER"
+        elif interrupted_type == "review":
+            return "ARCH_REVIEW"
+        else:
+            return self._last_phase or state.get("phase", "UNKNOWN")
+
+    def _classify_hil_type(self, interrupted_phase, interrupted_type):
+        """Classify HIL interaction type."""
+        if interrupted_phase == "DISCOVER" and interrupted_type == "project_setup":
+            return "project_setup"
+        elif interrupted_phase == "DISCOVER" and interrupted_type == "interview":
+            return "interview"
+        else:
+            return "generic"
+
+    async def _broadcast_hil_form(self, phase, hil_type, state):
+        """Broadcast appropriate form based on HIL type."""
+        self.status = "waiting"
+        self.waiting_for = phase
+
+        if phase == "DISCOVER" and hil_type == "project_setup":
+            ev = self.add_event(phase, "interview",
+                "DISCOVER: project setup required",
+                {"type": "project_setup", "fields": [
+                    {"key": "project_name", "label": "Project name", "required": True},
+                    {"key": "project_description", "label": "Project description", "required": True},
+                    {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
+                ]})
+            await self.broadcast(ev)
+        elif phase == "DISCOVER" and hil_type == "interview":
+            await self._send_interview(phase)
+        elif phase == "ARCH_REVIEW":
+            print(f"  → ARCH_REVIEW HIL detected", flush=True)
+            await self._send_review_plan("ARCH_REVIEW", state)
+        else:
+            ev = self.add_event(phase, "waiting", f"Waiting for user input — {phase}", {"type": "review_approval"})
+            await self.broadcast(ev)
+
+    async def _poll_user_input(self, phase):
+        """Poll for user input (up to 30 min), with abort check."""
+        for _ in range(1800):
+            if self._aborted:
+                return None
+            await asyncio.sleep(1)
+            if phase in self.user_inputs:
+                user_input = self.user_inputs.pop(phase)
+                self._save_persisted_inputs()
+                ev = self.add_event(phase, "progress", "User input received")
+                await self.broadcast(ev)
+                return user_input
+
+        # Timeout → auto-approve
+        ev = self.add_event(phase, "progress", f"{phase} auto-approved (timeout)")
+        await self.broadcast(ev)
+        return {"approved": True, "interview_notes": ""}
+
+    def _build_resume_data(self, phase, user_input):
+        """Build resume payload for Command(resume=...)."""
+        if user_input is None:
+            user_input = {"approved": True, "interview_notes": ""}
+        self.waiting_for = None
+
+        if phase == "DISCOVER":
+            if isinstance(user_input, dict):
+                return user_input
+            elif isinstance(user_input, str):
+                return {"interview_notes": user_input}
+            else:
+                return {"interview_notes": str(user_input)}
+        elif phase == "ARCH_REVIEW":
+            return {
+                "approved": bool(user_input.get("approved", True)),
+                "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
+            }
+        else:
+            return {"human_approval_required": False}
 
     def _build_executor_state(self, cycle_id, project_name, spec_text, context_folder):
         """Build state via shared executor — identical to what CLI uses."""
