@@ -1,8 +1,9 @@
 """
 OpenHands BUILD node -- delegates to OpenHands agent-server via OpenAI Gateway API.
 
-Replaces build_proxy.py. Falls back to build_subgraph_legacy.py if
-the agent-server is unreachable or returns an error.
+Primary path: health-check → POST /v1/chat/completions → poll conversation → parse results.
+Fallback path: invoke the compiled BUILD subgraph (build_subgraph_legacy.py) as a proper
+LangGraph subgraph with clean parent↔child state mapping.
 
 API endpoints used:
 - POST /v1/chat/completions  -> creates conversation, returns conv ID in header
@@ -18,6 +19,11 @@ from typing import Optional
 import httpx
 
 from config.loader import config
+from graph.nodes.build_subgraph_legacy import (
+    build_input_mapping,
+    build_output_mapping,
+    get_compiled_subgraph,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -262,121 +268,47 @@ def _poll_conversation(
     return None
 
 
-# -- Legacy fallback ------------------------------------------------
-def _fallback_legacy_build(state: dict) -> dict:
+# -- Local subgraph fallback ------------------------------------------
+def _run_local_subgraph(state: dict) -> dict:
     """
-    Fallback to build_subgraph_legacy.py when OpenHands is unreachable.
+    Run the compiled BUILD subgraph as local fallback.
 
-    Imports lazily to avoid dependency issues during normal operation.
+    Uses proper LangGraph subgraph invocation with clean parent↔child
+    state mapping — no internal state keys leak into WorkflowState.
     """
-    logger.warning("  -> [OPENHANDS] Falling back to build_subgraph_legacy.py")
-    from graph.nodes.build_subgraph_legacy import (
-        build_input_mapping,
-        build_output_mapping,
-        build_subgraph,
-    )
+    logger.warning("  -> [OPENHANDS] Running local BUILD subgraph")
     child_state = build_input_mapping(state)
-    compiled = build_subgraph().compile()
+    compiled = get_compiled_subgraph()
     result = compiled.invoke(child_state)
     return build_output_mapping(result)
 
 
-# -- Main node function -----------------------------------------------
-def openhands_build_node(state: dict) -> dict:
+# -- OpenHands delegation helpers -------------------------------------
+def _write_generated_files(state: dict, files: list[dict]) -> list[str]:
     """
-    LangGraph node: delegate BUILD to OpenHands agent-server.
+    Write generated files to disk immediately.
 
-    Returns partial update dict (LangGraph reducer merges).
+    Writes to the project_path so downstream phases (SEED_DATA, VERIFY)
+    can access them. Returns list of written paths.
     """
-    oh_cfg = config.services.openhands
-    gateway_url = oh_cfg.url
-    secret_key = oh_cfg.secret_key
-    workspace_path = oh_cfg.workspace_path
-    timeout = oh_cfg.timeout
+    project_path = state.get("project_path", "")
+    written = []
+    for file_entry in files:
+        rel_path = file_entry["path"]
+        content = file_entry["content"]
+        full_path = f"{project_path}/{rel_path}"
+        try:
+            import pathlib
+            p = pathlib.Path(full_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+            written.append(rel_path)
+        except Exception as e:
+            logger.warning("Failed to write %s: %s", rel_path, e)
 
-    logger.info(
-        "  -> [OPENHANDS] Starting BUILD via Gateway at %s",
-        gateway_url,
-    )
-
-    # -- Health check --
-    try:
-        with httpx.Client(base_url=gateway_url, timeout=10.0) as client:
-            resp = client.get("/health", timeout=5.0)
-            if resp.status_code not in (200, 204):
-                raise httpx.RemoteProtocolError("Unhealthy")
-    except (httpx.HTTPError, TimeoutError, ConnectionError) as e:
-        logger.warning(
-            "  -> [OPENHANDS] Health check failed: %s -- fallback",
-            e,
-        )
-        return _fallback_legacy_build(state)
-
-    # -- Create conversation --
-    prompt = _build_prompt(state)
-
-    try:
-        with httpx.Client(base_url=gateway_url, timeout=30.0) as client:
-            # Ensure profile exists (idempotent)
-            _ensure_build_profile(client)
-
-            # POST to Gateway
-            resp = client.post(
-                "/v1/chat/completions",
-                json={
-                    "model": "openhands_build_agent",
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                headers={
-                    "Authorization": f"Bearer {secret_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=60.0,
-            )
-            resp.raise_for_status()
-
-            conv_id = resp.headers.get("X-OpenHands-ServerConversation-ID")
-            if not conv_id:
-                logger.error(
-                    "  -> [OPENHANDS] No conversation ID in response"
-                )
-                return _fallback_legacy_build(state)
-
-            logger.info(
-                "  -> [OPENHANDS] Conversation %s created",
-                conv_id,
-            )
-
-            # -- Poll for completion --
-            assistant_text = _poll_conversation(
-                client, conv_id, timeout=timeout,
-            )
-
-            if assistant_text is None:
-                logger.warning(
-                    "  -> [OPENHANDS] Conversation %s timed out",
-                    conv_id,
-                )
-                return _fallback_legacy_build(state)
-
-    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-        logger.warning(
-            "  -> [OPENHANDS] Connection failed: %s -- fallback",
-            e,
-        )
-        return _fallback_legacy_build(state)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code in (404, 502, 503, 504):
-            logger.warning(
-                "  -> [OPENHANDS] Server error %d -- fallback",
-                e.response.status_code,
-            )
-            return _fallback_legacy_build(state)
-        raise
-
-    # -- Parse results --
-    parsed = _parse_assistant_text(assistant_text)
-    return _merge_results(state, parsed)
+    if written:
+        logger.info("  -> [OPENHANDS] Wrote %d files to disk", len(written))
+    return written
 
 
 def _merge_results(state: dict, parsed: dict) -> dict:
@@ -459,31 +391,111 @@ def _merge_results(state: dict, parsed: dict) -> dict:
     return update
 
 
-def _write_generated_files(state: dict, files: list[dict]) -> list[str]:
+def _delegate_to_openhands(state: dict, oh_cfg) -> dict:
     """
-    Write generated files to disk immediately.
+    Delegate BUILD to OpenHands agent-server.
 
-    Writes to the project_path so downstream phases (SEED_DATA, VERIFY)
-    can access them. Returns list of written paths.
+    Creates a conversation, polls for completion, parses the assistant
+    text response, and merges results into WorkflowState.
     """
-    project_path = state.get("project_path", "")
-    written = []
-    for file_entry in files:
-        rel_path = file_entry["path"]
-        content = file_entry["content"]
-        full_path = f"{project_path}/{rel_path}"
-        try:
-            import pathlib
-            p = pathlib.Path(full_path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
-            written.append(rel_path)
-        except Exception as e:
-            logger.warning("Failed to write %s: %s", rel_path, e)
+    gateway_url = oh_cfg.url
+    secret_key = oh_cfg.secret_key
+    timeout = oh_cfg.timeout
 
-    if written:
-        logger.info("  -> [OPENHANDS] Wrote %d files to disk", len(written))
-    return written
+    # -- Create conversation --
+    prompt = _build_prompt(state)
+
+    with httpx.Client(base_url=gateway_url, timeout=30.0) as client:
+        # Ensure profile exists (idempotent)
+        _ensure_build_profile(client)
+
+        # POST to Gateway
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "openhands_build_agent",
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            headers={
+                "Authorization": f"Bearer {secret_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+
+        conv_id = resp.headers.get("X-OpenHands-ServerConversation-ID")
+        if not conv_id:
+            logger.error("  -> [OPENHANDS] No conversation ID in response")
+            return _run_local_subgraph(state)
+
+        logger.info("  -> [OPENHANDS] Conversation %s created", conv_id)
+
+        # -- Poll for completion --
+        assistant_text = _poll_conversation(client, conv_id, timeout=timeout)
+
+        if assistant_text is None:
+            logger.warning("  -> [OPENHANDS] Conversation %s timed out", conv_id)
+            return _run_local_subgraph(state)
+
+    # -- Parse results --
+    parsed = _parse_assistant_text(assistant_text)
+    return _merge_results(state, parsed)
+
+
+# -- Main node function -----------------------------------------------
+def openhands_build_wrapper(state: dict) -> dict:
+    """
+    LangGraph node: wrapper for BUILD subgraph.
+
+    1. Health-check OpenHands agent-server
+    2. If available, delegate to OpenHands via Gateway API
+    3. Otherwise, run the local BUILD subgraph (proper compiled LangGraph)
+
+    Returns partial update dict (LangGraph reducer merges).
+    """
+    oh_cfg = config.services.openhands
+
+    logger.info(
+        "  -> [OPENHANDS] Starting BUILD via Gateway at %s",
+        oh_cfg.url,
+    )
+
+    # -- Health check --
+    try:
+        with httpx.Client(base_url=oh_cfg.url, timeout=10.0) as client:
+            resp = client.get("/health", timeout=5.0)
+            if resp.status_code not in (200, 204):
+                raise httpx.RemoteProtocolError("Unhealthy")
+    except (httpx.HTTPError, TimeoutError, ConnectionError) as e:
+        logger.warning(
+            "  -> [OPENHANDS] Health check failed: %s -- fallback",
+            e,
+        )
+        return _run_local_subgraph(state)
+
+    # -- Delegate to OpenHands --
+    try:
+        return _delegate_to_openhands(state, oh_cfg)
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        logger.warning(
+            "  -> [OPENHANDS] Connection failed: %s -- fallback",
+            e,
+        )
+        return _run_local_subgraph(state)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (404, 502, 503, 504):
+            logger.warning(
+                "  -> [OPENHANDS] Server error %d -- fallback",
+                e.response.status_code,
+            )
+            return _run_local_subgraph(state)
+        raise
+
+
+# Backward compatibility alias — consumers that imported openhands_build_node
+# directly will still work.
+openhands_build_node = openhands_build_wrapper
 
 
 # -- Public factory (same interface as build_proxy_node) --------------
@@ -493,7 +505,8 @@ def openhands_build_proxy_factory(
     """
     Factory for LangGraph integration.
 
-    Returns openhands_build_node wrapped for backward compatibility
-    with the existing build_proxy_node interface.
+    Returns openhands_build_wrapper (aliased as openhands_build_node for
+    backward compatibility) wrapped for use with the existing
+    build_proxy_node interface.
     """
-    return openhands_build_node
+    return openhands_build_wrapper
