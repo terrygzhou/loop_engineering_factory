@@ -101,7 +101,7 @@ services:
       resources:
         limits:
           memory: 256M
-    # No healthcheck: Alpine-based image has no shell for curl/wget/bash
+    # No healthcheck: distroless image has no shell for curl/wget/bash
 
   phoenix:
     image: arizephoenix/phoenix:latest
@@ -117,7 +117,13 @@ services:
       resources:
         limits:
           memory: 1G
-    # No healthcheck: Alpine-based image has no shell for curl/wget/bash
+    # healthcheck: python3 exists in phoenix image; use urllib for HTTP check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6006/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
 
   # ── OpenHands: AI agent for Gateway API (OpenAI-compatible) ──
   openhands:
