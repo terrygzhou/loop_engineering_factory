@@ -49,6 +49,9 @@ COPY . .
 # Ensure skills directory is fully populated (some agent-skills can be skipped by COPY caching)
 COPY skills/ /app/skills/
 
+# Create output directory for generated projects
+RUN mkdir -p /app/output
+
 # Copy static frontend files into nginx document root
 COPY frontend/static/ /usr/share/nginx/html/
 RUN chmod -R 755 /usr/share/nginx/html/
