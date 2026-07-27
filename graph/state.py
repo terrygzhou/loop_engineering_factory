@@ -7,7 +7,10 @@ from pydantic import BaseModel
 
 
 def _dict_merge(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
-    """Reducer: merge two dicts (right wins on conflict)."""
+    """Reducer: merge two dicts (right wins on conflict). Empty right clears the key."""
+    if right == {}:
+        # Explicitly clearing — left returns empty so key is effectively removed
+        return right
     return {**left, **right}
 
 
