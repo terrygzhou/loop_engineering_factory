@@ -149,13 +149,12 @@ def build_executor_state(
         },
         feedback=[],
         error=None,
-        spec_path=spec_text,
+        spec_text=spec_text,
         project_path=get_project_path(),
         skip_discover=skip_discover,
         context_folder=context_folder,
         human_approval_required=False,
         improve_mode=improve_mode,
-        pending_inputs=[],
         diagrams={},
         diagram_status="pending",
         diagram_feedback="",
@@ -166,10 +165,22 @@ def build_executor_state(
         discover_interview_done=False,
         auto_approve_override=None,
         trace_id="",
-        audit_entries=[],
-        build_backlog=None,
         superweb_mode="",
         superweb_agent_report=None,
+        # Parent graph runtime keys (S-001)
+        project_context="",
+        spec_refined="",
+        plan="",
+        tasks="",
+        backlog=[],
+        diagram_pngs={},
+        user_review_comments="",
+        status="",
+        retry_count=0,
+        loop_counts={},
+        spec_confidence=0.0,
+        tasks_text="",
+        solution_md="",
     )
 
 
@@ -217,6 +228,7 @@ class WorkflowRunner:
         improve_mode: bool = False,
     ):
         """Run the workflow synchronously with observability instrumentation."""
+        config.reset_paths(project_name)
         self.checkpointer = self._get_fresh_checkpointer()
         self.graph = build_graph(checkpointer=self.checkpointer, auto_approve=self.auto_approve)
         self.thread_id = str(__import__("uuid").uuid4())

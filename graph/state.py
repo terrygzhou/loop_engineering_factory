@@ -40,14 +40,10 @@ class WorkflowState(TypedDict):
     project_name: str
     project_path: str
     project_folder: str
-    spec_path: str
     project_description: str
     skip_discover: bool
     context_folder: str
     error: Optional[str]
-
-    # ── B-009: Non-blocking input ──
-    pending_inputs: Annotated[List[dict], operator.add]
 
     # ── B-010: Architecture diagrams ──
     diagrams: Annotated[Dict[str, str], _dict_merge]
@@ -66,15 +62,24 @@ class WorkflowState(TypedDict):
 
     # ── Audit trail ──
     trace_id: str
-    # NOTE: audit_entries exists in state but NOT populated by nodes (OOM risk).
-    # AuditLog persists to disk (build/audit_logs/interactions.jsonl).
-    audit_entries: Annotated[List[dict], operator.add]
 
     # ── BUILD subgraph state (carried through for merge) ──
-    build_backlog: Optional[Annotated[List[dict], operator.add]]
     superweb_mode: str
     superweb_agent_report: Optional[dict]
     artifacts: Annotated[Dict[str, str], _dict_merge]
 
-    # ── UI bridge ──
-    skill_callback: Optional[callable]
+    # ── Parent graph runtime keys (S-001: schema enforcement) ──
+    project_context: str
+    spec_text: str
+    spec_refined: str
+    plan: str
+    tasks: str
+    backlog: Annotated[List[dict], operator.add]
+    diagram_pngs: Annotated[Dict[str, str], _dict_merge]
+    user_review_comments: str
+    status: str
+    retry_count: int
+    loop_counts: Annotated[Dict[str, int], _dict_merge]
+    spec_confidence: float
+    tasks_text: str
+    solution_md: str

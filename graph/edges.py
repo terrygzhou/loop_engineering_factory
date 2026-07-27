@@ -9,6 +9,10 @@ from config.guardrails import get_threshold
 # Export END marker for use in main.py
 END_MARKER = END
 
+# Valid phase targets for routing safety (S-005)
+VALID_PHASES = {"DISCOVER", "DISCOVER_SETUP", "DISCOVER_INTERVIEW", "DEFINE", "PLAN",
+                "ARCH_REVIEW", "BUILD", "SEED_DATA", "VERIFY", "SHIP", "REFLECT"}
+
 # Per-cycle loop counts stored in state["artifacts"]["loop_counts"] — never global.
 # Forward paths for forced progression after max retries (prevents livelock).
 _forward_paths = {
@@ -135,5 +139,8 @@ def route_phase(state: WorkflowState) -> str:
     if phase == "REFLECT":
         return END
 
-    # Default: END
+    # Safety fallback: unknown phase -> END with warning (S-005)
+    import logging
+    _log = logging.getLogger(__name__)
+    _log.warning(f"Unknown phase '{phase}' in route_phase, falling back to END")
     return END
