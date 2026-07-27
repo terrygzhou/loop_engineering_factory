@@ -46,6 +46,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy all application code (orchestrator + frontend)
 COPY . .
 
+# Ensure skills directory is fully populated (some agent-skills can be skipped by COPY caching)
+COPY skills/ /app/skills/
+
 # Copy static frontend files into nginx document root
 COPY frontend/static/ /usr/share/nginx/html/
 RUN chmod -R 755 /usr/share/nginx/html/
