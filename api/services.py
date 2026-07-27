@@ -102,86 +102,81 @@ class WorkflowService:
             input_state = state
 
             while True:
-                # v3 event stream — async methods on AsyncGraphRunStream
-                run = await graph.astream_events(
-                    input_state, config=config, version="v3"
-                )
+                try:
+                    async for chunk in graph.stream(
+                        input_state, config=config, stream_mode="values"
+                    ):
+                        phase = chunk.get("phase", "UNKNOWN")
+                        if phase != current_phase:
+                            if current_phase:
+                                wf["state"].setdefault("artifacts", {})["phase_log"] = \
+                                    wf["state"].get("artifacts", {}).get("phase_log", []) + \
+                                    [{"phase": current_phase, "status": "completed"}]
+                            current_phase = phase
+                            wf["state"]["phase"] = phase
+                            wf["status"] = phase
+                            self._broadcast_status(workflow_id, phase)
 
-                # Drive the stream via .values projection for phase tracking
-                async for chunk in run.values:
-                    phase = chunk.get("phase", "UNKNOWN")
-                    if phase != current_phase:
-                        if current_phase:
-                            wf["state"].setdefault("artifacts", {})["phase_log"] = \
-                                wf["state"].get("artifacts", {}).get("phase_log", []) + \
-                                [{"phase": current_phase, "status": "completed"}]
-                        current_phase = phase
+                        wf["state"] = chunk
                         wf["state"]["phase"] = phase
-                        wf["status"] = phase
-                        self._broadcast_status(workflow_id, phase, chunk)
+                        wf["state"]["status"] = phase
 
-                    wf["state"] = chunk
-                    wf["state"]["phase"] = phase
-                    wf["state"]["status"] = phase
-
-                # Check if run completed normally or was interrupted
-                interrupted = await run.interrupted()
-                if not interrupted:
+                    # Normal completion — no interrupt
                     wf["status"] = "completed"
                     self._broadcast_status(workflow_id, "completed")
                     break
 
-                # HIL pause — collect input via WebSocket
-                log_request("graph.interrupted", workflow_id=workflow_id, phase=current_phase)
-                interrupts = await run.interrupts()
-                interrupted_phase = current_phase or "UNKNOWN"
-                wf["status"] = f"paused:{interrupted_phase}"
-                self._broadcast_status(workflow_id, f"paused:{interrupted_phase}")
+                except Exception as e:
+                    from langgraph.errors import GraphInterrupt
+                    if not isinstance(e, GraphInterrupt):
+                        raise
 
-                # Determine pause type from interrupt payload
-                interrupt_value = interrupts[0].value if interrupts else {}
-                pause_type = self._determine_pause_type(interrupted_phase, interrupt_value)
-                wf["status"] = f"paused:{interrupted_phase}:{pause_type}"
-                self._broadcast_status(workflow_id, f"paused:{interrupted_phase}:{pause_type}")
+                    log_request("graph.interrupted", workflow_id=workflow_id, phase=current_phase)
+                    graph_state = await graph.aget_state(config)
+                    if not graph_state.next:
+                        wf["status"] = "completed"
+                        self._broadcast_status(workflow_id, "completed")
+                        break
 
-                # Broadcast the interrupt to the frontend so UI can render input
-                await self.broadcast({
-                    "type": "action",
-                    "phase": interrupted_phase,
-                    "action": self._get_hil_action(interrupted_phase, pause_type),
-                    "data": self._build_hil_data(interrupted_phase, pause_type, interrupt_value),
-                    "timestamp": time.time(),
-                })
+                    current_chunk = graph_state.values or {}
+                    interrupted_phase = current_chunk.get("phase") or current_chunk.get("next_phase") or current_phase or "UNKNOWN"
+                    interrupts = list(graph_state.tasks)
+                    interrupt_value = interrupts[0].state.values if interrupts else {}
+                    pause_type = self._determine_pause_type(interrupted_phase, interrupt_value)
+                    wf["status"] = f"paused:{interrupted_phase}:{pause_type}"
+                    self._broadcast_status(workflow_id, f"paused:{interrupted_phase}:{pause_type}")
 
-                # Wait for user input via WebSocket
-                resume_data = await self._collect_hil_input(
-                    workflow_id, interrupted_phase, pause_type, interrupt_value
-                )
+                    # Broadcast HIL prompt to frontend
+                    await self.broadcast({
+                        "type": "action",
+                        "phase": interrupted_phase,
+                        "action": self._get_hil_action(interrupted_phase, pause_type),
+                        "data": self._build_hil_data(interrupted_phase, pause_type, interrupt_value),
+                        "timestamp": time.time(),
+                    })
 
-                # Build resume payload — map interrupt IDs to values
-                # With split DISCOVER nodes, each interrupt has its own ID
-                resume_map = {}
-                for intr in interrupts:
-                    if interrupted_phase in ("DISCOVER", "DISCOVER_SETUP"):
-                        if pause_type == "project_setup":
-                            mapped = self._build_project_setup_resume(
-                                wf["state"], resume_data
-                            )
+                    # Wait for user input via WebSocket
+                    resume_data = await self._collect_hil_input(
+                        workflow_id, interrupted_phase, pause_type, interrupt_value
+                    )
+
+                    # Build resume payload
+                    resume_map = {}
+                    for intr in interrupts:
+                        if interrupted_phase in ("DISCOVER", "DISCOVER_SETUP"):
+                            if pause_type == "project_setup":
+                                mapped = self._build_project_setup_resume(wf["state"], resume_data)
+                            else:
+                                mapped = self._build_interview_resume(wf["state"], resume_data)
+                        elif interrupted_phase == "ARCH_REVIEW":
+                            mapped = self._build_review_resume(wf["state"], resume_data)
                         else:
-                            mapped = self._build_interview_resume(
-                                wf["state"], resume_data
-                            )
-                    elif interrupted_phase == "ARCH_REVIEW":
-                        mapped = self._build_review_resume(
-                            wf["state"], resume_data
-                        )
-                    else:
-                        mapped = resume_data
-                    resume_map[intr.id] = mapped
+                            mapped = resume_data
+                        resume_map[intr.id] = mapped
 
-                log_request("graph.resumed", workflow_id=workflow_id, phase=interrupted_phase, pause_type=pause_type)
-                input_state = Command(resume=resume_map)
-                continue
+                    log_request("graph.resumed", workflow_id=workflow_id, phase=interrupted_phase, pause_type=pause_type)
+                    input_state = Command(resume=resume_map)
+                    continue
 
         finally:
             if workflow_id in self._tasks:
