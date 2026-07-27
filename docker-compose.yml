@@ -81,7 +81,7 @@ services:
           memory: 512M
     # healthcheck: chromadb uses bash + /dev/tcp (no curl/wget in image)
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '(echo >/dev/tcp/localhost/8000) 2>/dev/null || exit 1'"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8000"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -168,7 +168,7 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '(echo >/dev/tcp/localhost/9080) 2>/dev/null || exit 1'"]
+      test: ["CMD", "perl", "-e", "use IO::Socket::INET; IO::Socket::INET->new(PeerAddr=>'localhost:9080') or exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
