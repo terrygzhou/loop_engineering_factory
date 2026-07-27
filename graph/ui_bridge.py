@@ -33,11 +33,11 @@ class SkillTimer:
         self.state = state
         self.skill_name = skill_name
         self.start = time.time()
-        self.report_skill_running(state, skill_name)
+        report_skill_running(state, skill_name)
 
     def complete(self, duration_s: float = None, details: dict = None):
         elapsed = duration_s or (time.time() - self.start)
-        self.report_skill_completed(self.state, self.skill_name, elapsed, details)
+        report_skill_completed(self.state, self.skill_name, elapsed, details)
 
     def fail(self, error: str = ""):
-        self.report_skill_failed(self.state, self.skill_name, error)
+        report_skill_failed(self.state, self.skill_name, error)
