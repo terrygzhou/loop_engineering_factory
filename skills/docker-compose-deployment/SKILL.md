@@ -642,7 +642,7 @@ This loop ran 15+ times during a typical feature build.
 ## References
 - `[scripts/reconcile_seed_images.py](scripts/reconcile_seed_images.py)` — Seed-to-image reconciliation: cross-reference, update, verify
 - `[scripts/recover_from_container.sh](scripts/recover_from_container.sh)` — Recover files from running container (after `git reset --hard` or similar)
-- `[references/dashboard-membership-card.md](references/dashboard-membership-card.md)` — Dashboard membership card: Jinja2 template + CSS + JS pattern, deployment verification
+- `[references/dashboard-user-card.md](references/dashboard-user-card.md)` — Dashboard user card: Jinja2 template + CSS + JS pattern, deployment verification
 - `[references/seed-fk-cascade.md](references/seed-fk-cascade.md)` — Seed data: FK cascade deletion order
 - `[references/seed-injection.md](references/seed-injection.md)` — Seed data injection workflow: SQL vs Python seed scripts, docker cp/exec patterns, idempotent ON CONFLICT inserts, UnboundLocalError from shadowed imports
 - `[references/seed-injection-customer-scoped.md](references/seed-injection-customer-scoped.md)` — Customer-scoped seed injection: workflow, expected counts, orphan verification, common errors
