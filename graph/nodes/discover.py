@@ -105,6 +105,9 @@ def discover_setup_node(state: dict) -> dict:
         "project_path": project_folder,
         "phase": "DISCOVER",
         "next_phase": "DEFINE",
+        # Clear top-level diagram state from previous cycles
+        "diagrams": {},
+        "diagram_status": "pending",
     }
 
 
@@ -224,6 +227,9 @@ def discover_interview_node(state: dict) -> dict:
         "artifacts": artifacts,
         "phase": "DISCOVER",
         "next_phase": "DEFINE",
+        # Clear top-level diagram state from previous cycles
+        "diagrams": {},
+        "diagram_status": "pending",
     }
 
 

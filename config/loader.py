@@ -198,6 +198,15 @@ class Config:
             pass
         print(f"  ✓ config.yaml updated: project_name={name}, project_path={self.paths.project_path}")
 
+    def reset_paths(self, project_name: str):
+        """Reset paths at workflow start to prevent cross-run contamination.
+
+        Clears stale project_name from previous runs so discover_setup_node
+        doesn't derive project_folder from tainted config.
+        """
+        self.paths.project_name = project_name
+        self.paths.project_path_template = "{{project_name}}"
+
     @staticmethod
     def reload():
         """Reload from disk."""

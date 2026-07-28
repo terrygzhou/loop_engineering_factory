@@ -35,6 +35,7 @@ class WorkflowService:
         from graph.executor import build_executor_state, WorkflowRunner
         from config.loader import config
 
+        config.reset_paths(project_name)
         state = build_executor_state(
             cycle_id="1",
             project_name=project_name,
@@ -225,6 +226,9 @@ class WorkflowService:
                 result["project_description"] = resume_data["project_description"]
             if "context_folder" in resume_data:
                 result["context_folder"] = resume_data["context_folder"]
+        # Preserve project_folder so DISCOVER_INTERVIEW doesn't derive it from stale config
+        if chunk.get("project_folder"):
+            result["project_folder"] = chunk["project_folder"]
         return result
 
     def _build_interview_resume(self, chunk, resume_data):
@@ -235,12 +239,16 @@ class WorkflowService:
         existing["discover_interview_done"] = True
         existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
 
-        return {
+        result = {
             "human_approval_required": False,
             "interview_notes": notes,
             "discover_interview_done": True,
             "artifacts": existing,
         }
+        # Preserve project_folder so DISCOVER_INTERVIEW doesn't derive it from stale config
+        if chunk.get("project_folder"):
+            result["project_folder"] = chunk["project_folder"]
+        return result
 
     def _build_review_resume(self, chunk, resume_data):
         """Build resume data for ARCH_REVIEW pause."""
