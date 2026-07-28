@@ -9,6 +9,8 @@ Split into two nodes, each with ONE interrupt:
 On resume, only the paused node re-runs (~30 lines vs ~100 lines in the old
 single-node design).
 """
+from langgraph.config import get_stream_writer
+
 import json
 import os
 import re
@@ -25,6 +27,7 @@ from graph.ui_bridge import SkillTimer
 
 
 def discover_setup_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     DISCOVER phase — Setup node.
 
@@ -112,6 +115,7 @@ def discover_setup_node(state: dict) -> dict:
 
 
 def discover_interview_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     DISCOVER phase — Interview node.
 
@@ -236,6 +240,7 @@ def discover_interview_node(state: dict) -> dict:
 # ── Backward compatibility: alias to old single-node function ──
 
 def discover_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Backward-compatible wrapper — delegates to setup then interview."""
     result = discover_setup_node(state)
     merged = {**state, **result}
@@ -243,6 +248,7 @@ def discover_node(state: dict) -> dict:
 
 
 def _discover_auto_approve(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Backward-compatible: auto-approve via the two-node pipeline."""
     state = {
         **state,
@@ -261,6 +267,7 @@ def _discover_auto_approve(state: dict) -> dict:
 # ── Helpers (unchanged) ──
 
 def _scan_codebase(context_folder: str, project_name: str, project_folder: str) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     if context_folder and Path(context_folder).is_dir():
         project_type = _detect_project_type(context_folder)
         return {
@@ -281,6 +288,7 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
     }
 
 def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder, state: dict = None):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     fabric_skill = skills.get("fabric-prompts", {})
 
@@ -321,6 +329,7 @@ def _generate_requirement_via_fabric(project_name, project_description, intervie
     return _generate_requirement_template(project_name, project_description, interview_notes, context, project_folder)
 
 def _generate_requirement_template(project_name, project_description, interview_notes, context, project_folder):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     return (
         f"# {project_name} — Discovery Report\n\n"
         f"## Project Overview\n{project_description or '(none)'}\n\n"
@@ -333,6 +342,7 @@ def _generate_requirement_template(project_name, project_description, interview_
     )
 
 def _load_improve_telemetry(state, project_name):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     try:
         from config.loader import config as _cfg
         _live_path = Path(_cfg.paths.storage_dir) / "live.json"
@@ -357,6 +367,7 @@ def _load_improve_telemetry(state, project_name):
         return None
 
 def _detect_project_type(project_path: str) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     p = Path(project_path)
     if (p / "pyproject.toml").exists(): return "python-pyproject"
     if (p / "requirements.txt").exists(): return "python-requirements"
@@ -370,11 +381,13 @@ def _detect_project_type(project_path: str) -> str:
     return "unknown"
 
 def _inventory_tree(project_path: str) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     p = Path(project_path)
     dirs = [{"name": d.name, "file_count": len(list(d.rglob("*")))} for d in p.iterdir() if d.is_dir() and not d.name.startswith(".")]
     return {"directories": dirs, "total_top_level": len(dirs)}
 
 def _discover_routes(project_path, project_type):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     if project_type in ("python-fastapi", "python-pyproject", "python-requirements"):
         return _discover_fastapi_routes(project_path)
     elif project_type == "node":
@@ -382,6 +395,7 @@ def _discover_routes(project_path, project_type):
     return []
 
 def _discover_fastapi_routes(project_path):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     routes = []
     p = Path(project_path)
     for rd in list(p.rglob("routers")) + list(p.rglob("api")) + list(p.rglob("routes")):
@@ -400,6 +414,7 @@ def _discover_fastapi_routes(project_path):
     return routes
 
 def _discover_express_routes(project_path):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     routes = []
     p = Path(project_path)
     for jsfile in list(p.rglob("*.js")) + list(p.rglob("*.ts")):
@@ -410,6 +425,7 @@ def _discover_express_routes(project_path):
     return routes
 
 def _discover_models(project_path, project_type):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     models = []
     if project_type.startswith("python"):
         p = Path(project_path)
@@ -424,6 +440,7 @@ def _discover_models(project_path, project_type):
     return models
 
 def _discover_templates(project_path, project_type):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     templates = []
     p = Path(project_path)
     for d in p.rglob("templates"):
@@ -433,6 +450,7 @@ def _discover_templates(project_path, project_type):
     return templates
 
 def _discover_dependencies(project_path):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     deps = {}
     p = Path(project_path)
     for f in [p / "requirements.txt", p / "package.json", p / "Cargo.toml", p / "go.mod"]:
@@ -443,6 +461,7 @@ def _discover_dependencies(project_path):
     return deps
 
 def _get_git_status(project_path):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     try:
         result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=project_path, timeout=5)
         return {"status": result.stdout.strip()[:bounds.feedback.max_context_query_chars], "clean": not result.stdout.strip()}
@@ -450,11 +469,13 @@ def _get_git_status(project_path):
         return {"status": "unknown"}
 
 def _get_docker_status(project_path):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     p = Path(project_path)
     services = [str(f) for f in [p / "docker-compose.yml", p / "docker-compose.yaml"] if f.exists()]
     return {"services": services}
 
 def _discover_specs(project_path):
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     specs = []
     p = Path(project_path)
     for f in p.rglob("*.md"):
@@ -466,6 +487,7 @@ def _discover_specs(project_path):
 
 
 def _refine_idea(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Use idea-refine skill to sharpen raw interview notes into a crisp, actionable concept."""
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     refine_skill = skills.get("idea-refine", {})
@@ -483,11 +505,12 @@ def _refine_idea(interview_notes: str, project_name: str, project_description: s
                           workflow_id=state.get("project_name", ""), phase="DISCOVER")
     timer = SkillTimer(state, "idea-refine")
     timer.complete()
-    print(f"  → idea-refine produced {len(result)} chars")
+    writer({"type": "progress", "phase": "DISCOVER", "step": "progress", "detail": f"  → idea-refine produced {len(result)} chars", "ts": time.time()})
     return result
 
 
 def _build_context(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Use context-engineering skill to build comprehensive, focused project context."""
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     ctx_skill = skills.get("context-engineering", {})
@@ -506,6 +529,6 @@ def _build_context(interview_notes: str, project_name: str, project_description:
                           workflow_id=state.get("project_name", ""), phase="DISCOVER")
     ctx_timer = SkillTimer(state, "context-engineering")
     ctx_timer.complete()
-    print(f"  → context-engineering produced {len(result)} chars")
+    writer({"type": "progress", "phase": "DISCOVER", "step": "progress", "detail": f"  → context-engineering produced {len(result)} chars", "ts": time.time()})
     return result
 

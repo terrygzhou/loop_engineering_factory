@@ -3,6 +3,8 @@ REFLECT node: Meta-agent reflection — analyze cycle, propose config updates,
 request human approval, archive feedback.
 Skills: meta-agent-reflection (internal) → git-workflow (commit approved diffs)
 """
+from langgraph.config import get_stream_writer
+
 import json
 import yaml
 from config.loader import config
@@ -14,17 +16,18 @@ from feedback.chroma_client import get_chroma_client, store_pattern, query_patte
 
 
 def reflect_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     REFLECT phase: Analyze the completed cycle, compare against historical patterns,
     generate proposed skill config updates, request human approval, and archive.
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    print("\n=== REFLECT PHASE ===")
+    writer({"type": "progress", "phase": "REFLECT", "step": "started", "detail": "\n=== REFLECT PHASE ===", "ts": time.time()})
     skills = build_skill_registry(config.workflow.skill_registry_path)
 
     # Step 1: Record cycle data
-    print("  → Recording cycle data...")
+    writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "  → Recording cycle data...", "ts": time.time()})
     aggregator = FeedbackAggregator(storage_dir=config.paths.storage_dir)
     aggregator.record_cycle(
         cycle_id=state["cycle_id"],
@@ -36,17 +39,17 @@ def reflect_node(state: dict) -> dict:
     feedback_entries: list[dict] = [{"action": "cycle_recorded", "cycle_id": state["cycle_id"]}]
 
     # Step 2: Load guardrails
-    print("  → Loading guardrails...")
+    writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "  → Loading guardrails...", "ts": time.time()})
     guardrails_path = config.paths.guardrails_path
     try:
         with open(guardrails_path, 'r') as f:
             guardrails = yaml.safe_load(f)
     except Exception as e:
-        print(f"  ⚠ Could not load guardrails: {e}")
+        writer({"type": "progress", "phase": "REFLECT", "step": "warning", "detail": f"  ⚠ Could not load guardrails: {e}", "ts": time.time()})
         guardrails = {}
 
     # Step 3: Get historical patterns (ChromaDB first, file fallback)
-    print("  → Querying historical patterns...")
+    writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "  → Querying historical patterns...", "ts": time.time()})
     chroma_client = get_chroma_client()
     if chroma_client and state["metrics"].model_dump():
         chroma_results = query_patterns(
@@ -56,13 +59,13 @@ def reflect_node(state: dict) -> dict:
         )
         if chroma_results:
             historical = [{"document": r["document"], "metadata": r["metadata"]} for r in chroma_results]
-            print(f"     ChromaDB: found {len(historical)} matching patterns")
+            writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"     ChromaDB: found {len(historical)} matching patterns", "ts": time.time()})
         else:
             historical = aggregator.get_historical_patterns("review_revisions", 0)
-            print(f"     Fallback (file): found {len(historical)} historical cycles")
+            writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"     Fallback (file): found {len(historical)} historical cycles", "ts": time.time()})
     else:
         historical = aggregator.get_historical_patterns("review_revisions", 0)
-        print(f"     ChromaDB unavailable — fallback (file): found {len(historical)} historical cycles")
+        writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"     ChromaDB unavailable — fallback (file): found {len(historical)} historical cycles", "ts": time.time()})
 
     # Store current cycle pattern in ChromaDB for future reflection
     if chroma_client:
@@ -75,7 +78,7 @@ def reflect_node(state: dict) -> dict:
         )
 
     # Step 4: Generate config diffs via meta-agent
-    print("  → Running meta-agent reflection...")
+    writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "  → Running meta-agent reflection...", "ts": time.time()})
     cycle_records = aggregator.get_cycle(state["cycle_id"])
     llm = get_llm()
 
@@ -84,18 +87,18 @@ def reflect_node(state: dict) -> dict:
 
     changes = diffs.get("changes", [])
     if changes:
-        print(f"     Proposed {len(changes)} config changes:")
+        writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"     Proposed {len(changes)} config changes:", "ts": time.time()})
         for c in changes:
-            print(f"       • {c.get('skill', '?')}: {c.get('change', '?')} [{c.get('risk_level', '?')}]")
+            writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"       • {c.get('skill', '?')}: {c.get('change', '?')} [{c.get('risk_level', '?')}]", "ts": time.time()})
     else:
-        print("     No config changes proposed")
+        writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "     No config changes proposed", "ts": time.time()})
 
     feedback_entries.append({"action": "diff_generated", "change_count": len(changes),
                              "details": diffs.get("overall_assessment", "")})
 
     # Step 5: Dry-run validation
     if changes and not dry_run_validation(diffs):
-        print("  ⚠ Dry-run validation failed — changes blocked")
+        writer({"type": "progress", "phase": "REFLECT", "step": "warning", "detail": "  ⚠ Dry-run validation failed — changes blocked", "ts": time.time()})
         feedback_entries.append({"action": "dry_run_failed", "changes": len(changes)})
         return {
             "phase": "REFLECT",
@@ -107,11 +110,11 @@ def reflect_node(state: dict) -> dict:
 
     # Step 6: Human approval gate (CLI)
     if changes:
-        print("\n  🔍 HUMAN APPROVAL REQUIRED")
-        print(f"  Proposed {len(changes)} skill config change(s):")
+        writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "\n  🔍 HUMAN APPROVAL REQUIRED", "ts": time.time()})
+        writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"  Proposed {len(changes)} skill config change(s):", "ts": time.time()})
         for i, c in enumerate(changes, 1):
-            print(f"  {i}. [{c.get('risk_level', 'high')}] {c.get('skill', '?')}: {c.get('change', '?')}")
-            print(f"     Rationale: {c.get('rationale', 'N/A')}")
+            writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"  {i}. [{c.get('risk_level', 'high')}] {c.get('skill', '?')}: {c.get('change', '?')}", "ts": time.time()})
+            writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"     Rationale: {c.get('rationale', 'N/A')}", "ts": time.time()})
 
         from langgraph.types import interrupt as _interrupt
         try:
@@ -121,14 +124,14 @@ def reflect_node(state: dict) -> dict:
             approved = False  # Non-HIL mode: auto-reject
 
         if approved:
-            print("  ✓ Changes approved — applying config diffs...")
+            writer({"type": "progress", "phase": "REFLECT", "step": "success", "detail": "  ✓ Changes approved — applying config diffs...", "ts": time.time()})
             from feedback.diff_engine import apply_yaml_diff
             apply_yaml_diff(guardrails_path, diffs)
 
             # Commit via git-workflow
             git_skill = skills.get("git-workflow", {})
             if git_skill:
-                print("  → Running git-workflow...")
+                writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "  → Running git-workflow...", "ts": time.time()})
                 result = invoke_skill(git_skill["content"],
                     f"Commit approved config changes for cycle {state['cycle_id']}. "
                     f"Changes: {json.dumps(diffs, indent=2, default=str)}",
@@ -136,11 +139,11 @@ def reflect_node(state: dict) -> dict:
                 artifacts_delta["git_commit"] = result
                 feedback_entries.append({"action": "git_committed", "details": result[:200]})
             else:
-                print("  ⚠ git-workflow skill not available — manual commit required")
+                writer({"type": "progress", "phase": "REFLECT", "step": "warning", "detail": "  ⚠ git-workflow skill not available — manual commit required", "ts": time.time()})
                 feedback_entries.append({"action": "git_skipped", "reason": "skill not found"})
             feedback_entries.append({"action": "changes_applied", "count": len(changes)})
         else:
-            print("  ✗ Changes rejected by human")
+            writer({"type": "error", "phase": "REFLECT", "step": "error", "detail": "  ✗ Changes rejected by human", "ts": time.time()})
             feedback_entries.append({"action": "changes_rejected", "count": len(changes)})
 
     # Build partial update
@@ -153,5 +156,5 @@ def reflect_node(state: dict) -> dict:
         "error": None,
     }
 
-    print(f"\n  ✓ Reflection complete — cycle {state['cycle_id']} archived")
+    writer({"type": "progress", "phase": "REFLECT", "step": "success", "detail": f"\n  ✓ Reflection complete — cycle {state['cycle_id']} archived", "ts": time.time()})
     return update

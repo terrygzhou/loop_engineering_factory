@@ -2,6 +2,8 @@
 SHIP node: Add observability, run pre-launch checklist, generate production deployment config, version with git.
 Skills: observability-and-instrumentation → shipping-and-launch → production-deployment → git-workflow
 """
+from langgraph.config import get_stream_writer
+
 import json
 import os
 from datetime import datetime
@@ -12,13 +14,14 @@ from tools.llm import invoke_skill
 
 
 def ship_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     SHIP phase: Add observability, run launch checklist, deploy via Docker Compose,
     commit with git workflow.
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    print("\n=== SHIP PHASE ===")
+    writer({"type": "progress", "phase": "SHIP", "step": "started", "detail": "\n=== SHIP PHASE ===", "ts": time.time()})
     skills = build_skill_registry(config.workflow.skill_registry_path)
 
     project_path = state.get("project_path", "")
@@ -28,7 +31,7 @@ def ship_node(state: dict) -> dict:
     # Step 1: Add observability
     obs_skill = skills.get("observability-and-instrumentation", {})
     if obs_skill:
-        print("  → Running observability-and-instrumentation...")
+        writer({"type": "progress", "phase": "SHIP", "step": "progress", "detail": "  → Running observability-and-instrumentation...", "ts": time.time()})
         result = invoke_skill(obs_skill["content"],
             "Add structured logging, health endpoints, and RED metrics",
             f"Project: {project_path}", llm=None)
@@ -38,7 +41,7 @@ def ship_node(state: dict) -> dict:
     # Step 2: Pre-launch checklist
     launch_skill = skills.get("shipping-and-launch", {})
     if launch_skill:
-        print("  → Running shipping-and-launch...")
+        writer({"type": "progress", "phase": "SHIP", "step": "progress", "detail": "  → Running shipping-and-launch...", "ts": time.time()})
         result = invoke_skill(launch_skill["content"],
             "Run pre-launch checklist: feature flags, rollback plan, staging verification",
             f"Project: {project_path}", llm=None)
@@ -48,7 +51,7 @@ def ship_node(state: dict) -> dict:
     # Step 3: Generate production deployment config (AWS/Azure/GCP)
     prod_skill = skills.get("production-deployment", {})
     if prod_skill:
-        print("  → Running production-deployment...")
+        writer({"type": "progress", "phase": "SHIP", "step": "progress", "detail": "  → Running production-deployment...", "ts": time.time()})
         task = f"""Generate production deployment configurations for project at: {project_path}.
 
 Determine the project type and generate:
@@ -73,12 +76,12 @@ Target environment considerations:
     # Step 3b: Verify local deployment is healthy (BUILD handles docker-compose)
     build_status = state.get("artifacts", {}).get("build_status", "")
     if build_status == "pass":
-        print("  → Local deployment verified from BUILD phase.")
+        writer({"type": "progress", "phase": "SHIP", "step": "progress", "detail": "  → Local deployment verified from BUILD phase.", "ts": time.time()})
 
     # Step 4: Git workflow (commit changes)
     git_skill = skills.get("git-workflow", {})
     if git_skill:
-        print("  → Running git-workflow...")
+        writer({"type": "progress", "phase": "SHIP", "step": "progress", "detail": "  → Running git-workflow...", "ts": time.time()})
         result = invoke_skill(git_skill["content"],
             "Create atomic, conventional commits for this cycle",
             f"Cycle: {state['cycle_id']}", llm=None)
@@ -110,7 +113,7 @@ Target environment considerations:
         with open(_live_path, "w") as _f:
             json.dump(_live, _f, indent=2)
         feedback_entries.append({"action": "live_json_written", "path": _live_path})
-        print(f"  ✓ live.json written: {_live_path}")
+        writer({"type": "progress", "phase": "SHIP", "step": "success", "detail": f"  ✓ live.json written: {_live_path}", "ts": time.time()})
 
         # ── Deployment history: append-only record ──
         _deploy_dir = os.path.join(_storage_dir, "deployments")
@@ -119,9 +122,9 @@ Target environment considerations:
         with open(_deploy_path, "w") as _f:
             json.dump(_live, _f, indent=2)
         feedback_entries.append({"action": "deployment_recorded", "path": _deploy_path})
-        print(f"  ✓ deployment recorded: {_deploy_path}")
+        writer({"type": "progress", "phase": "SHIP", "step": "success", "detail": f"  ✓ deployment recorded: {_deploy_path}", "ts": time.time()})
     except Exception as _e:
-        print(f"  ⚠ Could not write live.json or deployment record: {_e}")
+        writer({"type": "progress", "phase": "SHIP", "step": "warning", "detail": f"  ⚠ Could not write live.json or deployment record: {_e}", "ts": time.time()})
 
     # Update metrics
     current_metrics = state.get("metrics")
@@ -141,5 +144,5 @@ Target environment considerations:
     if metrics_update:
         update["metrics"] = metrics_update
 
-    print(f"  ✓ launch_success=True")
+    writer({"type": "progress", "phase": "SHIP", "step": "success", "detail": f"  ✓ launch_success=True", "ts": time.time()})
     return update

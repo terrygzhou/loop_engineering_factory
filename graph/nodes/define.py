@@ -4,6 +4,8 @@ Fully automatic — no user input required (interview is in DISCOVER phase).
 
 Skills: spec-driven-development (spec generation) → api-and-interface-design
 """
+from langgraph.config import get_stream_writer
+
 import re
 from pathlib import Path
 from tools.loader import build_skill_registry
@@ -17,6 +19,7 @@ from feedback.chroma_client import get_chroma_client, query_patterns
 
 
 def define_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     DEFINE phase: Gather requirements through interview, generate spec,
     design API interfaces. Uses project_context from DISCOVER to inform
@@ -24,7 +27,7 @@ def define_node(state: dict) -> dict:
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    print("\n=== DEFINE PHASE ===")
+    writer({"type": "progress", "phase": "DEFINE", "step": "started", "detail": "\n=== DEFINE PHASE ===", "ts": time.time()})
 
     # ── Audit logging ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
@@ -39,15 +42,15 @@ def define_node(state: dict) -> dict:
     project_name = state.get("project_name", "") or state.get("artifacts", {}).get("project_name", "")
     if project_name:
         if not re.match(r'^[a-zA-Z0-9_-]+$', project_name):
-            print(f"  ⚠ Invalid project name '{project_name}' — sanitizing to safe identifier")
+            writer({"type": "progress", "phase": "DEFINE", "step": "warning", "detail": f"  ⚠ Invalid project name '{project_name}' — sanitizing to safe identifier", "ts": time.time()})
             project_name = re.sub(r'[^a-zA-Z0-9_-]', '_', project_name).strip('_')
         try:
             config.set_project_name(project_name)
-            print(f"  → Project: {project_name} → {config.paths.project_path}")
+            writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": f"  → Project: {project_name} → {config.paths.project_path}", "ts": time.time()})
         except ValueError as e:
-            print(f"  ✗ {e}")
+            writer({"type": "error", "phase": "DEFINE", "step": "error", "detail": f"  ✗ {e}", "ts": time.time()})
     else:
-        print("  ⚠ No project_name — using config default")
+        writer({"type": "progress", "phase": "DEFINE", "step": "warning", "detail": "  ⚠ No project_name — using config default", "ts": time.time()})
 
     # ── Load skills (lazy-load via cached registry) ──
     skills = build_skill_registry()
@@ -55,9 +58,9 @@ def define_node(state: dict) -> dict:
     # ── Load project context from DISCOVER ──
     project_context = state.get("artifacts", {}).get("project_context", "")
     if project_context:
-        print(f"  → Using project_context from DISCOVER ({len(project_context)} chars)")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": f"  → Using project_context from DISCOVER ({len(project_context)} chars)", "ts": time.time()})
     else:
-        print("  ⚠ No project_context — DISCOVER may have been skipped")
+        writer({"type": "progress", "phase": "DEFINE", "step": "warning", "detail": "  ⚠ No project_context — DISCOVER may have been skipped", "ts": time.time()})
 
     # ── Load historical feedback context from ChromaDB ──
     feedback_context = _load_feedback_context(state)
@@ -65,15 +68,15 @@ def define_node(state: dict) -> dict:
     # ── Handle user review comments (from ARCH_REVIEW rejection) ──
     user_review_comments = state.get("user_review_comments", "")
     if user_review_comments:
-        print(f"  → Incorporating user review comments ({len(user_review_comments)} chars)")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": f"  → Incorporating user review comments ({len(user_review_comments)} chars)", "ts": time.time()})
         audit.log_user_input("review_feedback", "DEFINE", "Incorporating review comments", "api")
 
     # ── Step 1: Interview notes (from DISCOVER) ──
     interview_notes = state.get("artifacts", {}).get("interview_notes", "")
     if interview_notes:
-        print(f"  → Using interview notes from DISCOVER ({len(interview_notes)} chars)")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": f"  → Using interview notes from DISCOVER ({len(interview_notes)} chars)", "ts": time.time()})
     else:
-        print("  ⚠ No interview notes — using project description as fallback")
+        writer({"type": "progress", "phase": "DEFINE", "step": "warning", "detail": "  ⚠ No interview notes — using project description as fallback", "ts": time.time()})
         interview_notes = state.get("project_description", "")
 
     feedback_entries = [
@@ -84,7 +87,7 @@ def define_node(state: dict) -> dict:
     spec_result = None
     spec_skill = skills.get("spec-driven-development", {})
     if spec_skill:
-        print("  → Running spec-driven-development for spec generation...")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running spec-driven-development for spec generation...", "ts": time.time()})
         spec_timer = SkillTimer(state, "spec-driven-development")
         context = f"Spec path: {state.get('spec_path', '')}\n"
         if project_context:
@@ -111,7 +114,7 @@ def define_node(state: dict) -> dict:
     source_result = None
     source_skill = skills.get("source-driven-development", {})
     if source_skill:
-        print("  → Running source-driven-development for codebase-aware spec generation...")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running source-driven-development for codebase-aware spec generation...", "ts": time.time()})
         source_timer = SkillTimer(state, "source-driven-development")
         src_context = f"Project type: {project_context}\n"
         if spec_result:
@@ -131,7 +134,7 @@ def define_node(state: dict) -> dict:
     api_result = None
     api_skill = skills.get("api-and-interface-design", {})
     if api_skill:
-        print("  → Running api-and-interface-design...")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running api-and-interface-design...", "ts": time.time()})
         api_timer = SkillTimer(state, "api-and-interface-design")
         task = api_and_interface_design
         api_result = invoke_skill(
@@ -191,9 +194,9 @@ def define_node(state: dict) -> dict:
     if spec_confidence < min_spec_conf:
         from graph.edges import _maybe_increment_loop
         if _maybe_increment_loop(state, "DEFINE"):
-            print(f"  ⚠ spec_confidence={spec_confidence:.2f} < {min_spec_conf} — loop limit reached, forcing forward to PLAN")
+            writer({"type": "progress", "phase": "DEFINE", "step": "warning", "detail": f"  ⚠ spec_confidence={spec_confidence:.2f} < {min_spec_conf} — loop limit reached, forcing forward to PLAN", "ts": time.time()})
         else:
-            print(f"  ⚠ spec_confidence={spec_confidence:.2f} < {min_spec_conf} — looping back to DEFINE")
+            writer({"type": "progress", "phase": "DEFINE", "step": "warning", "detail": f"  ⚠ spec_confidence={spec_confidence:.2f} < {min_spec_conf} — looping back to DEFINE", "ts": time.time()})
 
     # ── Return partial update ──
     update = {
@@ -216,8 +219,8 @@ def define_node(state: dict) -> dict:
     if current_metrics and hasattr(current_metrics, "model_copy"):
         update["metrics"] = current_metrics.model_copy(update={"spec_confidence": spec_confidence})
 
-    print(f"  ✓ spec_confidence={spec_confidence:.2f} (derived from artifact quality)")
-    print(f"  → Specs written to {specs_dir}/")
+    writer({"type": "progress", "phase": "DEFINE", "step": "success", "detail": f"  ✓ spec_confidence={spec_confidence:.2f} (derived from artifact quality)", "ts": time.time()})
+    writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": f"  → Specs written to {specs_dir}/", "ts": time.time()})
     return update
 
 
@@ -232,6 +235,7 @@ api_and_interface_design = (
 
 
 def _load_feedback_context(state: dict) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Query ChromaDB for historical patterns relevant to this project type."""
     try:
         client = get_chroma_client()
@@ -249,13 +253,14 @@ def _load_feedback_context(state: dict) -> str:
             parts.append(f"\n[Past Cycle {i}] (similarity distance: {pat.get('distance', '?'):.3f})\n{doc[:bounds.feedback.max_pattern_doc_chars]}")
         parts.append("\n== End Historical Lessons ==")
         text = "\n".join(parts)
-        print(f"  → Loaded {len(results)} historical feedback patterns")
+        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": f"  → Loaded {len(results)} historical feedback patterns", "ts": time.time()})
         return text
     except Exception as e:
         return ""
 
 
 def _estimate_spec_confidence(artifacts: dict) -> float:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Derive spec confidence from actual artifact content."""
     score = 0.0
     spec_text = artifacts.get("spec_refined", "")

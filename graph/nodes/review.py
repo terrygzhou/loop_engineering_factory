@@ -10,6 +10,8 @@ the human reviewer to approve or reject with comments.
 
 Uses LangGraph OOTB interrupt() for the HIL pause.
 """
+from langgraph.config import get_stream_writer
+
 from config.loader import config as _cfg
 from config.bounds_loader import bounds
 from langgraph.types import interrupt
@@ -19,6 +21,7 @@ import re
 
 
 def _extract_task_breakdown(plan_text: str) -> list:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Extract structured task items from plan text.
 
     Matches:
@@ -56,6 +59,7 @@ def _extract_task_breakdown(plan_text: str) -> list:
 
 
 def _spec_summary(spec_text: str, max_chars: int = 500) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Return a concise summary of the spec (first N characters)."""
     if not spec_text:
         return ""
@@ -66,12 +70,13 @@ def _spec_summary(spec_text: str, max_chars: int = 500) -> str:
 
 
 def review_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     ARCH_REVIEW phase: Human architecture review gate between PLAN and BUILD.
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    print("\n=== ARCH_REVIEW PHASE ===")
+    writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "started", "detail": "\n=== ARCH_REVIEW PHASE ===", "ts": time.time()})
 
     # ── Audit logging ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
@@ -85,7 +90,7 @@ def review_node(state: dict) -> dict:
     # State override wins (Web UI forces HIL), then config fallback (CLI headless)
     auto_approve = state.get("auto_approve_override", _cfg.workflow.auto_approve)
     if auto_approve:
-        print("  → Auto-approve mode — skipping review gate")
+        writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": "  → Auto-approve mode — skipping review gate", "ts": time.time()})
         audit.log_node_output("ARCH_REVIEW", {"approved": True, "reason": "auto_approve"})
         return {
             "phase": "ARCH_REVIEW",
@@ -153,8 +158,8 @@ def review_node(state: dict) -> dict:
         },
     }
 
-    print(f"  → Review payload: {task_count} tasks, {diagram_count} diagrams, uncertainty={arch_uncertainty:.2f}")
-    print("  → Pausing for human review...")
+    writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": f"  → Review payload: {task_count} tasks, {diagram_count} diagrams, uncertainty={arch_uncertainty:.2f}", "ts": time.time()})
+    writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": "  → Pausing for human review...", "ts": time.time()})
 
     # ── Interrupt for human review ──
     resume_data = interrupt(interrupt_payload)
@@ -167,7 +172,7 @@ def review_node(state: dict) -> dict:
     user_review_comments = resume_data.get("feedback", resume_data.get("user_review_comments", ""))
 
     if approved:
-        print("  ✓ ARCH_REVIEW approved — proceeding to BUILD")
+        writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "success", "detail": "  ✓ ARCH_REVIEW approved — proceeding to BUILD", "ts": time.time()})
         audit.log_node_output("ARCH_REVIEW", {"approved": True, "comments": ""})
         audit.log_node_transition("ARCH_REVIEW", "BUILD", "plan approved")
         return {
@@ -177,7 +182,7 @@ def review_node(state: dict) -> dict:
             "artifacts": {"review_approved": True},
         }
     else:
-        print(f"  ✗ ARCH_REVIEW rejected — sending back to PLAN with feedback ({len(user_review_comments)} chars)")
+        writer({"type": "error", "phase": "ARCH_REVIEW", "step": "error", "detail": f"  ✗ ARCH_REVIEW rejected — sending back to PLAN with feedback ({len(user_review_comments)} chars)", "ts": time.time()})
         audit.log_node_output("ARCH_REVIEW", {"approved": False, "comments": user_review_comments[:bounds.feedback.max_review_comments_chars]})
         audit.log_node_transition("ARCH_REVIEW", "PLAN", "plan rejected with feedback")
         return {

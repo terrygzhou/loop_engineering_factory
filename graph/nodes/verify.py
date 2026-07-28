@@ -8,6 +8,8 @@ and updates metrics (review_revisions, uat_pass_rate).
 
 Output: code review report + updated metrics, forwards to SHIP.
 """
+from langgraph.config import get_stream_writer
+
 import json
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from graph.ui_bridge import SkillTimer
 # ── Source-file collectors ─────────────────────────────────────────
 
 def _collect_source_files(project_path: str, max_files: int = 30, max_file_bytes: int = 80_000) -> list[dict]:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Walk *project_path* and return a list of {path, content} dicts for
     reviewable source files (skipping __pycache__, .git, build/, node_modules)."""
     root = Path(project_path)
@@ -44,6 +47,7 @@ def _collect_source_files(project_path: str, max_files: int = 30, max_file_bytes
 
 
 def _build_review_context(files: list[dict], spec_text: str) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Assemble a context string for the code review LLM call."""
     parts: list[str] = []
     if spec_text:
@@ -57,6 +61,7 @@ def _build_review_context(files: list[dict], spec_text: str) -> str:
 # ── Review-result parser ────────────────────────────────────────────
 
 def _parse_review_result(review_text: str) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Extract structured findings from LLM review text.
 
     Returns dict with keys:
@@ -105,6 +110,7 @@ def _parse_review_result(review_text: str) -> dict:
 # ── Report writer ───────────────────────────────────────────────────
 
 def _write_review_report(project_path: str, review_text: str, findings: dict) -> str:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Write code_review.md to the project's build/ directory."""
     build_dir = Path(project_path) / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +141,7 @@ def _write_review_report(project_path: str, review_text: str, findings: dict) ->
 # ── Main node ───────────────────────────────────────────────────────
 
 def verify_node(state: dict) -> dict:
+    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """
     VERIFY phase: Run multi-axis code quality review on the generated project.
 
@@ -144,7 +151,7 @@ def verify_node(state: dict) -> dict:
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    print("\n=== VERIFY PHASE ===")
+    writer({"type": "progress", "phase": "VERIFY", "step": "started", "detail": "\n=== VERIFY PHASE ===", "ts": time.time()})
 
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
     project_path = state.get("project_path", "")
@@ -175,7 +182,7 @@ def verify_node(state: dict) -> dict:
         cr_skill = skills.get("code-review-and-quality", {})
 
         if not cr_skill:
-            print("  ⚠ code-review-and-quality skill not found — running basic file scan")
+            writer({"type": "progress", "phase": "VERIFY", "step": "warning", "detail": "  ⚠ code-review-and-quality skill not found — running basic file scan", "ts": time.time()})
             audit.log_node_output("VERIFY", {"status": "no_skill", "note": "skill not in registry"})
             # Still collect and count files as a basic check
             files = _collect_source_files(project_path)
@@ -185,22 +192,22 @@ def verify_node(state: dict) -> dict:
             files_reviewed = len(files)
         else:
             # ── Collect source files ──
-            print("  → Collecting source files...")
+            writer({"type": "progress", "phase": "VERIFY", "step": "progress", "detail": "  → Collecting source files...", "ts": time.time()})
             files = _collect_source_files(project_path)
             files_reviewed = len(files)
 
             if not files:
-                print("  ⚠ No source files found in project — nothing to review")
+                writer({"type": "progress", "phase": "VERIFY", "step": "warning", "detail": "  ⚠ No source files found in project — nothing to review", "ts": time.time()})
                 audit.log_node_output("VERIFY", {"status": "no_files", "files_reviewed": 0})
                 review_text = "No source files found in the generated project."
             else:
-                print(f"  → Found {files_reviewed} source files")
+                writer({"type": "progress", "phase": "VERIFY", "step": "progress", "detail": f"  → Found {files_reviewed} source files", "ts": time.time()})
 
                 # ── Build review context ──
                 context = _build_review_context(files, spec_text)
 
                 # ── Invoke code-review skill ──
-                print("  → Running code-review-and-quality review...")
+                writer({"type": "progress", "phase": "VERIFY", "step": "progress", "detail": "  → Running code-review-and-quality review...", "ts": time.time()})
                 cr_timer = SkillTimer(state, "code-review-and-quality")
                 review_text = invoke_skill(
                     cr_skill["content"],
@@ -223,17 +230,17 @@ def verify_node(state: dict) -> dict:
 
                 # ── Write report ──
                 report_path = _write_review_report(project_path, review_text, findings)
-                print(f"  → Review report: {report_path}")
+                writer({"type": "progress", "phase": "VERIFY", "step": "progress", "detail": f"  → Review report: {report_path}", "ts": time.time()})
                 audit.log_file_write("VERIFY", report_path, "markdown", len(review_text))
 
-        print(f"  ✓ Review complete: {findings['total']} findings, verdict={findings['verdict']}")
+        writer({"type": "progress", "phase": "VERIFY", "step": "success", "detail": f"  ✓ Review complete: {findings['total']} findings, verdict={findings['verdict']}", "ts": time.time()})
         audit.log_node_output("VERIFY", {
             "status": "complete",
             "files_reviewed": files_reviewed,
             "findings": findings,
         })
     else:
-        print(f"  ⚠ Project path not found: {project_path}")
+        writer({"type": "progress", "phase": "VERIFY", "step": "warning", "detail": f"  ⚠ Project path not found: {project_path}", "ts": time.time()})
         audit.log_node_output("VERIFY", {"status": "no_project", "project_path": project_path})
 
     # ── Compute metrics from findings ──
