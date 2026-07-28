@@ -17,6 +17,13 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import WebSocket
 
+# ── OpenTelemetry tracing ──
+try:
+    from opentelemetry import trace as _trace
+    _OTEL_BRIDGE = True
+except ImportError:
+    _OTEL_BRIDGE = False
+
 # Import AbortManager — handle both package and direct import paths
 try:
     from backend.abort_manager import AbortManager
@@ -714,16 +721,15 @@ class WorkflowBridge:
             await self.broadcast(ev)
 
     async def run_real(self):
-        """Run the actual LangGraph workflow using stream_events(v3).
+        """Run the actual LangGraph workflow using astream(stream_mode='values').
 
-        Uses LangGraph's v3 streaming API:
-        1. graph.astream_events(input, version='v3') → AsyncGraphRunStream
-        2. Stream values (state snapshots) for progress/artifacts
-        3. Check run.interrupted() / run.interrupts() for HIL
-        4. Resume with Command(resume=...) → new astream_events call
-        5. Repeat until run.interrupted() is False
+        Uses the same pattern as the CLI executor:
+        1. graph.astream(input_state, stream_mode='values', config) → full merged state snapshots
+        2. On GraphInterrupt: get graph state → build HIL form → poll user → resume
+        3. Repeat until stream completes normally (no exception)
 
-        Replaces manual astream(__anext__) + aget_state interrupt detection.
+        astream('values') yields the full merged state dict each time a node completes,
+        so phase, project_name, artifacts etc. are always present.
         """
         if not self._use_real_workflow:
             print("[Bridge] Real workflow unavailable — falling back to simulated")
@@ -733,6 +739,19 @@ class WorkflowBridge:
         async with self._lock:
             if self.status == "running":
                 return
+
+        # ── OTEL root span ──
+        root_span = None
+        if _OTEL_BRIDGE:
+            tracer = _trace.get_tracer("loop.bridge")
+            root_span = tracer.start_span(
+                "workflow.run",
+                attributes={
+                    "workflow.cycle": self.cycle,
+                    "workflow.project": self._project_name or "Untitled",
+                },
+            )
+            root_span.set_attribute("workflow.spec_preview", (self._spec_text or "")[:200])
 
         self.status = "running"
         # On recovery (thread_id was pre-set by _recover_workflow), don't increment cycle
@@ -762,6 +781,7 @@ class WorkflowBridge:
 
         # ── Use shared executor for graph + state (same as CLI) ──
         from graph.executor import _get_checkpointer
+        from langgraph.errors import GraphInterrupt
         from langgraph.types import Command
         import uuid as _uuid
 
@@ -793,59 +813,122 @@ class WorkflowBridge:
             from graph.main import build_graph
             graph = build_graph(checkpointer=checkpointer, auto_approve=self._auto_approve)
 
-            # ── stream_events(v3) loop ──
+            # ── astream(values) loop — same as CLI executor ──
             current_input = None if is_recovery else state
+            chunk = None  # last yielded state snapshot
 
             while not self._aborted:
-                run = await graph.astream_events(current_input, config=config, version="v3")
-
-                # Race: drain values stream vs abort signal
+                # Race: drain stream vs abort signal
                 abort_task = asyncio.ensure_future(abort_mgr.wait(999))
-                values_exhausted = False
 
-                async for snapshot in run.values:
+                try:
+                    async for chunk in graph.astream(
+                        current_input, stream_mode="values", config=config
+                    ):
+                        if self._aborted:
+                            break
+
+                        # Race check: if abort fired, stop processing
+                        if abort_task.done() and abort_mgr.is_aborted:
+                            break
+
+                        # Full merged state — phase is always present
+                        phase = chunk.get("phase", "UNKNOWN")
+                        artifacts = chunk.get("artifacts", {})
+
+                        # Capture artifacts
+                        if artifacts and phase in self.phase_states:
+                            self.phase_states[phase]["artifacts"].update(artifacts)
+
+                        # Deduplicate artifact events
+                        for artifact_name, artifact_value in artifacts.items():
+                            artifact_key = f"{phase}:{artifact_name}"
+                            if artifact_key not in self._seen_artifacts or self._seen_artifacts[artifact_key] != artifact_value:
+                                self._seen_artifacts[artifact_key] = artifact_value
+                                ev = self.add_event(phase, "artifact", f"{artifact_name}: {str(artifact_value)[:200]}", {
+                                    "artifact_name": artifact_name,
+                                    "artifact_value": artifact_value,
+                                })
+                                await self.broadcast(ev)
+
+                        # Detect phase transitions
+                        if phase != self._last_phase:
+                            if self._last_phase is not None:
+                                ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
+                                await self.broadcast(ev)
+                                # OTEL: record completed phase
+                                if _OTEL_BRIDGE and root_span:
+                                    root_span.add_event("phase.completed", {"phase": self._last_phase})
+                            self.current_phase = phase
+                            ev = self.add_event(phase, "started", f"Entering {phase} phase")
+                            await self.broadcast(ev)
+                            # OTEL: record phase start as child span
+                            if _OTEL_BRIDGE:
+                                _trace.get_tracer("loop.bridge").start_span(
+                                    f"phase.{phase.lower()}",
+                                    attributes={"workflow.cycle": self.cycle, "workflow.phase": phase},
+                                ).end()
+                            self._last_phase = phase
+                        else:
+                            ev = self.add_event(phase, "progress", f"{phase} processing...")
+                            await self.broadcast(ev)
+
+                except GraphInterrupt:
+                    # Cancel abort waiter
+                    if not abort_task.done():
+                        abort_task.cancel()
+                        try:
+                            await abort_task
+                        except BaseException:
+                            pass
                     if self._aborted:
                         break
 
-                    # Race check: if abort fired, stop processing
-                    if abort_task.done() and abort_mgr.is_aborted:
+                    # Get the suspended graph state for HIL
+                    graph_state = await graph.aget_state(config)
+                    if not graph_state.next:
+                        # Normal end disguised as interrupt
                         break
 
-                    phase = snapshot.get("phase", "UNKNOWN")
-                    artifacts = snapshot.get("artifacts", {})
-
-                    # Capture artifacts
-                    if artifacts and phase in self.phase_states:
-                        self.phase_states[phase]["artifacts"].update(artifacts)
-
-                    # Deduplicate artifact events
-                    for artifact_name, artifact_value in artifacts.items():
-                        artifact_key = f"{phase}:{artifact_name}"
-                        if artifact_key not in self._seen_artifacts or self._seen_artifacts[artifact_key] != artifact_value:
-                            self._seen_artifacts[artifact_key] = artifact_value
-                            ev = self.add_event(phase, "artifact", f"{artifact_name}: {str(artifact_value)[:200]}", {
-                                "artifact_name": artifact_name,
-                                "artifact_value": artifact_value,
-                            })
-                            await self.broadcast(ev)
-
-                    # Detect phase transitions
-                    if phase != self._last_phase:
-                        if self._last_phase is not None:
-                            ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
-                            await self.broadcast(ev)
-                        self.current_phase = phase
-                        ev = self.add_event(phase, "started", f"Entering {phase} phase")
-                        await self.broadcast(ev)
-                        self._last_phase = phase
+                    current_chunk = graph_state.values or {}
+                    interrupted_phase = (
+                        current_chunk.get("phase")
+                        or current_chunk.get("next_phase")
+                        or self._last_phase
+                        or "UNKNOWN"
+                    )
+                    # Extract interrupt type
+                    if graph_state.interrupts and len(graph_state.interrupts) > 0:
+                        first = graph_state.interrupts[0]
+                        if hasattr(first, 'value'):
+                            interrupted_type = str(first.value)
+                        else:
+                            interrupted_type = str(first)
                     else:
-                        ev = self.add_event(phase, "progress", f"{phase} processing...")
-                        await self.broadcast(ev)
-                else:
-                    # Loop completed without break (not aborted)
-                    values_exhausted = True
+                        interrupted_type = None
+                    print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
+                    # OTEL: record HIL pause
+                    if _OTEL_BRIDGE and root_span:
+                        root_span.add_event("hil.pause", {"phase": interrupted_phase, "type": interrupted_type})
 
-                # Cancel abort waiter
+                    hil_type = self._classify_hil_type(interrupted_phase, interrupted_type)
+                    await self._broadcast_hil_form(interrupted_phase, hil_type, current_chunk)
+
+                    user_input = await self._poll_user_input(interrupted_phase)
+                    if self._aborted:
+                        break
+                    # OTEL: record HIL resume
+                    if _OTEL_BRIDGE and root_span:
+                        root_span.add_event("hil.resume", {"phase": interrupted_phase})
+
+                    resume_data = self._build_resume_data(interrupted_phase, user_input)
+                    print(f"  → Resuming {interrupted_phase} with Command(resume=...)")
+                    self.status = "running"
+                    self.waiting_for = None
+                    current_input = Command(resume=resume_data)
+                    continue
+
+                # Cancel abort waiter (normal completion path)
                 if not abort_task.done():
                     abort_task.cancel()
                     try:
@@ -856,30 +939,7 @@ class WorkflowBridge:
                 if self._aborted:
                     break
 
-                # Check for HIL interrupt (v3 API: async method)
-                is_interrupted = await run.interrupted()
-
-                if is_interrupted:
-                    interrupts = await run.interrupts()
-                    interrupted_type = self._extract_interrupt_type(interrupts)
-                    interrupted_phase = self._resolve_interrupt_phase(interrupted_type, state)
-                    print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
-
-                    hil_type = self._classify_hil_type(interrupted_phase, interrupted_type)
-                    await self._broadcast_hil_form(interrupted_phase, hil_type, state)
-
-                    user_input = await self._poll_user_input(interrupted_phase)
-                    if self._aborted:
-                        break
-
-                    resume_data = self._build_resume_data(interrupted_phase, user_input)
-                    print(f"  → Resuming {interrupted_phase} with Command(resume=...)")
-                    self.status = "running"
-                    self.waiting_for = None
-                    current_input = Command(resume=resume_data)
-                    continue
-
-                # Not interrupted → workflow complete
+                # Normal completion — stream ended without GraphInterrupt
                 if self._last_phase:
                     ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
                     await self.broadcast(ev)
@@ -887,13 +947,13 @@ class WorkflowBridge:
                 self.status = "complete"
                 self.current_phase = ""
                 self.waiting_for = None
-                try:
-                    final_output = await run.output()
-                    print(f"[Bridge] Workflow complete, final state keys: {list(final_output.keys()) if isinstance(final_output, dict) else type(final_output).__name__}", flush=True)
-                except Exception:
-                    pass
+                last_keys = list(chunk.keys()) if chunk else []
+                print(f"[Bridge] Workflow complete, final state keys: {last_keys}", flush=True)
                 ev = self.add_event("SYSTEM", "completed", f"Cycle {self.cycle} complete — all phases done")
                 await self.broadcast(ev)
+                if _OTEL_BRIDGE and root_span:
+                    root_span.set_status(_trace.Status(_trace.StatusCode.OK))
+                    root_span.end()
                 break
 
         except asyncio.CancelledError:
@@ -906,38 +966,17 @@ class WorkflowBridge:
                 self.waiting_for = None
             else:
                 print(f"[Bridge] CancelledError ignored (status=complete)", flush=True)
+            if _OTEL_BRIDGE and root_span:
+                root_span.set_status(_trace.Status(_trace.StatusCode.OK, "cancelled"))
+                root_span.end()
         except Exception as e:
             self.status = "error"
             ev = self.add_event("SYSTEM", "error", f"Workflow failed: {str(e)[:200]}")
             await self.broadcast(ev)
+            if _OTEL_BRIDGE and root_span:
+                root_span.set_status(_trace.Status(_trace.StatusCode.ERROR, str(e)[:200]))
+                root_span.end()
             raise
-
-    def _extract_interrupt_type(self, interrupts):
-        """Extract interrupt type from v3 interrupt list."""
-        if not interrupts:
-            return None
-        first = interrupts[0]
-        if isinstance(first, str):
-            return first
-        # Could be interrupt objects or dicts
-        if hasattr(first, 'value'):
-            val = first.value
-        else:
-            val = first if isinstance(first, dict) else str(first)
-        if isinstance(val, dict):
-            return val.get("type")
-        if isinstance(val, str):
-            return val
-        return str(val)
-
-    def _resolve_interrupt_phase(self, interrupted_type, state):
-        """Map interrupt type to phase name."""
-        if interrupted_type in ("project_setup", "interview"):
-            return "DISCOVER"
-        elif interrupted_type == "review":
-            return "ARCH_REVIEW"
-        else:
-            return self._last_phase or state.get("phase", "UNKNOWN")
 
     def _classify_hil_type(self, interrupted_phase, interrupted_type):
         """Classify HIL interaction type."""

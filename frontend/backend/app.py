@@ -3,6 +3,7 @@ Loop Engineering UI Backend — FastAPI + WebSocket + SSE
 Uses WorkflowBridge to run the actual LangGraph workflow or a simulated one.
 """
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,6 +13,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# ─── OpenTelemetry (manual — no auto-instrumentation deps) ──
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    _OTEL_AVAILABLE = True
+except ImportError:
+    _OTEL_AVAILABLE = False
+
+tracer = None  # type: ignore
 
 # ─── Import the Workflow Bridge ────────────────────────────────
 try:
@@ -64,6 +77,24 @@ bridge = WorkflowBridge()
 
 @app.on_event("startup")
 async def startup():
+    # ── Initialise OpenTelemetry ──
+    global tracer
+    if _OTEL_AVAILABLE:
+        endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+        service = os.environ.get("OTEL_SERVICE_NAME", "loop-ui")
+        if endpoint:
+            provider = TracerProvider()
+            exporter = OTLPSpanExporter(endpoint=endpoint)
+            processor = BatchSpanProcessor(exporter)
+            provider.add_span_processor(processor)
+            trace.set_tracer_provider(provider)
+            tracer = trace.get_tracer("loop.ui")
+            print(f"✓ OTEL tracing enabled → {endpoint} (service={service})")
+        else:
+            print("⚠ OTEL env vars not set — tracing disabled")
+    else:
+        print("⚠ opentelemetry packages not installed — tracing disabled")
+
     print("✓ Loop Engineering UI backend started")
     bridge._try_import_real()
     if bridge._use_real_workflow:

@@ -2,6 +2,18 @@
 
 
 
+## CodeGraph (Pre-indexed Code Knowledge Graph)
+
+Before exploring code structure, ask the CodeGraph MCP tool — one call returns verbatim source + call paths + blast radius instead of grep/read loops.
+
+**Use `codegraph_explore` for:**
+- "How does X work?" → relevant source + call flow
+- "What breaks if I change Y?" → impact analysis
+- "Who calls this function?" → callers/callees
+- Surveying an unfamiliar area of the codebase
+
+**Do NOT** grep + read files to answer structural questions — the graph already knows. Trust CodeGraph results; re-verify with Read only if the staleness banner appears after recent edits.
+
 ## Skill Loading
 
 Before any coding task, load and follow:
@@ -34,7 +46,7 @@ skill_view(name='subagent-driven-development')
 ## Auto-Handoff Instructions
 
 During long coding sessions:
-1. Every 10 turns, save progress to `PROJECT/HANDOFF.md`
+1. Every 10 turns, save progress to `HANDOFF.md`
 2. When compression fires, immediately save handoff
 3. Keep handoff ≤50 lines, commit after update
 4. New sessions read handoff + git status first

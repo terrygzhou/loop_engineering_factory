@@ -1,17 +1,19 @@
 """
-DISCOVER node: Accept project description, collect user input via interview,
+DISCOVER nodes: Accept project description, collect user input via interview,
 generate discovery artifact for DEFINE phase.
 
-Uses LangGraph OOTB interrupt() for double-pause:
-  1. Project setup (name + description)
-  2. Interview questions (requirements gathering)
+Split into two nodes, each with ONE interrupt:
+  1. discover_setup_node — project setup (name + description + context folder)
+  2. discover_interview_node — interview questions + requirement.md generation
 
-Output: $project_folder/requirement.md — structured discovery artifact
+On resume, only the paused node re-runs (~30 lines vs ~100 lines in the old
+single-node design).
 """
 import json
 import os
 import re
 import subprocess
+import httpx
 from pathlib import Path
 from langgraph.types import interrupt
 from config.loader import config as _cfg
@@ -19,60 +21,145 @@ from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog
+from graph.ui_bridge import SkillTimer
 
-def discover_node(state: dict) -> dict:
+
+def discover_setup_node(state: dict) -> dict:
     """
-    DISCOVER phase: Double-pause OOTB interrupt() node.
+    DISCOVER phase — Setup node.
 
-    Pause 1: Project setup (name + description)
-    Pause 2: Interview questions (requirements gathering)
-
-    On resume, both values are available and the node completes normally.
+    Purpose: Collect project name, description, context folder.
+    Interrupt: Project setup form (once).
     """
-    # ── Auto-approve mode (headless Docker) ──
-    auto_approve = _cfg.workflow.auto_approve
+    # State override wins if explicitly set; None = use config fallback
+    override = state.get("auto_approve_override")
+    auto_approve = override if override is not None else _cfg.workflow.auto_approve
 
+    # ── Auto-approve: generate defaults ──
     if auto_approve:
-        return _discover_auto_approve(state)
-
-    # ── Set phase ──
-    state["phase"] = "DISCOVER"
-    state["next_phase"] = "DEFINE"
-
-    # ── Pause 1: Project setup ──
-    # Check if project_name is already in state (from previous resume)
-    project_name = state.get("project_name", "") or state.get("project_description", "")
-    if project_name:
-        # Already collected — skip pause 1, use state values
-        project_name = state["project_name"]
+        project_name = state.get("project_name") or "Untitled"
         project_description = state.get("project_description", "")
         context_folder = state.get("context_folder", "")
     else:
-        setup = interrupt({
-            "type": "project_setup",
-            "fields": [
-                {"key": "project_name", "label": "Project name", "required": True},
-                {"key": "project_description", "label": "Project description", "required": True},
-                {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
-            ],
-        })
-        project_name = setup.get("project_name", "")
-        project_description = setup.get("project_description", "")
-        context_folder = setup.get("context_folder", "")
+        # ── Check if already collected (resume skip) ──
+        if state.get("project_name"):
+            project_name = state["project_name"]
+            project_description = state.get("project_description", "")
+            context_folder = state.get("context_folder", "")
+        else:
+            # ── Pause: Project setup ──
+            setup = interrupt({
+                "type": "project_setup",
+                "fields": [
+                    {"key": "project_name", "label": "Project name", "required": True},
+                    {"key": "project_description", "label": "Project description", "required": True},
+                    {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
+                ],
+            })
+            project_name = setup.get("project_name", "")
+            project_description = setup.get("project_description", "")
+            context_folder = setup.get("context_folder", "")
 
-    state["project_name"] = project_name
-    state["project_description"] = project_description
-    state["context_folder"] = context_folder
+    # ── Derive project_folder ──
+    project_folder = state.get("project_folder", "")
+    if not project_folder:
+        workspace = _cfg.paths.workspace_dir
+        project_folder = os.path.join(workspace, project_name)
 
-    # ── Pause 2: Interview questions ──
-    # Check if interview already completed
-    if state.get("discover_interview_done") or state.get("interview_notes"):
-        # Already collected — skip pause 2
+    # ── Improve mode: override with live deployment ──
+    if state.get("improve_mode"):
+        telemetry = _load_improve_telemetry(state, project_name)
+        if telemetry:
+            deployed_path = telemetry["project_path"]
+            context_folder = deployed_path
+            project_folder = deployed_path
+            # Create project dirs for improve mode
+            project_dir = Path(project_folder)
+            project_dir.mkdir(parents=True, exist_ok=True)
+            (project_dir / "specs").mkdir(parents=True, exist_ok=True)
+            (project_dir / "build").mkdir(parents=True, exist_ok=True)
+            (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
+            return {
+                "project_name": project_name,
+                "project_description": project_description,
+                "context_folder": context_folder,
+                "project_folder": project_folder,
+                "project_path": project_folder,
+                "phase": "DISCOVER",
+                "next_phase": "DEFINE",
+                "artifacts": {"improve_telemetry": json.dumps(telemetry, indent=2)},
+            }
+
+    # ── Create project directories ──
+    project_dir = Path(project_folder)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "specs").mkdir(parents=True, exist_ok=True)
+    (project_dir / "build").mkdir(parents=True, exist_ok=True)
+    (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
+
+    return {
+        "project_name": project_name,
+        "project_description": project_description,
+        "context_folder": context_folder,
+        "project_folder": project_folder,
+        "project_path": project_folder,
+        "phase": "DISCOVER",
+        "next_phase": "DEFINE",
+    }
+
+
+def discover_interview_node(state: dict) -> dict:
+    """
+    DISCOVER phase — Interview node.
+
+    Purpose: Ask interview questions, generate requirement.md.
+    Interrupt: Interview questions (once).
+    """
+    # State override wins if explicitly set; None = use config fallback
+    override = state.get("auto_approve_override")
+    auto_approve = override if override is not None else _cfg.workflow.auto_approve
+
+    project_name = state.get("project_name", "Untitled")
+    project_description = state.get("project_description", "")
+    context_folder = state.get("context_folder", "")
+    project_folder = state.get("project_folder", "")
+    project_dir = Path(project_folder)
+
+    # ── Auto-approve: skip interview, generate defaults ──
+    if auto_approve:
+        interview_notes = (
+            f"Auto-generated interview for '{project_name}':\n"
+            f"Description: {project_description}\n"
+            f"Core behavior: Standard CRUD operations\n"
+            f"API surface: RESTful endpoints\n"
+        )
+    # ── Check if interview already completed (resume skip) ──
+    elif state.get("discover_interview_done") or state.get("interview_notes"):
         interview_notes = state.get("interview_notes", "")
     else:
+        # ── Pause: Interview questions ──
+        skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+        interview_skill = skills.get("interview-me", {})
+
+        interview_prompts = (
+            "Ask the following questions one at a time. Wait for each answer before moving on.\n"
+            "If a question is not applicable, skip it.\n\n"
+            "Questions:\n"
+            "1. core_behavior — What does this feature do?\n"
+            "2. data_model — What entities and fields are involved?\n"
+            "3. api_surface — What HTTP methods, paths, and auth requirements?\n"
+            "4. validation — What input validation rules?\n"
+            "5. ui_template — Any Jinja2 templates or UI requirements?\n"
+            "6. integration — External services, databases, or APIs?\n"
+            "7. deployment — Docker or infrastructure implications?\n"
+            "8. edge_cases — Known edge cases?\n"
+            "9. non_functional — Performance, security, or monitoring needs?\n"
+        )
+
         answers = interrupt({
             "type": "interview",
             "phase": "DISCOVER",
+            "instructions": interview_prompts if interview_skill else None,
             "questions": [
                 {"key": "core_behavior", "prompt": "What does this feature do?"},
                 {"key": "data_model", "prompt": "What entities and fields are involved?"},
@@ -86,36 +173,16 @@ def discover_node(state: dict) -> dict:
             ],
         })
         interview_notes = answers.get("interview_notes", "")
-        state["discover_interview_done"] = True
-
-    # ── Derive project_folder ──
-    project_folder = state.get("project_folder", "")
-    if not project_folder:
-        workspace = _cfg.paths.workspace_dir
-        project_folder = os.path.join(workspace, project_name)
-        state["project_folder"] = project_folder
-    state["project_path"] = project_folder
-
-    # ── Improve mode
-    if state.get("improve_mode"):
-        telemetry = _load_improve_telemetry(state, project_name)
-        if telemetry:
-            deployed_path = telemetry["project_path"]
-            context_folder = deployed_path
-            project_folder = deployed_path
-            state["context_folder"] = deployed_path
-            state.setdefault("artifacts", {})["improve_telemetry"] = json.dumps(telemetry, indent=2)
-
-    # ── Create project directories ──
-    project_dir = Path(project_folder)
-    project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / "specs").mkdir(parents=True, exist_ok=True)
-    (project_dir / "build").mkdir(parents=True, exist_ok=True)
-    (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
 
     # ── Scan existing codebase ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
     context = _scan_codebase(context_folder, project_name, project_folder)
+
+    # ── Idea refinement: sharpen interview notes into actionable concept ──
+    idea_refinement = _refine_idea(interview_notes, project_name, project_description, context, state)
+
+    # ── Context engineering: build focused project context ──
+    engineered_context = _build_context(interview_notes, project_name, project_description, context, state)
 
     # ── Generate discovery artifact ──
     requirement_md = _generate_requirement_via_fabric(
@@ -124,57 +191,66 @@ def discover_node(state: dict) -> dict:
         interview_notes=interview_notes,
         context=context,
         project_folder=project_folder,
+        state=state,
     )
 
     req_path = project_dir / "requirement.md"
     req_path.write_text(requirement_md)
 
-    # Store artifacts
-    state["artifacts"]["project_context"] = json.dumps(context, indent=2, default=str)
-    state["artifacts"]["requirement_md"] = requirement_md
-    state["artifacts"]["requirement_path"] = str(req_path)
-    state["interview_notes"] = interview_notes
-    state["artifacts"]["interview_notes"] = interview_notes
-    state["discover_interview_done"] = True
+    # ── Return partial updates (reducers merge via _dict_merge) ──
+    artifacts = {
+        "idea_refinement": idea_refinement,
+        "engineered_context": engineered_context,
+        "project_context": json.dumps(context, indent=2, default=str),
+        "requirement_md": requirement_md,
+        "requirement_path": str(req_path),
+        "interview_notes": interview_notes,
+        # Clear stale artifact paths from previous cycles
+        "diagrams": {},
+        "diagram_pngs": {},
+    }
 
     audit.log_node_output("DISCOVER", {
         "requirement_path": str(req_path),
-        "project_context_size": len(state["artifacts"]["project_context"]),
+        "project_context_size": len(artifacts["project_context"]),
+        "idea_refinement_size": len(idea_refinement),
+        "engineered_context_size": len(engineered_context),
         "interview_notes_collected": bool(interview_notes),
     })
 
-    state["phase"] = "DISCOVER"
-    state["next_phase"] = "DEFINE"
-    return state
+    return {
+        "interview_notes": interview_notes,
+        "discover_interview_done": True,
+        "artifacts": artifacts,
+        "phase": "DISCOVER",
+        "next_phase": "DEFINE",
+    }
+
+
+# ── Backward compatibility: alias to old single-node function ──
+
+def discover_node(state: dict) -> dict:
+    """Backward-compatible wrapper — delegates to setup then interview."""
+    result = discover_setup_node(state)
+    merged = {**state, **result}
+    return discover_interview_node(merged)
+
 
 def _discover_auto_approve(state: dict) -> dict:
-    """Auto-approve mode: generate default interview notes from project description."""
-    project_name = state.get("project_name", "Untitled")
-    project_description = state.get("project_description", "")
-    interview_notes = (
-        f"Auto-generated interview for '{project_name}':\n"
-        f"Description: {project_description}\n"
-        f"Core behavior: Standard CRUD operations\n"
-        f"API surface: RESTful endpoints\n"
-    )
-    state["interview_notes"] = interview_notes
-    state.setdefault("artifacts", {})["interview_notes"] = interview_notes
-    state["discover_interview_done"] = True
-    state["phase"] = "DISCOVER"
-    state["next_phase"] = "DEFINE"
-    from config.loader import config as _cfg
-    project_folder = state.get("project_folder", "") or os.path.join(
-        os.path.expanduser(_cfg.paths.workspace_dir),
-        project_name or "Untitled"
-    )
-    project_dir = Path(project_folder)
-    project_dir.mkdir(parents=True, exist_ok=True)
-    req_md = f"# {project_name} — Discovery Report\n\n## Overview\n{project_description}\n\n## Requirements\n{interview_notes}\n"
-    req_path = project_dir / "requirement.md"
-    req_path.write_text(req_md)
-    state["artifacts"]["requirement_md"] = req_md
-    state["artifacts"]["requirement_path"] = str(req_path)
-    return state
+    """Backward-compatible: auto-approve via the two-node pipeline."""
+    state = {
+        **state,
+        "phase": "DISCOVER",
+        "next_phase": "DEFINE",
+    }
+    if not state.get("project_name"):
+        state = {**state, "project_name": "Untitled"}
+    if not state.get("project_description"):
+        state = {**state, "project_description": ""}
+    result = discover_setup_node(state)
+    merged = {**state, **result}
+    return discover_interview_node(merged)
+
 
 # ── Helpers (unchanged) ──
 
@@ -198,18 +274,38 @@ def _scan_codebase(context_folder: str, project_name: str, project_folder: str) 
         "git": {"branch": "greenfield"}, "docker": {"services": []}, "specs": {},
     }
 
-def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder):
+def _generate_requirement_via_fabric(project_name, project_description, interview_notes, context, project_folder, state: dict = None):
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    fabric_skill = skills.get("Fabric Prompt Engineering", {}) or skills.get("fabric-prompt-engineering", {})
+    fabric_skill = skills.get("fabric-prompts", {})
+
+    # Wire coding-principles as context-aware refinement
+    principles_skill = skills.get("coding-principles", {})
+    principles_context = ""
+    if principles_skill and project_description and state:
+        principles_prompt = (
+            f"Given this project context, extract relevant coding principles:\n"
+            f"Project: {project_name}\n"
+            f"Description: {project_description}\n"
+            f"Type: {context.get('project_type', 'greenfield')}\n\n"
+            "Output key technical principles and conventions that should guide implementation."
+        )
+        timer = SkillTimer(state, "coding-principles")
+        principles_context = invoke_skill(principles_skill["content"], principles_prompt, "", llm=None)
+        timer.complete()
+        principles_context = f"\n\n## Coding Principles\n{principles_context[:1000]}\n"
+
     if fabric_skill:
         fabric_prompt = (
             f"Generate a structured discovery report for DEFINE phase.\n\n"
             f"Project: {project_name}\nDescription: {project_description}\n"
-            f"Interview notes:\n{interview_notes}\n\n"
+            f"Interview notes:\n{interview_notes}\n"
+            f"{principles_context}\n\n"
             f"Output: Markdown with sections: Project Overview, Core Behavior, "
             f"Data Model, API Surface, Integration Requirements, Non-Functional, Edge Cases, Constraints"
         )
+        fabric_timer = SkillTimer(state, "fabric-prompts")
         result = invoke_skill(fabric_skill["content"], fabric_prompt, "", llm=None)
+        fabric_timer.complete()
         md = result.strip()
         if md.startswith("```"):
             md = re.sub(r'^```[a-z]*\n', '', md).rstrip('`')
@@ -241,11 +337,11 @@ def _load_improve_telemetry(state, project_name):
         url = telemetry.get("product_url", _cfg.services.product.url)
         health = telemetry.get("health_endpoint", "/health")
         try:
-            req = urllib.request.Request(f"{url.rstrip('/')}/{health.lstrip('/')}", method="GET")
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                telemetry["health_status"] = resp.status
-                telemetry["healthy"] = 200 <= resp.status < 400
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+            with httpx.Client(timeout=10) as client:
+                resp = client.get(f"{url.rstrip('/')}/{health.lstrip('/')}")
+                telemetry["health_status"] = resp.status_code
+                telemetry["healthy"] = 200 <= resp.status_code < 400
+        except (httpx.RequestError, OSError):
             telemetry["healthy"] = False
         deployed = telemetry.get("project_path", "")
         if deployed and Path(deployed).is_dir():
@@ -361,3 +457,49 @@ def _discover_specs(project_path):
                 specs.append({"name": f.stem, "file": str(f.relative_to(p))})
             except Exception: pass
     return {"specs": specs}
+
+
+def _refine_idea(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
+    """Use idea-refine skill to sharpen raw interview notes into a crisp, actionable concept."""
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+    refine_skill = skills.get("idea-refine", {})
+    if not refine_skill:
+        return f"## Idea Refinement\n(Interview notes used as-is)\n\n{interview_notes[:800]}"
+    prompt = (
+        f"Refine the following project idea into a sharp, actionable concept.\n\n"
+        f"Project: {project_name}\n"
+        f"Description: {project_description}\n"
+        f"Interview notes:\n{interview_notes}\n\n"
+        f"Produce a concise one-pager with: Problem Statement, Recommended Direction, "
+        f"Key Assumptions, MVP Scope, Not Doing list, Open Questions."
+    )
+    result = invoke_skill(refine_skill["content"], prompt, "", llm=None,
+                          workflow_id=state.get("project_name", ""), phase="DISCOVER")
+    timer = SkillTimer(state, "idea-refine")
+    timer.complete()
+    print(f"  → idea-refine produced {len(result)} chars")
+    return result
+
+
+def _build_context(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
+    """Use context-engineering skill to build comprehensive, focused project context."""
+    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
+    ctx_skill = skills.get("context-engineering", {})
+    if not ctx_skill:
+        return f"## Project Context\n{json.dumps(context, indent=2, default=str)[:1200]}"
+    prompt = (
+        f"Build a focused project context for AI-assisted development.\n\n"
+        f"Project: {project_name}\n"
+        f"Description: {project_description}\n"
+        f"Type: {context.get('project_type', 'greenfield')}\n"
+        f"Interview notes:\n{interview_notes[:600]}\n\n"
+        f"Output a structured context block with: tech stack, commands, code conventions, "
+        f"boundaries, and key files to reference. Keep it under 2000 chars."
+    )
+    result = invoke_skill(ctx_skill["content"], prompt, "", llm=None,
+                          workflow_id=state.get("project_name", ""), phase="DISCOVER")
+    ctx_timer = SkillTimer(state, "context-engineering")
+    ctx_timer.complete()
+    print(f"  → context-engineering produced {len(result)} chars")
+    return result
+

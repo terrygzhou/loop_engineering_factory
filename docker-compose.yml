@@ -33,6 +33,7 @@ services:
     restart: unless-stopped
     networks:
       - loop_factory_network
+      - loop_factory_default
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
       interval: 30s
@@ -97,6 +98,9 @@ services:
     volumes:
       - ./observability/otel-collector-config.yaml:/etc/otel-collector/config.yaml:ro
     restart: unless-stopped
+    networks:
+      - loop_factory_default
+      - loop_factory_network
     deploy:
       resources:
         limits:

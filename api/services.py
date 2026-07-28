@@ -177,7 +177,7 @@ class WorkflowService:
                 # Build resume payload
                 resume_map = {}
                 for intr in interrupts:
-                    if interrupted_phase in ("DISCOVER", "DISCOVER_SETUP"):
+                    if interrupted_phase in ("DISCOVER", "DISCOVER_SETUP", "DISCOVER_INTERVIEW"):
                         if pause_type == "project_setup":
                             mapped = self._build_project_setup_resume(wf["state"], resume_data)
                         else:
@@ -197,13 +197,17 @@ class WorkflowService:
                 del self._tasks[workflow_id]
 
     def _determine_pause_type(self, phase, chunk):
-        """Determine which pause fired for DISCOVER."""
-        if phase != "DISCOVER":
-            return "review"
-        hil_count = (chunk.get("artifacts") or {}).get("discover_hil_count", 0) or 0
-        if hil_count == 0:
+        """Determine which pause fired for DISCOVER nodes."""
+        if phase == "DISCOVER_SETUP":
             return "project_setup"
-        return "interview"
+        if phase == "DISCOVER_INTERVIEW":
+            return "interview"
+        if phase == "DISCOVER":
+            hil_count = (chunk.get("artifacts") or {}).get("discover_hil_count", 0) or 0
+            if hil_count == 0:
+                return "project_setup"
+            return "interview"
+        return "review"
 
     def _build_project_setup_resume(self, chunk, resume_data):
         """Build resume data for project setup pause."""
@@ -248,10 +252,10 @@ class WorkflowService:
         }
 
     def _get_hil_action(self, phase: str, pause_type: str) -> str:
-        """Map interrupt phase/pause_type to frontend action type."""
-        if phase == "DISCOVER" and pause_type == "interview":
+        """Map pause_type to frontend action type."""
+        if pause_type == "interview":
             return "interview"
-        if phase == "DISCOVER" and pause_type == "project_setup":
+        if pause_type == "project_setup":
             return "setup"
         if phase == "ARCH_REVIEW":
             return "review"
@@ -259,9 +263,9 @@ class WorkflowService:
 
     def _build_hil_data(self, phase: str, pause_type: str, interrupt_value: dict) -> dict:
         """Build frontend data for HIL prompts."""
-        if phase == "DISCOVER" and pause_type == "interview":
+        if pause_type == "interview":
             return interrupt_value.get("questions", []) or {}
-        if phase == "DISCOVER" and pause_type == "project_setup":
+        if pause_type == "project_setup":
             return interrupt_value or {}
         if phase == "ARCH_REVIEW":
             return interrupt_value or {}
