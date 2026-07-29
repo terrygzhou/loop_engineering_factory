@@ -1,13 +1,14 @@
 """
-OpenHands BUILD node -- delegates to OpenHands agent-server via OpenAI Gateway API.
+OpenHands BUILD node -- delegates to OpenHands agent-server (v1.30.0) via native API.
 
-Primary path: health-check → POST /v1/chat/completions → poll conversation → parse results.
+Primary path: health-check → POST /api/conversations → poll execution_status → parse final response.
 Fallback path: invoke the compiled BUILD subgraph (build_subgraph_legacy.py) as a proper
 LangGraph subgraph with clean parent↔child state mapping.
 
-API endpoints used:
-- POST /v1/chat/completions  -> creates conversation, returns conv ID in header
-- GET  /api/conversations/{id} -> polls status and collects results
+API endpoints used (agent-server v1.30.0):
+- POST /api/conversations         -> creates conversation with inline LLM config
+- GET  /api/conversations/{id}    -> polls execution_status (idle/running/finished/error)
+- GET  /api/conversations/{id}/agent_final_response -> retrieves agent's final response text
 """
 
 import json
@@ -35,43 +36,71 @@ STATUS_FINISHED = "finished"
 STATUS_ERROR = "error"
 STATUS_TIMEOUT = "timeout"
 
-# -- Profile creation (one-time setup) --------------------------------
-def _ensure_build_profile(client: httpx.Client) -> None:
+# -- Conversation creation (agent-server v1.30.0) ---------------------
+def _create_conversation(client: httpx.Client, prompt: str, project_path: str,
+                         secret_key: str, max_iterations: int = 50) -> Optional[str]:
     """
-    Create the build_agent profile on agent-server if it doesn't exist.
+    Create a conversation on agent-server v1.30.0.
 
-    The profile configures the LLM that the agent uses. We target
-    Qwen3.6-27B on host:8080 via the OpenAI-compatible endpoint.
+    Unlike the legacy Gateway API, v1.30.0 requires inline LLM config
+    per conversation (no persistent profiles). The model name needs the
+    'openai/' prefix so LiteLLM inside the agent knows which provider
+    to use for OpenAI-compatible endpoints.
 
-    Idempotent: POST /api/profiles/build_agent with 409 -> already exists.
+    Returns conversation ID or None on failure.
     """
     llm_cfg = config.services.llm
-    profile_payload = {
-        "name": "build_agent",
-        "llm": {
-            "base_url": llm_cfg.base_url,
-            "model": llm_cfg.model,
-            "api_key": llm_cfg.api_key,
-            "temperature": llm_cfg.temperature,
-            "max_tokens": llm_cfg.max_tokens,
+    # Ensure model has provider prefix for LiteLLM compatibility
+    model = llm_cfg.model
+    if "/" not in model:
+        model = f"openai/{model}"
+
+    payload = {
+        "workspace": {
+            "kind": "LocalWorkspace",
+            "working_dir": project_path or "/tmp/oh_build",
         },
         "agent": {
-            "type": "codeact",
-            "max_iterations": 50,
-            "max_budget_per_task": 0,  # No budget limit for local LLM
+            "kind": "Agent",
+            "llm": {
+                "model": model,
+                "base_url": llm_cfg.base_url,
+                "api_key": llm_cfg.api_key,
+                "temperature": llm_cfg.temperature or 0.1,
+                "max_tokens": llm_cfg.max_tokens or 65535,
+            },
+            "tools": [
+                {"name": "terminal"},
+                {"name": "file_editor"},
+            ],
         },
+        "initial_message": {
+            "content": [{"type": "text", "text": prompt}],
+        },
+        "max_iterations": max_iterations,
+        "confirmation_policy": {"kind": "NeverConfirm"},
     }
+
     try:
-        resp = client.post("/api/profiles", json=profile_payload, timeout=30.0)
-        if resp.status_code == 409:
-            logger.info("Profile build_agent already exists (409)")
-        else:
-            resp.raise_for_status()
-            logger.info("Profile build_agent created")
-    except httpx.HTTPStatusError as e:
-        # 409 is not an error -- profile already exists
-        if e.response.status_code != 409:
-            logger.warning("Profile setup failed: %s", e)
+        resp = client.post(
+            "/api/conversations",
+            json=payload,
+            headers={"X-Api-Key": secret_key},
+            timeout=60.0,
+        )
+        if resp.status_code in (409, 400):
+            # Conversation already exists or bad payload — try to extract conv_id
+            data = resp.json()
+            conv_id = data.get("id")
+            if conv_id:
+                return conv_id
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("id")
+    except httpx.HTTPError as e:
+        logger.error("  -> [OPENHANDS] Failed to create conversation: %s", e)
+        return None
 
 
 # -- Prompt construction ----------------------------------------------
@@ -228,32 +257,44 @@ def _parse_assistant_text(text: str) -> dict:
     return result
 
 
-# -- Conversation polling ---------------------------------------------
+# -- Conversation polling (agent-server v1.30.0) ---------------------
 def _poll_conversation(
     client: httpx.Client,
     conv_id: str,
+    secret_key: str,
     timeout: int = BUILD_TIMEOUT,
 ) -> Optional[str]:
     """
     Poll GET /api/conversations/{conv_id} until finished/errored.
+    Then fetch final response via GET /api/conversations/{conv_id}/agent_final_response.
 
-    Returns the assistant message text, or None on timeout/error.
+    Returns the agent's final response text, or None on timeout/error.
     """
     elapsed = 0
     while elapsed < timeout:
         try:
-            resp = client.get(f"/api/conversations/{conv_id}", timeout=30.0)
+            resp = client.get(
+                f"/api/conversations/{conv_id}",
+                headers={"X-Api-Key": secret_key},
+                timeout=30.0,
+            )
             data = resp.json()
 
-            status = data.get("status", "")
+            status = data.get("execution_status", "")
             logger.debug("  -> [OPENHANDS] Conversation %s: %s", conv_id, status)
 
             if status in (STATUS_FINISHED, STATUS_ERROR):
-                # Extract the last assistant message
-                messages = data.get("messages", [])
-                for msg in reversed(messages):
-                    if msg.get("role") == "assistant":
-                        return msg.get("content", "")
+                # Fetch the final response text
+                try:
+                    resp = client.get(
+                        f"/api/conversations/{conv_id}/agent_final_response",
+                        headers={"X-Api-Key": secret_key},
+                        timeout=30.0,
+                    )
+                    result = resp.json()
+                    return result.get("response", "")
+                except (httpx.HTTPError, json.JSONDecodeError) as e:
+                    logger.warning("  -> [OPENHANDS] Failed to fetch final response: %s", e)
                 return None
 
         except (httpx.HTTPError, json.JSONDecodeError) as e:
@@ -393,49 +434,33 @@ def _merge_results(state: dict, parsed: dict) -> dict:
 
 def _delegate_to_openhands(state: dict, oh_cfg) -> dict:
     """
-    Delegate BUILD to OpenHands agent-server.
+    Delegate BUILD to OpenHands agent-server v1.30.0.
 
-    Creates a conversation, polls for completion, parses the assistant
-    text response, and merges results into WorkflowState.
+    Creates a conversation with inline LLM config, polls for completion,
+    fetches the agent's final response, and merges results into WorkflowState.
     """
     gateway_url = oh_cfg.url
     secret_key = oh_cfg.secret_key
     timeout = oh_cfg.timeout
 
-    # -- Create conversation --
+    # -- Build prompt --
     prompt = _build_prompt(state)
+    project_path = state.get("project_path", "")
 
     with httpx.Client(base_url=gateway_url, timeout=30.0) as client:
-        # Ensure profile exists (idempotent)
-        _ensure_build_profile(client)
-
-        # POST to Gateway
-        resp = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "openhands_build_agent",
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            headers={
-                "Authorization": f"Bearer {secret_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=60.0,
-        )
-        resp.raise_for_status()
-
-        conv_id = resp.headers.get("X-OpenHands-ServerConversation-ID")
+        # Create conversation (replaces legacy _ensure_build_profile + POST /v1/chat)
+        conv_id = _create_conversation(client, prompt, project_path, secret_key)
         if not conv_id:
-            logger.error("  -> [OPENHANDS] No conversation ID in response")
+            logger.error("  -> [OPENHANDS] Failed to create conversation -- fallback")
             return _run_local_subgraph(state)
 
         logger.info("  -> [OPENHANDS] Conversation %s created", conv_id)
 
         # -- Poll for completion --
-        assistant_text = _poll_conversation(client, conv_id, timeout=timeout)
+        assistant_text = _poll_conversation(client, conv_id, secret_key, timeout=timeout)
 
-        if assistant_text is None:
-            logger.warning("  -> [OPENHANDS] Conversation %s timed out", conv_id)
+        if not assistant_text:
+            logger.warning("  -> [OPENHANDS] Conversation %s returned empty or timed out", conv_id)
             return _run_local_subgraph(state)
 
     # -- Parse results --

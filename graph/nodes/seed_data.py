@@ -10,6 +10,7 @@ Output: marks seed phase as complete, preserves all artifacts.
 
 from langgraph.config import get_stream_writer
 
+import time
 from tools.audit_logger import AuditLog
 
 
@@ -24,7 +25,7 @@ def seed_data_node(state: dict) -> dict:
     Returns partial update dict (LangGraph reducer merges).
     """
     writer({"type": "progress", "phase": "SEED_DATA", "step": "started", "detail": "\n=== SEED_DATA PHASE (placeholder) ===", "ts": time.time()})
-    writer({"type": "progress", "phase": "SEED_DATA", "step": "progress", "detail": "  → Seed data seeding not yet implemented — pass-through to VERIFY", "ts": time.time()})
+    writer({"type": "progress", "phase": "SEED_DATA", "step": "progress", "detail": "  -> Seed data seeding not yet implemented — pass-through to VERIFY", "ts": time.time()})
 
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
     audit.log_node_input("SEED_DATA", {"is_placeholder": True})

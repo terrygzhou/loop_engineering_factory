@@ -117,6 +117,9 @@ services:
     volumes:
       - phoenix_data:/var/lib/phoenix
     restart: unless-stopped
+    networks:
+      - loop_factory_default
+      - loop_factory_network
     deploy:
       resources:
         limits:

@@ -10,15 +10,16 @@ from config.guardrails import get_threshold
 END_MARKER = END
 
 # Valid phase targets for routing safety (S-005)
-VALID_PHASES = {"DISCOVER", "DISCOVER_SETUP", "DISCOVER_INTERVIEW", "DEFINE", "PLAN",
-                "ARCH_REVIEW", "BUILD", "SEED_DATA", "VERIFY", "SHIP", "REFLECT"}
+VALID_PHASES = {"DISCOVER", "DEFINE", "PLAN",
+                "ARCH_REVIEW", "BUILD", "SEED_DATA", "VERIFY", "SHIP", "REFLECT", "ERROR"}
+
+# Error node for unhandled exceptions — terminal state
+ERROR_NODE = "ERROR"
 
 # Per-cycle loop counts stored in state["artifacts"]["loop_counts"] — never global.
 # Forward paths for forced progression after max retries (prevents livelock).
 _forward_paths = {
-    "DISCOVER": "DEFINE",            # legacy: DISCOVER was single node, now split
-    "DISCOVER_SETUP": "DISCOVER_INTERVIEW",
-    "DISCOVER_INTERVIEW": "DEFINE",
+    "DISCOVER": "DEFINE",
     "DEFINE": "PLAN",
     "PLAN": "ARCH_REVIEW",
     "ARCH_REVIEW": "BUILD",
@@ -84,9 +85,9 @@ def route_phase(state: WorkflowState) -> str:
     if loop_count >= max_loops:
         return _forward_paths.get(phase, END)
 
-    # If there's an error, route to REFLECT for human inspection
+    # If there's an error, route to ERROR terminal for safe landing
     if error:
-        return "REFLECT"
+        return "ERROR"
 
     # DISCOVER -> always forward to DEFINE (no quality gate needed)
     if phase == "DISCOVER":

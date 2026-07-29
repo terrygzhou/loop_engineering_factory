@@ -63,8 +63,9 @@ state/
 # Root config with local paths (source of truth is config/config.yaml)
 config.yaml
 
-# Auto-generated handoff state (contains local paths)
+# Auto-generated handoff / status state (contains local paths)
 HANDOFF.md
+STATUS.md
 
 # Generated diagrams / images (reproducible from Mermaid)
 architecture.html

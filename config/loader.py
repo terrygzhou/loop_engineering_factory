@@ -201,7 +201,7 @@ class Config:
     def reset_paths(self, project_name: str):
         """Reset paths at workflow start to prevent cross-run contamination.
 
-        Clears stale project_name from previous runs so discover_setup_node
+        Clears stale project_name from previous runs so discover_node
         doesn't derive project_folder from tainted config.
         """
         self.paths.project_name = project_name

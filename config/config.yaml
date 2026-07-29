@@ -1,17 +1,10 @@
-# Loop Engineering — Single Source of Truth for ALL external parameters
-# Resolution order: ENV_VAR > this file > built-in default
-
 paths:
-  project_name: test_discover_fix
-  workspace_dir: ./output          # Host workspace for generated projects
+  project_name: test_update
+  workspace_dir: ./output
   project_path: '{{project_name}}'
-  build_dir: /app/build            # Container build artifacts
-  output_dir: /app/output          # Container output directory
   skills_dir: skills
   storage_dir: ./storage
   guardrails_path: ./config/guardrails.yaml
-  prompt_log_dir: build/prompt_logs
-
 services:
   llm:
     base_url: http://pop-os:8080/v1
@@ -19,66 +12,51 @@ services:
     api_key: not-needed
     temperature: 0.1
     max_tokens: 65535
-
   chroma:
     url: http://chromadb:8000
-
   otel:
     endpoint: http://otel-collector:4318/v1/traces
     service_name: loop-orchestrator
-
   phoenix:
     host: 0.0.0.0
     port: 6006
     database_uri: /var/lib/phoenix/phoenix.db
-
   postgres:
     user: postgres
-    # password is for generated projects only, not Loop Factory itself
     password: ${DB_PASSWORD:-postgres}
     database: crm_dev
     port: 5432
     host: localhost
-
   grafana:
     host: 0.0.0.0
     port: 3000
-
   loop_api:
     url: http://localhost:8011
     port: 8011
-
   builder:
     url: http://builder:8200
     port: 8200
-
   product:
     url: http://localhost:8010
     port: 8010
-
 observability:
   prometheus_port: 9090
   loki_port: 3100
   port: 8081
   log_level: INFO
-
 workflow:
-  auto_approve: true
-  # When auto_approve=true, ARCH_REVIEW is auto-approved (no human pause).
-  # Set to false for HIL mode — the node will interrupt() for human review.
+  auto_approve: false
   hil_mode: auto
   max_retries: 2
   skill_registry_path: /app/skills
-
 superweb:
   mode: agent
   openhands_url: http://openhands-server:8000
   openhands_port: 8000
   agent_conversations: 3
   agent_timeout_seconds: 3600
-
 openhands:
   url: http://openhands-server:8000
-  secret_key: ${OH_SECRET_KEY:-changeme}  # MUST be changed to a strong secret before production
+  secret_key: ${OH_SECRET_KEY:-changeme}
   workspace_path: /opt/workspace_base/output
   timeout: 3600

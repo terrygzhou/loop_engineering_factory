@@ -46,7 +46,13 @@ def main():
         tracer_instance=tracer,
         api_key=config.services.llm.api_key,
     )
-    health_module.start_health_server()
+    try:
+        health_module.start_health_server()
+    except OSError as e:
+        if e.errno == 98:  # Address already in use — entrypoint already started it
+            logger.info("Health server already running (skipping)")
+        else:
+            raise
     logger.info("CLI starting")
 
     # CLI arguments only — DISCOVER node collects all human input via GraphInterrupt.

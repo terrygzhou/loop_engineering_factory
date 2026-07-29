@@ -811,7 +811,7 @@ class WorkflowBridge:
 
         try:
             from graph.main import build_graph
-            graph = build_graph(checkpointer=checkpointer, auto_approve=self._auto_approve)
+            graph = build_graph(checkpointer=checkpointer, auto_approve=False)
 
             # ── astream(values) loop — same as CLI executor ──
             current_input = None if is_recovery else state
@@ -835,6 +835,22 @@ class WorkflowBridge:
                         # Full merged state — phase is always present
                         phase = chunk.get("phase", "UNKNOWN")
                         artifacts = chunk.get("artifacts", {})
+                        # ── LangGraph 1.x: interrupt() no longer raises; it
+                        # yields __interrupt__ in the stream chunk and completes.
+                        # Capture interrupt data, then re-raise so the pause handler runs. ──
+                        if chunk.get("__interrupt__"):
+                            interrupt_data = chunk["__interrupt__"]
+                            # Extract type from Interrupt(value={'type': 'project_setup', ...})
+                            if interrupt_data and len(interrupt_data) > 0:
+                                iv = interrupt_data[0]
+                                if hasattr(iv, 'value') and isinstance(iv.value, dict):
+                                    self._interrupt_type = iv.value.get("type")
+                                else:
+                                    self._interrupt_type = str(iv)
+                            else:
+                                self._interrupt_type = None
+                            from langgraph.errors import GraphInterrupt
+                            raise GraphInterrupt("Interrupted for HIL input")
 
                         # Capture artifacts
                         if artifacts and phase in self.phase_states:
@@ -897,19 +913,24 @@ class WorkflowBridge:
                         or self._last_phase
                         or "UNKNOWN"
                     )
-                    # Extract interrupt type
-                    if graph_state.interrupts and len(graph_state.interrupts) > 0:
-                        first = graph_state.interrupts[0]
-                        if hasattr(first, 'value'):
-                            interrupted_type = str(first.value)
-                        else:
-                            interrupted_type = str(first)
-                    else:
-                        interrupted_type = None
+                    interrupted_type = getattr(self, '_interrupt_type', None)
+                    if not interrupted_type:
+                        # Fallback: try graph_state.interrupts
+                        if graph_state.interrupts and len(graph_state.interrupts) > 0:
+                            first = graph_state.interrupts[0]
+                            if hasattr(first, 'value'):
+                                # Extract type key from interrupt value dict
+                                if isinstance(first.value, dict):
+                                    interrupted_type = first.value.get("type")
+                                else:
+                                    interrupted_type = str(first.value)
+                            else:
+                                interrupted_type = str(first)
                     print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
-                    # OTEL: record HIL pause
+                    # OTEL: record HIL pause (guard against None which crashes OTEL)
                     if _OTEL_BRIDGE and root_span:
-                        root_span.add_event("hil.pause", {"phase": interrupted_phase, "type": interrupted_type})
+                        otel_type = interrupted_type or "unknown"
+                        root_span.add_event("hil.pause", {"phase": interrupted_phase, "type": otel_type})
 
                     hil_type = self._classify_hil_type(interrupted_phase, interrupted_type)
                     await self._broadcast_hil_form(interrupted_phase, hil_type, current_chunk)
@@ -921,11 +942,15 @@ class WorkflowBridge:
                     if _OTEL_BRIDGE and root_span:
                         root_span.add_event("hil.resume", {"phase": interrupted_phase})
 
-                    resume_data = self._build_resume_data(interrupted_phase, user_input)
-                    print(f"  → Resuming {interrupted_phase} with Command(resume=...)")
+                    resume_result = self._build_resume_data(interrupted_phase, user_input)
+                    resume_data, update_data = resume_result if isinstance(resume_result, tuple) else (resume_result, None)
+                    print(f"  → Resuming {interrupted_phase} with Command(resume=..., update=...)")
                     self.status = "running"
                     self.waiting_for = None
-                    current_input = Command(resume=resume_data)
+                    if update_data:
+                        current_input = Command(resume=resume_data, update=update_data)
+                    else:
+                        current_input = Command(resume=resume_data)
                     continue
 
                 # Cancel abort waiter (normal completion path)
@@ -1029,35 +1054,79 @@ class WorkflowBridge:
         return {"approved": True, "interview_notes": ""}
 
     def _build_resume_data(self, phase, user_input):
-        """Build resume payload for Command(resume=...)."""
+        """Build resume payload for Command(resume=...).
+
+        Returns (resume_data, update_data) tuple.
+        update_data is passed to Command(update=...) to pre-seed the
+        checkpoint so guards see fresh state on node re-run.
+        """
         if user_input is None:
             user_input = {"approved": True, "interview_notes": ""}
         self.waiting_for = None
 
         if phase == "DISCOVER":
             if isinstance(user_input, dict):
-                return user_input
+                resume = user_input
             elif isinstance(user_input, str):
-                return {"interview_notes": user_input}
+                resume = {"interview_notes": user_input}
             else:
-                return {"interview_notes": str(user_input)}
+                resume = {"interview_notes": str(user_input)}
+
+            itype = getattr(self, '_interrupt_type', None)
+            # Build interview_notes from whatever form the user input took
+            if itype == "interview":
+                # User may have sent individual answer keys or a pre-formed interview_notes
+                if resume.get("interview_notes"):
+                    interview_notes = resume["interview_notes"]
+                elif isinstance(resume, dict) and any(k in resume for k in ("core_behavior", "data_model", "api_surface")):
+                    # Convert answer dict to structured notes string
+                    parts = []
+                    for k, v in resume.items():
+                        if k not in ("approved",):
+                            parts.append(f"{k}: {v}")
+                    interview_notes = "\n".join(parts)
+                    resume["interview_notes"] = interview_notes
+                else:
+                    interview_notes = str(resume.get("interview_notes", ""))
+                update = {
+                    "interview_notes": interview_notes,
+                    "discover_interview_done": True,
+                }
+            elif itype == "project_setup":
+                interview_notes = ""
+                update = {
+                    "discover_setup_done": True,
+                }
+            else:
+                interview_notes = resume.get("interview_notes", "")
+                update = None
+            return resume, update
         elif phase == "ARCH_REVIEW":
             return {
                 "approved": bool(user_input.get("approved", True)),
                 "feedback": user_input.get("feedback", user_input.get("user_review_comments", "")),
-            }
+            }, None
         else:
-            return {"human_approval_required": False}
+            return {"human_approval_required": False}, None
 
     def _build_executor_state(self, cycle_id, project_name, spec_text, context_folder):
-        """Build state via shared executor — identical to what CLI uses."""
+        """Build state via shared executor — identical to what CLI uses.
+        
+        Web UI always forces HIL mode (auto_approve_override=False) so that
+        interrupt() gates are triggered regardless of config defaults.
+        """
         from graph.executor import build_executor_state
-        return build_executor_state(
+        state = build_executor_state(
             cycle_id=cycle_id,
             project_name=project_name,
             spec_text=spec_text,
             context_folder=context_folder,
         )
+        # Force HIL: override any config defaults so nodes hit interrupt() gates
+        state["auto_approve_override"] = False
+        # Force HIL: ensure setup node doesn't skip when project_name is provided
+        state["force_hil"] = True
+        return state
 
     async def run(self, spec_text: str = "", project_name: str = "", project_path: str = "", context_folder: str = ""):
         """Main entry point — tries real workflow, falls back to simulated."""

@@ -2,15 +2,14 @@
 WorkflowState definition for the self-improving AI loop.
 """
 import operator
-from typing import Annotated, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from pydantic import BaseModel
 
 
 def _dict_merge(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
-    """Reducer: merge two dicts (right wins on conflict). Empty right clears the key."""
-    if right == {}:
-        # Explicitly clearing — left returns empty so key is effectively removed
-        return right
+    """Reducer: merge two dicts (right wins on conflict). Empty right is NO-OP."""
+    if not right:
+        return left
     return {**left, **right}
 
 
@@ -55,6 +54,7 @@ class WorkflowState(TypedDict):
 
     # ── HIL control ──
     auto_approve_override: Optional[bool]
+    force_hil: bool
 
     # ── DISCOVER: interview notes ──
     interview_notes: str

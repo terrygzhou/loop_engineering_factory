@@ -191,6 +191,9 @@ async def start_workflow(req: StartRequest):
     """
     if bridge.status in ("running", "waiting"):
         return {"status": "error", "message": "Workflow already running — abort first"}
+    # Always force fresh workflow — don't reuse stale thread_id from recovery
+    bridge._thread_id = None
+    bridge._checkpointer = None
     bridge._seen_artifacts = {}
     bridge._spec_text = req.spec
     bridge._project_name = req.project_name

@@ -1,13 +1,14 @@
 """
-DISCOVER nodes: Accept project description, collect user input via interview,
+DISCOVER node: Accept project description, collect user input via interview,
 generate discovery artifact for DEFINE phase.
 
-Split into two nodes, each with ONE interrupt:
-  1. discover_setup_node — project setup (name + description + context folder)
-  2. discover_interview_node — interview questions + requirement.md generation
+Single async node with TWO sequential interrupt() calls:
+  1. project_setup — project name + description + context folder
+  2. interview — detailed requirements questions
 
-On resume, only the paused node re-runs (~30 lines vs ~100 lines in the old
-single-node design).
+Both interrupts fire from the same node context, avoiding LangGraph's
+post-resume interrupt suppression (LangGraph 1.x: interrupt() in a
+downstream node after resume does not yield __interrupt__).
 """
 from langgraph.config import get_stream_writer
 
@@ -15,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import httpx
 from pathlib import Path
 from langgraph.types import interrupt
@@ -26,42 +28,40 @@ from tools.audit_logger import AuditLog
 from graph.ui_bridge import SkillTimer
 
 
-def discover_setup_node(state: dict) -> dict:
+async def discover_node(state: dict) -> dict:
     writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    """
-    DISCOVER phase — Setup node.
 
-    Purpose: Collect project name, description, context folder.
-    Interrupt: Project setup form (once).
-    """
-    # State override wins if explicitly set; None = use config fallback
+    # ── State override wins if explicitly set; None = use config fallback ──
     override = state.get("auto_approve_override")
     auto_approve = override if override is not None else _cfg.workflow.auto_approve
+    force_hil = bool(state.get("force_hil"))
 
-    # ── Auto-approve: generate defaults ──
+    # ── 1. Project setup (interrupt #1) ──
     if auto_approve:
         project_name = state.get("project_name") or "Untitled"
         project_description = state.get("project_description", "")
         context_folder = state.get("context_folder", "")
+    elif state.get("discover_setup_done"):
+        # Already collected on a previous run — skip setup interrupt
+        project_name = state["project_name"]
+        project_description = state.get("project_description", "")
+        context_folder = state.get("context_folder", "")
+    elif force_hil or not state.get("project_name"):
+        setup = interrupt({
+            "type": "project_setup",
+            "fields": [
+                {"key": "project_name", "label": "Project name", "required": True},
+                {"key": "project_description", "label": "Project description", "required": True},
+                {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
+            ],
+        })
+        project_name = setup.get("project_name", "")
+        project_description = setup.get("project_description", "")
+        context_folder = setup.get("context_folder", "")
     else:
-        # ── Check if already collected (resume skip) ──
-        if state.get("project_name"):
-            project_name = state["project_name"]
-            project_description = state.get("project_description", "")
-            context_folder = state.get("context_folder", "")
-        else:
-            # ── Pause: Project setup ──
-            setup = interrupt({
-                "type": "project_setup",
-                "fields": [
-                    {"key": "project_name", "label": "Project name", "required": True},
-                    {"key": "project_description", "label": "Project description", "required": True},
-                    {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
-                ],
-            })
-            project_name = setup.get("project_name", "")
-            project_description = setup.get("project_description", "")
-            context_folder = setup.get("context_folder", "")
+        project_name = state.get("project_name", "Untitled")
+        project_description = state.get("project_description", "")
+        context_folder = state.get("context_folder", "")
 
     # ── Derive project_folder ──
     project_folder = state.get("project_folder", "")
@@ -76,7 +76,6 @@ def discover_setup_node(state: dict) -> dict:
             deployed_path = telemetry["project_path"]
             context_folder = deployed_path
             project_folder = deployed_path
-            # Create project dirs for improve mode
             project_dir = Path(project_folder)
             project_dir.mkdir(parents=True, exist_ok=True)
             (project_dir / "specs").mkdir(parents=True, exist_ok=True)
@@ -90,6 +89,7 @@ def discover_setup_node(state: dict) -> dict:
                 "project_path": project_folder,
                 "phase": "DISCOVER",
                 "next_phase": "DEFINE",
+                "discover_setup_done": True,
                 "artifacts": {"improve_telemetry": json.dumps(telemetry, indent=2)},
             }
 
@@ -100,39 +100,7 @@ def discover_setup_node(state: dict) -> dict:
     (project_dir / "build").mkdir(parents=True, exist_ok=True)
     (project_dir / "build" / "diagrams").mkdir(parents=True, exist_ok=True)
 
-    return {
-        "project_name": project_name,
-        "project_description": project_description,
-        "context_folder": context_folder,
-        "project_folder": project_folder,
-        "project_path": project_folder,
-        "phase": "DISCOVER",
-        "next_phase": "DEFINE",
-        # Clear top-level diagram state from previous cycles
-        "diagrams": {},
-        "diagram_status": "pending",
-    }
-
-
-def discover_interview_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    """
-    DISCOVER phase — Interview node.
-
-    Purpose: Ask interview questions, generate requirement.md.
-    Interrupt: Interview questions (once).
-    """
-    # State override wins if explicitly set; None = use config fallback
-    override = state.get("auto_approve_override")
-    auto_approve = override if override is not None else _cfg.workflow.auto_approve
-
-    project_name = state.get("project_name", "Untitled")
-    project_description = state.get("project_description", "")
-    context_folder = state.get("context_folder", "")
-    project_folder = state.get("project_folder", "")
-    project_dir = Path(project_folder)
-
-    # ── Auto-approve: skip interview, generate defaults ──
+    # ── 2. Interview (interrupt #2) — same node, same checkpoint context ──
     if auto_approve:
         interview_notes = (
             f"Auto-generated interview for '{project_name}':\n"
@@ -140,11 +108,9 @@ def discover_interview_node(state: dict) -> dict:
             f"Core behavior: Standard CRUD operations\n"
             f"API surface: RESTful endpoints\n"
         )
-    # ── Check if interview already completed (resume skip) ──
     elif state.get("discover_interview_done") or state.get("interview_notes"):
         interview_notes = state.get("interview_notes", "")
     else:
-        # ── Pause: Interview questions ──
         skills = build_skill_registry(_cfg.workflow.skill_registry_path)
         interview_skill = skills.get("interview-me", {})
 
@@ -212,7 +178,6 @@ def discover_interview_node(state: dict) -> dict:
         "requirement_md": requirement_md,
         "requirement_path": str(req_path),
         "interview_notes": interview_notes,
-        # Clear stale artifact paths from previous cycles
         "diagrams": {},
         "diagram_pngs": {},
     }
@@ -226,45 +191,23 @@ def discover_interview_node(state: dict) -> dict:
     })
 
     return {
+        "project_name": project_name,
+        "project_description": project_description,
+        "context_folder": context_folder,
+        "project_folder": project_folder,
+        "project_path": project_folder,
         "interview_notes": interview_notes,
+        "discover_setup_done": True,
         "discover_interview_done": True,
         "artifacts": artifacts,
         "phase": "DISCOVER",
         "next_phase": "DEFINE",
-        # Clear top-level diagram state from previous cycles
         "diagrams": {},
         "diagram_status": "pending",
     }
 
 
-# ── Backward compatibility: alias to old single-node function ──
-
-def discover_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    """Backward-compatible wrapper — delegates to setup then interview."""
-    result = discover_setup_node(state)
-    merged = {**state, **result}
-    return discover_interview_node(merged)
-
-
-def _discover_auto_approve(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    """Backward-compatible: auto-approve via the two-node pipeline."""
-    state = {
-        **state,
-        "phase": "DISCOVER",
-        "next_phase": "DEFINE",
-    }
-    if not state.get("project_name"):
-        state = {**state, "project_name": "Untitled"}
-    if not state.get("project_description"):
-        state = {**state, "project_description": ""}
-    result = discover_setup_node(state)
-    merged = {**state, **result}
-    return discover_interview_node(merged)
-
-
-# ── Helpers (unchanged) ──
+# ── Helpers ──
 
 def _scan_codebase(context_folder: str, project_name: str, project_folder: str) -> dict:
     writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
@@ -367,168 +310,207 @@ def _load_improve_telemetry(state, project_name):
         return None
 
 def _detect_project_type(project_path: str) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    p = Path(project_path)
-    if (p / "pyproject.toml").exists(): return "python-pyproject"
-    if (p / "requirements.txt").exists(): return "python-requirements"
-    if (p / "package.json").exists(): return "node"
-    if (p / "Cargo.toml").exists(): return "rust"
-    if (p / "go.mod").exists(): return "go"
-    for pyfile in p.rglob("main.py"):
-        text = pyfile.read_text(errors="replace")
-        if "fastapi" in text.lower() or "FastAPI" in text:
-            return "python-fastapi"
+    """Detect framework type from package dependencies."""
+    if not project_path:
+        return "unknown"
+    pm = Path(project_path)
+    if (pm / "pyproject.toml").exists():
+        return "python"
+    if (pm / "package.json").exists():
+        return "node"
+    if (pm / "Cargo.toml").exists():
+        return "rust"
+    if (pm / "go.mod").exists():
+        return "go"
+    if (pm / "Gemfile").exists():
+        return "ruby"
     return "unknown"
 
-def _inventory_tree(project_path: str) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    p = Path(project_path)
-    dirs = [{"name": d.name, "file_count": len(list(d.rglob("*")))} for d in p.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    return {"directories": dirs, "total_top_level": len(dirs)}
+def _inventory_tree(context_folder: str, max_depth: int = 3):
+    """Walk the project tree up to max_depth."""
+    base = Path(context_folder)
+    tree = {}
+    if not base.is_dir():
+        return tree
+    for entry in sorted(base.iterdir()):
+        if entry.name.startswith(".") or entry.name == "__pycache__":
+            continue
+        if entry.is_dir():
+            sub = {}
+            if max_depth > 1:
+                for sub_entry in sorted(entry.iterdir())[:20]:
+                    if not sub_entry.name.startswith("."):
+                        sub[sub_entry.name] = {"type": "dir" if sub_entry.is_dir() else "file"}
+            tree[entry.name] = {"type": "dir", "children": sub}
+        else:
+            tree[entry.name] = {"type": "file"}
+    return tree
 
-def _discover_routes(project_path, project_type):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    if project_type in ("python-fastapi", "python-pyproject", "python-requirements"):
-        return _discover_fastapi_routes(project_path)
-    elif project_type == "node":
-        return _discover_express_routes(project_path)
-    return []
-
-def _discover_fastapi_routes(project_path):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    routes = []
-    p = Path(project_path)
-    for rd in list(p.rglob("routers")) + list(p.rglob("api")) + list(p.rglob("routes")):
-        if not rd.is_dir(): continue
-        for pyfile in rd.glob("*.py"):
-            if pyfile.name.startswith("_"): continue
-            try:
-                for method, path in re.findall(r'@\w+\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', pyfile.read_text(errors="replace")):
-                    routes.append({"method": method.upper(), "path": path, "file": str(pyfile.relative_to(p))})
-            except Exception: pass
-    for mainfile in list(p.glob("*/main.py")) + [p / "main.py"]:
+def _detect_framework(project_path: str):
+    """Detect framework from pyproject.toml or package.json deps."""
+    base = Path(project_path)
+    if (base / "pyproject.toml").exists():
+        import toml
         try:
-            for method, path in re.findall(r'@\w+\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', mainfile.read_text(errors="replace")):
-                routes.append({"method": method.upper(), "path": path, "file": str(mainfile.relative_to(p))})
-        except Exception: pass
+            data = toml.loads((base / "pyproject.toml").read_text())
+            deps = data.get("project", {}).get("dependencies", [])
+            dd = " ".join(deps).lower()
+            if "django" in dd:
+                return "django"
+            if "fastapi" in dd:
+                return "fastapi"
+            if "flask" in dd:
+                return "flask"
+            if "httpx" in dd:
+                return "fastapi"
+            return "python"
+        except Exception:
+            return "python"
+    if (base / "package.json").exists():
+        import json
+        try:
+            pkg = json.loads((base / "package.json").read_text())
+            deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+            dd = " ".join(deps.keys()).lower()
+            if "next" in dd:
+                return "nextjs"
+            if "react" in dd:
+                return "react"
+            return "node"
+        except Exception:
+            return "node"
+    return "unknown"
+
+def _discover_routes(context_folder: str, project_type: str) -> list:
+    """Extract route definitions from backends."""
+    routes = []
+    if not context_folder or not Path(context_folder).is_dir():
+        return routes
+    if project_type == "fastapi":
+        for f in Path(context_folder).rglob("*.py"):
+            text = f.read_text()
+            for m in re.finditer(r'@(?:router|app)\.(?:get|post|put|delete|patch)\s*\(\s*[\'"]([^\'"]+)', text):
+                routes.append({"method": "auto", "path": m.group(1), "file": str(f.relative_to(context_folder))})
+    elif project_type == "django":
+        for f in Path(context_folder).rglob("urls.py"):
+            text = f.read_text()
+            for m in re.finditer(r"path\s*\(\s*['\"]?([^'\",)]+)", text):
+                routes.append({"method": "auto", "path": m.group(1), "file": str(f.relative_to(context_folder))})
+    elif project_type in ("nextjs", "react"):
+        for f in Path(context_folder).rglob("page.tsx"):
+            routes.append({"method": "GET", "path": f"/{f.relative_to(context_folder).parent}", "file": str(f.relative_to(context_folder))})
     return routes
 
-def _discover_express_routes(project_path):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    routes = []
-    p = Path(project_path)
-    for jsfile in list(p.rglob("*.js")) + list(p.rglob("*.ts")):
-        try:
-            for method, path in re.findall(r'\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', jsfile.read_text(errors="replace")):
-                routes.append({"method": method.upper(), "path": path, "file": str(jsfile.relative_to(p))})
-        except Exception: pass
-    return routes
-
-def _discover_models(project_path, project_type):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+def _discover_models(context_folder: str, project_type: str) -> list:
+    """Extract model definitions from backends."""
     models = []
-    if project_type.startswith("python"):
-        p = Path(project_path)
-        for md in p.rglob("models"):
-            if not md.is_dir(): continue
-            for pyfile in md.glob("*.py"):
-                if pyfile.name.startswith("_"): continue
-                try:
-                    for cls in re.findall(r'class\s+(\w+)\s*\([^)]*(?:Base|Model|DeclarativeBase)[^)]*\)', pyfile.read_text(errors="replace")):
-                        models.append({"name": cls, "file": str(pyfile.relative_to(p))})
-                except Exception: pass
+    if not context_folder or not Path(context_folder).is_dir():
+        return models
+    if project_type == "django":
+        for f in Path(context_folder).rglob("models.py"):
+            for m in re.finditer(r"class\s+(\w+)\(models\.", f.read_text()):
+                models.append(m.group(1))
+    elif project_type == "fastapi":
+        for f in Path(context_folder).rglob("*.py"):
+            for m in re.finditer(r"class\s+(\w+)\(BaseModel\)", f.read_text()):
+                models.append(m.group(1))
     return models
 
-def _discover_templates(project_path, project_type):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+def _discover_templates(context_folder: str, project_type: str) -> list:
+    """List Jinja2 or JSX template paths."""
     templates = []
-    p = Path(project_path)
-    for d in p.rglob("templates"):
-        if d.is_dir():
-            for f in d.glob("*.html"):
-                templates.append({"name": f.stem, "file": str(f.relative_to(p))})
+    if not context_folder or not Path(context_folder).is_dir():
+        return templates
+    ext = ".html" if project_type in ("django", "flask") else (".tsx" if project_type in ("nextjs", "react") else ".jinja2")
+    for f in Path(context_folder).rglob(f"*{ext}"):
+        templates.append(str(f.relative_to(context_folder)))
     return templates
 
-def _discover_dependencies(project_path):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+def _discover_dependencies(context_folder: str) -> dict:
+    """Return known dependencies from lock/config files."""
     deps = {}
-    p = Path(project_path)
-    for f in [p / "requirements.txt", p / "package.json", p / "Cargo.toml", p / "go.mod"]:
-        if f.exists():
-            try:
-                deps[f.name] = f.read_text(errors="replace")[:bounds.feedback.max_context_query_chars]
-            except Exception: pass
+    base = Path(context_folder)
+    if (base / "requirements.txt").exists():
+        deps["requirements"] = [l.strip() for l in base.joinpath("requirements.txt").read_text().splitlines() if l.strip() and not l.startswith("#")]
+    if (base / "pyproject.toml").exists():
+        import toml
+        try:
+            data = toml.loads((base / "pyproject.toml").read_text())
+            deps["pyproject"] = data.get("project", {}).get("dependencies", [])
+        except Exception:
+            pass
+    if (base / "package.json").exists():
+        import json
+        try:
+            pkg = json.loads((base / "package.json").read_text())
+            deps["npm"] = list({**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}.keys())
+        except Exception:
+            pass
     return deps
 
-def _get_git_status(project_path):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+def _get_git_status(context_folder: str) -> dict:
+    """Return git branch and dirty status."""
     try:
-        result = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=project_path, timeout=5)
-        return {"status": result.stdout.strip()[:bounds.feedback.max_context_query_chars], "clean": not result.stdout.strip()}
-    except Exception:
-        return {"status": "unknown"}
+        result = subprocess.run(
+            ["git", "-C", context_folder, "status", "--porcelain", "--branch"],
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = result.stdout.strip().split("\n")
+        branch = lines[0].replace("## ", "").split("...")[0] if lines else "unknown"
+        dirty = len([l for l in lines if l.strip()]) > 1
+        return {"branch": branch, "dirty": dirty}
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return {"branch": "unknown", "dirty": False}
 
-def _get_docker_status(project_path):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    p = Path(project_path)
-    services = [str(f) for f in [p / "docker-compose.yml", p / "docker-compose.yaml"] if f.exists()]
-    return {"services": services}
+def _get_docker_status(context_folder: str) -> dict:
+    """Check for docker-compose.yaml or Dockerfile."""
+    base = Path(context_folder)
+    return {
+        "services": ["app"],
+        "has_dockerfile": any(base.glob("Dockerfile*")),
+        "has_compose": any(base.glob("docker-compose.*")),
+    }
 
-def _discover_specs(project_path):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    specs = []
-    p = Path(project_path)
-    for f in p.rglob("*.md"):
-        if f.name in ("requirement.md", "README.md", "spec.md") or "spec" in f.name.lower():
-            try:
-                specs.append({"name": f.stem, "file": str(f.relative_to(p))})
-            except Exception: pass
-    return {"specs": specs}
+def _discover_specs(context_folder: str) -> dict:
+    """Find specification documents."""
+    base = Path(context_folder)
+    specs = {}
+    for pattern in ["**/*.md", "**/*.yaml", "**/*.yml", "**/*.json"]:
+        for f in base.glob(pattern):
+            if "spec" in f.stem.lower() or "requirement" in f.stem.lower() or "readme" in f.stem.lower():
+                specs[f.name] = {"size": f.stat().st_size, "path": str(f.relative_to(context_folder))}
+    return specs
 
-
-def _refine_idea(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    """Use idea-refine skill to sharpen raw interview notes into a crisp, actionable concept."""
+def _refine_idea(interview_notes, project_name, project_description, context, state=None):
+    """Sharpen interview notes into a focused concept for DEFINE."""
+    writer = get_stream_writer() or (lambda **kw: None)
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    refine_skill = skills.get("idea-refine", {})
-    if not refine_skill:
-        return f"## Idea Refinement\n(Interview notes used as-is)\n\n{interview_notes[:800]}"
+    refine_skill = skills.get("creative-ideation", {})
+    if not refine_skill or not interview_notes:
+        return "No refinement available (missing interview notes or skill)."
+
     prompt = (
-        f"Refine the following project idea into a sharp, actionable concept.\n\n"
-        f"Project: {project_name}\n"
-        f"Description: {project_description}\n"
-        f"Interview notes:\n{interview_notes}\n\n"
-        f"Produce a concise one-pager with: Problem Statement, Recommended Direction, "
-        f"Key Assumptions, MVP Scope, Not Doing list, Open Questions."
+        f"Refine these interview notes into a sharp, actionable concept for the DEFINE phase.\n\n"
+        f"Project: {project_name}\nDescription: {project_description}\n"
+        f"Interview Notes:\n{interview_notes}\n\n"
+        f"Output: A concise tech + UX concept (2-3 sentences) highlighting core innovation,"
+        f" key trade-offs, and the most important design decision."
     )
-    result = invoke_skill(refine_skill["content"], prompt, "", llm=None,
-                          workflow_id=state.get("project_name", ""), phase="DISCOVER")
-    timer = SkillTimer(state, "idea-refine")
-    timer.complete()
-    writer({"type": "progress", "phase": "DISCOVER", "step": "progress", "detail": f"  → idea-refine produced {len(result)} chars", "ts": time.time()})
+    timer = SkillTimer(state, "creative-ideation") if state else None
+    result = invoke_skill(refine_skill["content"], prompt, "", llm=None)
+    if timer:
+        timer.complete()
     return result
 
-
-def _build_context(interview_notes: str, project_name: str, project_description: str, context: dict, state: dict) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
-    """Use context-engineering skill to build comprehensive, focused project context."""
-    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    ctx_skill = skills.get("context-engineering", {})
-    if not ctx_skill:
-        return f"## Project Context\n{json.dumps(context, indent=2, default=str)[:1200]}"
-    prompt = (
-        f"Build a focused project context for AI-assisted development.\n\n"
-        f"Project: {project_name}\n"
-        f"Description: {project_description}\n"
-        f"Type: {context.get('project_type', 'greenfield')}\n"
-        f"Interview notes:\n{interview_notes[:600]}\n\n"
-        f"Output a structured context block with: tech stack, commands, code conventions, "
-        f"boundaries, and key files to reference. Keep it under 2000 chars."
-    )
-    result = invoke_skill(ctx_skill["content"], prompt, "", llm=None,
-                          workflow_id=state.get("project_name", ""), phase="DISCOVER")
-    ctx_timer = SkillTimer(state, "context-engineering")
-    ctx_timer.complete()
-    writer({"type": "progress", "phase": "DISCOVER", "step": "progress", "detail": f"  → context-engineering produced {len(result)} chars", "ts": time.time()})
-    return result
-
+def _build_context(interview_notes, project_name, project_description, context, state=None):
+    """Engineer focused project context for DEFINE phase."""
+    writer = get_stream_writer() or (lambda **kw: None)
+    return json.dumps({
+        "project_name": project_name,
+        "description": project_description[:500],
+        "type": context.get("project_type", "greenfield"),
+        "interview_focus": interview_notes[:1000] if interview_notes else "",
+        "tree_summary": {k: v["type"] for k, v in context.get("tree", {}).items()},
+        "dependencies": context.get("dependencies", {}),
+        "specs": context.get("specs", {}),
+    }, indent=2)

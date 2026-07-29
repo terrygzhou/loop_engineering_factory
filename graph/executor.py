@@ -11,13 +11,21 @@ Both modes import this module. Graph construction and state initialization
 are identical. Only the UX layer (CLI prompts vs WebSocket) differs.
 """
 import asyncio
+import json
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Dict
 
-from langgraph.config import get_stream_writer
+from langgraph.config import get_stream_writer as _raw_get_stream_writer
+
+def get_stream_writer():
+    """Safe wrapper: returns a no-op lambda when called outside a runnable context."""
+    try:
+        return _raw_get_stream_writer()
+    except RuntimeError:
+        return lambda *a, **kw: None
 
 # Ensure project root is on path so config.loader resolves
 _project_root = Path(__file__).resolve().parent.parent
@@ -166,6 +174,7 @@ def build_executor_state(
         interview_notes="",
         discover_interview_done=False,
         auto_approve_override=None,
+        force_hil=False,
         trace_id="",
         superweb_mode="",
         superweb_agent_report=None,
@@ -249,11 +258,10 @@ class WorkflowRunner:
 
         log_event(logger, "workflow.run", project=project_name, skip_discover=state.get("skip_discover"))
 
+        writer = get_stream_writer()
         if state.get("skip_discover"):
-            writer = get_stream_writer() or (lambda **kw: None)
             writer({"type": "progress", "phase": "DISCOVER", "step": "status", "detail": "Skipped — no context folder (greenfield mode)", "ts": time.time()})
         else:
-            writer = get_stream_writer() or (lambda **kw: None)
             writer({"type": "progress", "phase": "DISCOVER", "step": "status", "detail": f"Scanning {context_folder}...", "ts": time.time()})
 
         async def _run():
@@ -275,6 +283,7 @@ class WorkflowRunner:
         This replaces the old _astream_with_hil + aupdate_state pattern with
         LangGraph's native interrupt/resume lifecycle.
         """
+        import time as _time
         import uuid as _uuid
         from langgraph.errors import GraphInterrupt
         from langgraph.types import Command
@@ -289,7 +298,7 @@ class WorkflowRunner:
         while True:
             try:
                 # Stream execution until interrupt or completion
-                async for chunk in self.graph.stream(
+                async for chunk in self.graph.astream(
                     input_state, stream_mode="values", config=config
                 ):
                     phase = chunk.get("phase", "UNKNOWN")
@@ -297,33 +306,33 @@ class WorkflowRunner:
                     if phase != current_phase:
                         # Phase transition — record previous phase timing
                         if current_phase and current_phase in phase_start:
-                            duration = round(time.time() - phase_start[current_phase], 3)
+                            duration = round(_time.time() - phase_start[current_phase], 3)
                             success = chunk.get("error") is None
                             tracer.record_phase(current_phase, duration, success, project=state.get("project_name"))
                             health_module.track_phase(current_phase, duration, success)
                             _run_phase_eval(current_phase, chunk)
                             w = get_stream_writer() or (lambda **kw: None)
-                            w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": time.time()})
+                            w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": _time.time()})
 
                         current_phase = phase
-                        phase_start[phase] = time.time()
+                        phase_start[phase] = _time.time()
                         w = get_stream_writer() or (lambda **kw: None)
-                        w({"type": "progress", "phase": phase, "step": "status", "detail": "Started...", "ts": time.time()})
+                        w({"type": "progress", "phase": phase, "step": "status", "detail": "Started...", "ts": _time.time()})
                         health_module.set_current_phase(state.get("project_name"), phase)
 
                     yield chunk
 
                 # Normal completion (stream ended without exception)
                 if current_phase:
-                    duration = round(time.time() - phase_start.get(current_phase, time.time()), 3)
+                    duration = round(_time.time() - phase_start.get(current_phase, _time.time()), 3)
                     w = get_stream_writer() or (lambda **kw: None)
-                    w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": time.time()})
+                    w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": _time.time()})
                 break
 
             except GraphInterrupt as e:
                 log_event(logger, "graph.interrupted", phase=current_phase, detail=str(e))
                 w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": current_phase or "UNKNOWN", "step": "interrupt", "detail": "GraphInterrupt caught", "ts": time.time()})
+                w({"type": "progress", "phase": current_phase or "UNKNOWN", "step": "interrupt", "detail": "GraphInterrupt caught", "ts": _time.time()})
 
                 # Get the suspended state
                 graph_state = await self.graph.aget_state(config)
@@ -332,7 +341,7 @@ class WorkflowRunner:
                 if not graph_state.next:
                     if current_phase:
                         w = get_stream_writer() or (lambda **kw: None)
-                        w({"type": "progress", "phase": current_phase, "step": "status", "detail": "Completed", "ts": time.time()})
+                        w({"type": "progress", "phase": current_phase, "step": "status", "detail": "Completed", "ts": _time.time()})
                     break
 
                 # Determine the interrupted phase
@@ -406,7 +415,7 @@ class WorkflowRunner:
                                 "feedback": input_data.get("feedback", input_data.get("user_review_comments", "")),
                             }
                             w = get_stream_writer() or (lambda **kw: None)
-                            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={answer}", "ts": time.time()})
+                            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={answer}", "ts": _time.time()})
                             input_state = Command(resume=[resume_data])
                             continue
                         answer = str(answer).lower()
@@ -419,7 +428,7 @@ class WorkflowRunner:
                         "feedback": input_data.get("feedback", "") if isinstance(input_data, dict) else "",
                     }
                     w = get_stream_writer() or (lambda **kw: None)
-                    w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={approved}", "ts": time.time()})
+                    w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={approved}", "ts": _time.time()})
                     input_state = Command(resume=[resume_data])
                     continue
 
@@ -432,23 +441,67 @@ class WorkflowRunner:
 
                 # OOTB resume: use Command(resume=...) to continue from interrupt()
                 w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": interrupted_phase, "step": "resume", "detail": "Resuming with Command(resume=...)", "ts": time.time()})
+                w({"type": "progress", "phase": interrupted_phase, "step": "resume", "detail": "Resuming with Command(resume=...)", "ts": _time.time()})
                 input_state = Command(resume=resume_data)
                 continue
 
             except Exception as e:
                 log_event(logger, "stream.error", error=str(e))
                 w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": "STREAM", "step": "error", "detail": str(e), "ts": time.time()})
+                w({"type": "progress", "phase": "STREAM", "step": "error", "detail": str(e), "ts": _time.time()})
                 break
 
     # ── CLI HIL handlers ──
 
     async def _hil_cli(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """CLI handler for HIL — collects user input via stdin/stdout."""
+        # Auto-approve: skip input() entirely — return generated defaults
+        if self.auto_approve:
+            return self._hil_auto_approve(phase, state)
+
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self._hil_cli_sync, phase, state)
         return result
+
+    def _hil_auto_approve(self, phase: str, state: WorkflowState) -> dict:
+        """Generate automatic responses when auto_approve=True."""
+        w = get_stream_writer() or (lambda **kw: None)
+        w({"type": "progress", "phase": phase, "step": "auto_approve", "detail": "Auto-approving HIL gate", "ts": time.time()})
+
+        if phase == "DISCOVER":
+            hil_count = (state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0
+            if hil_count == 0:
+                # Setup pause — extract from state
+                return {
+                    "project_name": (state or {}).get("project_name", "crm_test"),
+                    "project_description": (state or {}).get("project_description", ""),
+                    "context_folder": (state or {}).get("context_folder", ""),
+                    "_pause": "project_setup",
+                }
+            else:
+                # Interview pause — generate answers from spec
+                spec = (state or {}).get("spec_text", "")
+                interview = {
+                    "core_behavior": "",
+                    "data_model": "",
+                    "api_surface": "",
+                    "validation": "",
+                    "ui_template": "",
+                    "integration": "",
+                    "deployment": "",
+                    "edge_cases": "",
+                    "non_functional": "",
+                }
+                if spec:
+                    interview["core_behavior"] = spec
+                interview["discover_hil_count"] = hil_count + 1
+                return {"interview_notes": json.dumps(interview), "discover_interview_done": True}
+
+        if phase == "ARCH_REVIEW":
+            return {"approved": True, "feedback": "Auto-approved"}
+
+        # Generic HIL
+        return {"human_approval_required": False, "approved": True}
 
     def _hil_cli_sync(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """Synchronous part that actually blocks on input()."""

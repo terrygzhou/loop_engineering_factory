@@ -108,3 +108,10 @@ async def review_diagrams(req: ApprovalRequest):
     log_request("POST /workflow/diagrams/review", workflow_id=req.workflow_id, approved=req.approved)
     result = workflow_service.submit_diagram_review(req.workflow_id, req.approved, req.feedback or "")
     return ApprovalResponse.from_result(result)
+
+
+@router.get("/workflow/history")
+async def get_history(limit: int = 10):
+    """Get workflow history."""
+    history = workflow_service.get_history(limit)
+    return {"history": history}
