@@ -21,12 +21,6 @@ services:
     host: 0.0.0.0
     port: 6006
     database_uri: /var/lib/phoenix/phoenix.db
-  postgres:
-    user: postgres
-    password: ${DB_PASSWORD:-postgres}
-    database: crm_dev
-    port: 5432
-    host: localhost
   grafana:
     host: 0.0.0.0
     port: 3000
@@ -57,6 +51,6 @@ superweb:
   agent_timeout_seconds: 3600
 openhands:
   url: http://openhands-server:8000
-  secret_key: ${OH_SECRET_KEY:-changeme}
+  secret_key: ${OH_SECRET_KEY}
   workspace_path: /opt/workspace_base/output
   timeout: 3600

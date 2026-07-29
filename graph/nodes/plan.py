@@ -5,13 +5,14 @@ Outputs: $project_folder/build/solution.md — complete solution design with dia
 Skill chain:
   planning-and-task-breakdown → doubt-driven-development → architecture-diagram-generator
 """
+import asyncio
 import os
 import re
 from pathlib import Path
 from config.loader import config as _cfg
 from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
-from tools.llm import invoke_skill
+from tools.llm import invoke_skill, invoke_skill_async
 from tools.context_manager import prepare_context_for_llm
 from tools.audit_logger import AuditLog
 from feedback.chroma_client import get_chroma_client, query_patterns
@@ -226,6 +227,28 @@ def _load_local_diagram_skill() -> str | None:
         return local_path.read_text().split("---", 2)[-1].strip()
     return None
 
+def _get_diagram_skill(skills: dict) -> str:
+    """Resolve diagram skill content: registry → local → inline fallback."""
+    arch_skill = skills.get("architecture-diagram-generator", {})
+    skill_content = arch_skill.get("content", "") if arch_skill else ""
+    if not skill_content:
+        local = _load_local_diagram_skill()
+        if local:
+            skill_content = local
+    if not skill_content:
+        skill_content = _DIAGRAM_SKILL_INSTRUCTIONS
+    return skill_content
+
+
+def _build_diagram_context(state: dict) -> str:
+    """Build truncated context string for diagram generation."""
+    spec = state.get("artifacts", {}).get("spec_refined", "")
+    plan = state.get("artifacts", {}).get("plan", "")
+    tasks = state.get("artifacts", {}).get("tasks", "")
+    doubt = state.get("artifacts", {}).get("doubt_resolution", "")
+    return f"Spec:\n{spec[:bounds.context.diagram_spec_chars]}\n\nPlan:\n{plan[:bounds.context.diagram_plan_chars]}\n\nTasks:\n{tasks[:bounds.context.diagram_tasks_chars]}\n\nDoubt Resolution:\n{doubt[:bounds.context.diagram_doubt_chars]}"
+
+
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     _DIAGRAM_PLACEHOLDER = 'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
 
@@ -311,12 +334,34 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
         ("data flow", "data-flow.mmd"),
         ("deployment", "deployment-diagram.mmd"),
     ]
-    for dtype, filename in diagram_types:
-        w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": f"Generating {dtype} diagram...", "ts": time.time()})
-        diagram = _generate_diagram(skills, dtype, state)
+
+    # ── Parallel LLM calls for all 4 diagrams ──
+    async def _run_parallel():
+        tasks = []
+        for dtype, filename in diagram_types:
+            w = get_stream_writer() or (lambda **kw: None)
+            w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": f"Generating {dtype} diagram (parallel)...", "ts": time.time()})
+            tasks.append(invoke_skill_async(
+                skill_content=_get_diagram_skill(skills),
+                task=f"Generate a {dtype} diagram as a Mermaid graph. Include all components, relationships, and data flows. Use the spec and plan as the primary source of truth.",
+                context=_build_diagram_context(state),
+                llm=None,
+                workflow_id=state.get("project_name", ""),
+                phase="PLAN",
+            ))
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = asyncio.run(_run_parallel())
+    for (dtype, filename), result in zip(diagram_types, results):
+        diagram_text: str
+        if isinstance(result, Exception):
+            w = get_stream_writer() or (lambda **kw: None)
+            w({"type": "error", "phase": "PLAN", "step": "diagram", "detail": f"Diagram {dtype} failed: {result}", "ts": time.time()})
+            diagram_text = _DIAGRAM_PLACEHOLDER
+        else:
+            diagram_text = str(result)
         filepath = diagrams_dir / filename
-        filepath.write_text(diagram)
+        filepath.write_text(diagram_text)
         diagrams[dtype] = str(filepath)
     return diagrams
 

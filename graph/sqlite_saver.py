@@ -3,11 +3,12 @@ Custom SQLite checkpoint saver for LangGraph.
 
 Replaces langgraph.checkpoint.sqlite which was removed in langgraph >= 1.0.
 """
-import sqlite3
+import asyncio
 import json
+import sqlite3
 import threading
 import uuid
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, AsyncIterator, Iterator, Optional, Sequence
 
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
@@ -197,22 +198,47 @@ class SqliteSaver(BaseCheckpointSaver[int]):
         """Deserialize using the base serde (msgpack via loads_typed)."""
         return self.serde.loads_typed(("msgpack", blob))
 
-    # ── Async wrappers (simple sync delegation) ──
+    # ── Async wrappers (run in executor thread to avoid blocking) ──
 
     async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
-        return self.get_tuple(config)
+        return await asyncio.to_thread(self.get_tuple, config)
 
     async def alist(
-        self, config, *, filter=None, before=None, limit=None
-    ):
-        for item in self.list(config, filter=filter, before=before, limit=limit):
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        # Collect in thread, then yield to avoid blocking the event loop
+        results = await asyncio.to_thread(
+            list, self.list(config, filter=filter, before=before, limit=limit)
+        )
+        for item in results:
             yield item
 
-    async def aput(self, config, checkpoint, metadata, new_versions):
-        return self.put(config, checkpoint, metadata, new_versions)
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: Any,
+    ) -> RunnableConfig:
+        return await asyncio.to_thread(
+            self.put, config, checkpoint, metadata, new_versions
+        )
 
-    async def aput_writes(self, config, writes, task_id, task_path=""):
-        self.put_writes(config, writes, task_id, task_path)
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        await asyncio.to_thread(
+            self.put_writes, config, writes, task_id, task_path
+        )
 
-    async def adelete_thread(self, thread_id: str):
-        self.delete_thread(thread_id)
+    async def adelete_thread(self, thread_id: str) -> None:
+        await asyncio.to_thread(self.delete_thread, thread_id)

@@ -6,11 +6,12 @@ Skills: spec-driven-development (spec generation) → api-and-interface-design
 """
 from langgraph.config import get_stream_writer
 
+import asyncio
 import re
 import time
 from pathlib import Path
 from tools.loader import build_skill_registry
-from tools.llm import invoke_skill
+from tools.llm import invoke_skill, invoke_skill_async
 from tools.context_manager import prepare_context_for_llm
 from tools.audit_logger import AuditLog
 from graph.ui_bridge import SkillTimer
@@ -111,39 +112,70 @@ def define_node(state: dict) -> dict:
         spec_timer.complete()
         feedback_entries.append({"skill": "spec-driven-development", "output": spec_result[:bounds.feedback.max_feedback_entry_chars]})
 
-    # ── Step 3: Source-driven development — codebase-aware spec grounding ──
+    # ── Steps 3+4: Parallel LLM calls (source-driven + API design) ──
+    # source-driven depends on spec_result; api-design uses state artifacts — both independent of each other
     source_result = None
-    source_skill = skills.get("source-driven-development", {})
-    if source_skill:
-        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running source-driven-development for codebase-aware spec generation...", "ts": time.time()})
-        source_timer = SkillTimer(state, "source-driven-development")
-        src_context = f"Project type: {project_context}\n"
-        if spec_result:
-            src_context += f"Spec draft:\n{spec_result}\n"
-        if interview_notes:
-            src_context += f"Interview notes:\n{interview_notes[:600]}\n"
-        source_result = invoke_skill(
-            source_skill["content"],
-            "Verify framework patterns against official documentation. Detect stack versions from the project, ground every design decision in official docs, and surface any conflicts between existing code patterns and current best practices.",
-            src_context, llm=None,
-            workflow_id=project_name, phase="DEFINE"
-        )
-        source_timer.complete()
-        feedback_entries.append({"skill": "source-driven-development", "output": source_result[:bounds.feedback.max_feedback_entry_chars]})
-
-    # ── Step 4: API/interface design (multi-interface, contract-first + ToT→CoT) ──
     api_result = None
+
+    source_skill = skills.get("source-driven-development", {})
     api_skill = skills.get("api-and-interface-design", {})
-    if api_skill:
-        writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running api-and-interface-design...", "ts": time.time()})
-        api_timer = SkillTimer(state, "api-and-interface-design")
-        task = api_and_interface_design
-        api_result = invoke_skill(
-            api_skill["content"], task,
-            state.get("artifacts", {}).get("spec_refined", ""),
-            llm=None, workflow_id=project_name, phase="DEFINE"
-        )
-        api_timer.complete()
+
+    async def _run_parallel():
+        """Run source-driven and api-design in parallel via asyncio.gather()."""
+        tasks = []
+
+        if source_skill:
+            writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running source-driven-development (parallel)...", "ts": time.time()})
+            src_context = f"Project type: {project_context}\n"
+            if spec_result:
+                src_context += f"Spec draft:\n{spec_result}\n"
+            if interview_notes:
+                src_context += f"Interview notes:\n{interview_notes[:600]}\n"
+            tasks.append(invoke_skill_async(
+                source_skill["content"],
+                "Verify framework patterns against official documentation. Detect stack versions from the project, ground every design decision in official docs, and surface any conflicts between existing code patterns and current best practices.",
+                src_context, llm=None,
+                workflow_id=project_name, phase="DEFINE"
+            ))
+
+        if api_skill:
+            writer({"type": "progress", "phase": "DEFINE", "step": "progress", "detail": "  → Running api-and-interface-design (parallel)...", "ts": time.time()})
+            api_context = state.get("artifacts", {}).get("spec_refined", "")
+            tasks.append(invoke_skill_async(
+                api_skill["content"], api_and_interface_design,
+                api_context, llm=None,
+                workflow_id=project_name, phase="DEFINE"
+            ))
+
+        if not tasks:
+            return None, None
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        src_res = results[0] if source_skill else None
+        api_res = results[-1] if api_skill and not source_skill else (results[1] if len(results) > 1 else None)
+
+        # Extract success/exception results
+        if source_skill:
+            if isinstance(src_res, Exception):
+                writer({"type": "error", "phase": "DEFINE", "step": "error", "detail": f"  ✗ source-driven-development failed: {src_res}", "ts": time.time()})
+                src_res = f"[SKILL ERROR] {src_res}"
+            else:
+                src_res = str(src_res)
+        if api_skill:
+            if isinstance(api_res, Exception):
+                writer({"type": "error", "phase": "DEFINE", "step": "error", "detail": f"  ✗ api-and-interface-design failed: {api_res}", "ts": time.time()})
+                api_res = f"[SKILL ERROR] {api_res}"
+            else:
+                api_res = str(api_res)
+
+        return src_res, api_res
+
+    source_result, api_result = asyncio.run(_run_parallel())
+
+    # Track timing and feedback for parallel results
+    if source_result:
+        feedback_entries.append({"skill": "source-driven-development", "output": source_result[:bounds.feedback.max_feedback_entry_chars]})
+    if api_result:
         feedback_entries.append({"skill": "api-and-interface-design", "output": api_result[:bounds.feedback.max_feedback_entry_chars]})
 
     # ── Persist to $project_folder/specs/ ──
