@@ -19,7 +19,7 @@ from graph.nodes.seed_data import seed_data_node
 from graph.nodes.verify import verify_node
 from graph.nodes.ship import ship_node
 from graph.nodes.reflect import reflect_node
-from graph.edges import route_phase, ERROR_NODE
+from graph.edges import route_phase
 
 _logger = logging.getLogger(__name__)
 

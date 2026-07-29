@@ -1,6 +1,5 @@
 # Loop Engineering — Request/Response Logging Middleware
 
-import asyncio
 import time
 import uuid
 from contextvars import ContextVar

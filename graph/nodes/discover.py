@@ -21,7 +21,6 @@ import httpx
 from pathlib import Path
 from langgraph.types import interrupt
 from config.loader import config as _cfg
-from config.bounds_loader import bounds
 from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
 from tools.audit_logger import AuditLog

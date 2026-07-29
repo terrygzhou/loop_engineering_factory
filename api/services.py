@@ -7,8 +7,7 @@ interrupts to the frontend over WebSocket.
 import asyncio
 import json
 import time
-import uuid
-from typing import Optional, Dict, List
+from typing import Optional
 
 from api.middleware.logging import log_request
 from api.input_manager import InputManager

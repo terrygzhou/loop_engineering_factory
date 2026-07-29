@@ -2,7 +2,7 @@
 WorkflowState definition for the self-improving AI loop.
 """
 import operator
-from typing import Annotated, Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Dict, List, Optional, TypedDict
 from pydantic import BaseModel
 
 
