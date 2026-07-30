@@ -964,7 +964,16 @@ class WorkflowBridge:
                 if self._aborted:
                     break
 
-                # Normal completion — stream ended without GraphInterrupt
+                # Normal completion — check if graph still has pending nodes.
+                # interrupt_after can cause the stream to exit after a node
+                # completes even though downstream edges remain (e.g. DISCOVER
+                # → DEFINE). If next is non-empty, continue streaming.
+                graph_state = await graph.aget_state(config)
+                if graph_state.next:
+                    print(f"[Bridge] Stream ended but {len(graph_state.next)} node(s) pending: {graph_state.next} — continuing", flush=True)
+                    current_input = None
+                    continue
+
                 if self._last_phase:
                     ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
                     await self.broadcast(ev)
@@ -1094,9 +1103,15 @@ class WorkflowBridge:
                 }
             elif itype == "project_setup":
                 interview_notes = ""
+                # Persist project name/description into state so the node
+                # can read them on re-run (they were only in resume dict).
                 update = {
+                    "project_name": resume.get("project_name", ""),
+                    "project_description": resume.get("project_description", ""),
                     "discover_setup_done": True,
                 }
+                if resume.get("context_folder"):
+                    update["context_folder"] = resume["context_folder"]
             else:
                 interview_notes = resume.get("interview_notes", "")
                 update = None

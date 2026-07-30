@@ -116,6 +116,10 @@ services:
     environment:
       - PHOENIX_DATABASE_URI=/var/lib/phoenix/phoenix.db
       - PHOENIX_HOST=0.0.0.0
+      - PHOENIX_COLLECTOR_OTLP_ENABLED=true
+      - PHOENIX_COLLECTOR_HOST=0.0.0.0
+      - PHOENIX_COLLECTOR_GRPC_PORT=4317
+      - PHOENIX_COLLECTOR_HTTP_PORT=4318
     volumes:
       - phoenix_data:/var/lib/phoenix
     restart: unless-stopped

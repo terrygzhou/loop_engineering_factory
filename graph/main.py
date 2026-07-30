@@ -93,8 +93,12 @@ def build_graph(checkpointer=None, auto_approve=False):
     # SKIP interrupt_after when auto_approve=True — the graph should run
     # end-to-end without pausing, since in-node logic already bypasses
     # interrupt() calls and the executor handles auto-approve defaults.
+    # DISCOVER uses in-node interrupt() for its HIL pauses — no need
+    # for interrupt_after here. Adding it causes the stream to exit
+    # prematurely on resume (LangGraph 1.x: interrupt_after fires after
+    # node completion even on resume, producing an empty pause that the
+    # bridge misinterprets as workflow end).
     hil_nodes = [
-        "DISCOVER",
         "ARCH_REVIEW",
         "REFLECT",
     ]

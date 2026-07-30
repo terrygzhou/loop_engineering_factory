@@ -58,6 +58,7 @@ class WorkflowState(TypedDict):
 
     # ── DISCOVER: interview notes ──
     interview_notes: str
+    discover_setup_done: bool
     discover_interview_done: bool
 
     # ── Audit trail ──
