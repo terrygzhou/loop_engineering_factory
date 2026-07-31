@@ -1264,6 +1264,26 @@ class WorkflowBridge:
         # fires, so no resume is consumed and the interview interrupt fires cleanly.
         state["discover_setup_done"] = True
         state["project_description"] = spec_text or ""
+        # Inject skill_callback so SkillTimer events reach the UI
+        bridge_ref = self
+        def _skill_callback(skill_name, event_type, details=None):
+            ev = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "type": "skill_progress",
+                "skill": skill_name,
+                "event": event_type,
+                "details": details or {},
+                "phase": bridge_ref.current_phase or "",
+                "action": event_type,
+                "message": f"Skill '{skill_name}' {event_type}",
+                "data": {"skill_name": skill_name, "event_type": event_type},
+            }
+            bridge_ref.events.append(ev)
+            try:
+                asyncio.ensure_future(bridge_ref.broadcast(ev))
+            except Exception:
+                pass
+        state["skill_callback"] = _skill_callback
         return state
 
     async def run(self, spec_text: str = "", project_name: str = "", project_path: str = "", context_folder: str = ""):
