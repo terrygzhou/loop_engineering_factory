@@ -33,16 +33,7 @@ stateDiagram-v2
     BUILD --> BUILD : security / revisions / UAT gate failed
     BUILD --> REFLECT : 3 consecutive build failures
 
-    %% SHIP & REFLECT are now conditionally routed via route_phase
-    SHIP --> REFLECT : normal flow
-    SHIP --> SHIP : ship_score < threshold (max 1 retry)
-    REFLECT --> [*] : cycle complete
-
-    %% Self-loops (quality gates in edges.py)
-    DEFINE --> DEFINE : spec_confidence < 0.9 (max 2 loops)
-    PLAN --> PLAN : arch_uncertainty > 0.8 (max 2 loops)
-
-    %% HIL interrupt points
+    %% HIL interrupt points (in-node interrupt())
     note right of DISCOVER : interrupt() x2<br/>project_setup + interview
     note right of ARCH_REVIEW : interrupt() x1<br/>human approve/reject
 
@@ -129,17 +120,17 @@ graph LR
 
         subgraph Tools["Tool Layer"]
             LLM["LLM Tool<br/>(tools/llm.py)"]
-            Skills["Skill Loader<br/>(20 SKILL.md)"]
+            Skills["Skill Loader<br/>(35 SKILL.md)"]
             ChromaC["ChromaDB Client<br/>(feedback/)"]
         end
     end
 
     subgraph External["External Services"]
-        LLM_Srv["LLM Server<br/>(vLLM :8080)"]
+        LLM_Srv["LLM Server<br/>(SGLang :8080)"]
         Docker["Docker Engine"]
         Chroma["ChromaDB :8000<br/>(internal)"]
-        OpenHands["OpenHands<br/>(:8000)<br/>Agent Server"]
-        Builder["Builder<br/>(:8200)<br/>Remote build worker"]
+        OpenHands["OpenHands<br/>(:3005)<br/>Agent Server"]
+        Builder["DELETED<br/>OpenHands Gateway replaces remote builder"]
     end
 
     U -->|browser| WebUI
@@ -179,15 +170,15 @@ graph TB
     U[("User")]
 
     subgraph Host["Host Machine"]
-        LLM_C[("LLM Server<br/>vLLM :8080")]
+        LLM_C[("LLM Server<br/>SGLang :8080")]
 
         subgraph DockerStack["Docker Compose Stack"]
             LC[("Loop Container<br/>:80 / :8011 / :8081")]
-            BLD[("Builder<br/>:8200")]
+            BLD["DELETED<br/>OpenHands Gateway replaces remote builder"]
             CC[("ChromaDB<br/>:8000 internal")]
             OC[("OTel Collector<br/>:4318")]
             PH[("Phoenix<br/>:6006")]
-            OH[("OpenHands<br/>:8000 → :3005")]
+            OH[("OpenHands<br/>:3005")]
             PT[("Promtail")]
         end
     end
@@ -208,12 +199,12 @@ graph TB
 | Component | Responsibility | Config Key |
 |-----------|---------------|------------|
 | `main.py` | CLI entry — headless auto-approve | `workflow.auto_approve` |
-| `api/app.py` | FastAPI backend — HIL mode via REST | `services.loop_api.*` |
+| `frontend/backend/app.py` | FastAPI backend — workflow API :8011 | `services.loop_api.*` |
 | `frontend/backend/workflow_bridge.py` | SSE event bridge + HIL interrupt handling | `services.product.*` |
 | `graph/main.py` | LangGraph StateGraph definition | `workflow.hil_mode` |
 | `graph/edges.py` | Conditional routing via `route_phase()` — quality gates, loop limits, forward paths | N/A |
 | `graph/nodes/*.py` | Phase node implementations (9 nodes) | `paths.*` |
-| `graph/state.py` | WorkflowState (29 active keys) + CycleMetrics (9 fields) — pruned for token efficiency | N/A |
+| `graph/state.py` | WorkflowState (37 fields) + CycleMetrics (11 fields) — pruned for token efficiency | N/A |
 | `graph/executor.py` | WorkflowRunner — orchestrates graph execution with HIL pauses | N/A |
 | `tools/llm.py` | LLM call dispatch with retry & context compression | `services.llm.*` |
 | `tools/loader.py` | Skill registry discovery & hot-reload | `workflow.skill_registry_path` |
@@ -227,49 +218,64 @@ graph TB
 
 ## Skills Per Workflow State
 
-Each workflow phase chains specialized skills from `skills/` (20 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
+Each workflow phase chains specialized skills from `skills/` (35 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
 
 ### Phase-Specific Skill Chains
 
 | Phase | Skills Chained | Purpose |
 |-------|----------------|---------|
-| **DISCOVER** | `interview-me` (HIL interrupt) → `coding-principles` (context refinement) → Fabric Prompt Engineering | Structured 9-question interview. Scans existing codebases. Generates `requirement.md`. Auto-generates defaults in auto-approve mode. |
-| **DEFINE** | `writing-plans` → `api-and-interface-design` | Generates structured specification + API contract. Incorporates user review feedback if returning from ARCH_REVIEW rejection. |
-| **PLAN** | `writing-plans` → `doubt-driven-development` → `architecture-diagram-generator` | Implementation plan, architectural doubt resolution, and diagram generation. Outputs `solution.md` + diagrams. |
+| **DISCOVER** | `fabric-prompts` (requirement generation) → `interview-me` (HIL interrupt) → `coding-principles` (context refinement) | Auto-generates `requirement.md` via Fabric. Structured 9-question interview. Scans existing codebases. |
+| **DEFINE** | `spec-driven-development` (spec) → `source-driven-development` + `api-and-interface-design` (parallel) | Generates structured specification. Parallel LLM calls for source analysis and API contract via `asyncio.gather()`. |
+| **PLAN** | `planning-and-task-breakdown` → `doubt-driven-development` → `architecture-diagram-generator` (4 diagrams in parallel) | Implementation plan, architectural doubt resolution, and 4 parallel diagram generations. |
 | **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → PLAN. |
-| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → **deploy_gate** (health check) → SuperWeb UAT (`agent` mode default) → `security-and-hardening` → `requesting-code-review` → **SECURITY_GATE** | Per-task code gen with TDD. Docker build + health check. UAT: SuperWeb agent mode with scripted/LLM fallbacks. SECURITY_GATE: aggregate STRIDE security audit + code quality review. |
+| **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → **deploy_gate** (health check) → OpenHands Agent UAT (`agent` mode default) → `security-and-hardening` → `requesting-code-review` → **SECURITY_GATE** | Per-task code gen with TDD (legacy subgraph). Docker build + health check. BUILD phase: OpenHands agent delegation via Gateway API. SECURITY_GATE: aggregate STRIDE security audit + code quality review. |
 | **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
 | **VERIFY** | _(placeholder — pass-through to SHIP)_ | Currently a pass-through node. UAT moved to BUILD subgraph. Future: real test execution, linting, security scans, and performance profiling. |
 | **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `production-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, cloud platform configuration (AWS/Azure/GCP), version tagging. |
-| **REFLECT** | Internal `diff_engine` → `context-pruning` → `git-workflow` | Cycle analysis: aggregates metrics, queries ChromaDB patterns, generates config/guardrail diff proposals. Human approval gate for changes. |
+| **REFLECT** | Self-improvement via ChromaDB pattern storage | Aggregates cycle metrics, queries historical patterns, generates config/guardrail diff proposals for next cycle. |
 
-### Local Skills Registry (20 skills)
+### Local Skills Registry (35 skills)
 
 ```
 skills/
-├── ai-workflow-data-seeding/SKILL.md       # SEED_DATA phase
-├── api-and-interface-design/SKILL.md        # DEFINE phase
-├── architecture-diagram-generator/SKILL.md # PLAN phase
-├── code-simplification/SKILL.md            # Standalone (future VERIFY phase)
-├── coding-principles/SKILL.md              # DISCOVER phase (context refinement)
-├── docker-compose-deployment/SKILL.md      # Standalone (local dev reference)
-├── doubt-driven-development/SKILL.md       # PLAN phase
-├── git-workflow/SKILL.md                   # SHIP + REFLECT phases
-├── incremental-implementation/SKILL.md     # BUILD phase
-├── interview-me/SKILL.md                   # DISCOVER phase
-├── observability-and-instrumentation/SKILL.md # SHIP phase
-├── performance-optimization/SKILL.md       # Standalone (future VERIFY phase)
-├── production-deployment/SKILL.md         # SHIP phase
-├── requesting-code-review/SKILL.md        # BUILD phase (SECURITY_GATE)
-├── security-and-hardening/SKILL.md        # BUILD phase (SECURITY_GATE)
-├── shipping-and-launch/SKILL.md            # SHIP phase
-├── systematic-debugging/SKILL.md          # Standalone (future VERIFY phase)
-├── test-driven-development/SKILL.md       # BUILD phase
-├── uat-workflow/SKILL.md                   # BUILD phase (fallback)
-└── writing-plans/SKILL.md                  # DEFINE + PLAN phases
+├── ai-workflow-data-seeding/SKILL.md             # SEED_DATA phase
+├── api-and-interface-design/SKILL.md              # DEFINE phase
+├── architecture-diagram-generator/SKILL.md        # PLAN phase
+├── browser-testing-with-devtools/SKILL.md         # Standalone
+├── ci-cd-and-automation/SKILL.md                  # Standalone
+├── code-review-and-quality/SKILL.md               # BUILD phase (quality)
+├── code-simplification/SKILL.md                   # Standalone (future VERIFY)
+├── coding-principles/SKILL.md                     # DISCOVER phase (context refinement)
+├── context-engineering/SKILL.md                   # Standalone
+├── debugging-and-error-recovery/SKILL.md          # Standalone
+├── deprecation-and-migration/SKILL.md             # Standalone
+├── docker-compose-deployment/SKILL.md             # Standalone (local dev reference)
+├── documentation-and-adrs/SKILL.md                # Standalone
+├── doubt-driven-development/SKILL.md              # PLAN phase
+├── fabric-prompts/SKILL.md                        # DISCOVER phase (prompt optimization)
+├── frontend-ui-engineering/SKILL.md               # Standalone
+├── git-workflow/SKILL.md                          # SHIP + REFLECT phases
+├── git-workflow-and-versioning/SKILL.md           # Standalone
+├── idea-refine/SKILL.md                           # DISCOVER phase
+├── incremental-implementation/SKILL.md            # BUILD phase
+├── interview-me/SKILL.md                          # DISCOVER phase (HIL)
+├── observability-and-instrumentation/SKILL.md     # SHIP phase
+├── performance-optimization/SKILL.md              # Standalone (future VERIFY)
+├── planning-and-task-breakdown/SKILL.md           # PLAN phase
+├── production-deployment/SKILL.md                 # SHIP phase
+├── requesting-code-review/SKILL.md                # BUILD phase (SECURITY_GATE)
+├── security-and-hardening/SKILL.md                # BUILD phase (SECURITY_GATE)
+├── shipping-and-launch/SKILL.md                   # SHIP phase
+├── source-driven-development/SKILL.md             # DEFINE phase (parallel)
+├── spec-driven-development/SKILL.md               # DEFINE phase (parallel)
+├── systematic-debugging/SKILL.md                  # Standalone (future VERIFY)
+├── test-driven-development/SKILL.md               # BUILD phase
+├── uat-workflow/SKILL.md                          # BUILD phase (fallback)
+├── using-agent-skills/SKILL.md                    # Standalone
+└── writing-plans/SKILL.md                         # DEFINE + PLAN phases
 ```
 
-**Total per cycle**: ~20–35 LLM calls. BUILD loops (up to 2 retries) can increase this.
+**Total per cycle**: ~25–40 LLM calls (parallel calls in DEFINE and PLAN phases). BUILD loops (up to 2 retries) can increase this.
 
 ---
 
@@ -278,7 +284,7 @@ skills/
 ### Prerequisites
 
 - **Docker** + **Docker Compose** (v2.20+)
-- **LLM endpoint** (OpenAI-compatible, e.g., vLLM Qwen3.6-27B on `:8080`)
+- **LLM endpoint** (OpenAI-compatible, e.g., SGLang Qwen3.6-27B on `:8080`)
 
 ### Configuration
 
@@ -345,10 +351,10 @@ docker compose up -d --build loop
 | `chromadb` | :8000 (internal) | Pattern storage |
 | `otel-collector` | :4318 | OpenTelemetry trace collection |
 | `phoenix` | :6006 | Trace visualization + LLM evaluation UI (Arize Phoenix) |
-| `prometheus` | :9090 | Metrics scraping |
-| `grafana` | :3000 | Observability dashboards |
 | `promtail` | _(internal)_ | Log aggregation |
-| `openhands` | :3005 | OpenHands Agent Server — SuperWeb UAT agent mode |
+| `openhands` | :3005 | OpenHands Agent Server — BUILD delegation |
+
+> **Note**: Prometheus and Grafana run as a separate Grafana stack on the host (`~/.hermes/grafana-stack/`), not in this Docker Compose file.
 
 ### Stopping & Restarting
 
@@ -366,17 +372,17 @@ docker compose rm -f
 docker compose up -d --build
 ```
 
-> ⚠️ **Token Usage**: A full cycle makes 20–35 LLM calls. Monitor your provider's usage dashboard during long runs.
+> ⚠️ **Token Usage**: A full cycle makes ~25–40 LLM calls (with parallel calls in DEFINE and PLAN). Monitor your provider's usage dashboard during long runs.
 
 ---
 
 ## Key Components
 
 - **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:8011`) for HIL workflow
-- **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via `route_phase()` in `edges.py`, OOTB `interrupt_after` for HIL pauses
-- **State Management**: `WorkflowState` (29 active keys) + `CycleMetrics` (9 fields) — pruned from 52/21 for token efficiency. All keys initialized in `graph/executor.py`
-- **Skills System**: 20 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
-- **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; supports double-pause DISCOVER interview and ARCH_REVIEW diagram approval
+- **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via `route_phase()` in `edges.py`, in-node `interrupt()` for HIL pauses
+- **State Management**: `WorkflowState` (37 fields) + `CycleMetrics` (11 fields) — pruned for token efficiency. All keys initialized in `graph/executor.py`
+- **Skills System**: 35 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
+- **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; uses in-node `interrupt()` calls for DISCOVER double-pause and ARCH_REVIEW approval
 - **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
 - **Evaluation**: `service/evaluator.py` runs LLM-as-judge on DISCOVER, PLAN, and REVIEW outputs; results stream to Phoenix UI via OTel spans. Context-aware — the evaluator extracts project domain from the spec before scoring. Graceful degradation: eval failures never block the workflow.
 - **Deployment**: Single Docker Compose stack (`loop` container = orchestrator + frontend + nginx)
@@ -416,7 +422,7 @@ workflow:
 superweb:
   mode: agent
   openhands_url: http://openhands:8000
-  openhands_port: 3005
+  openhands_port: 8000
   agent_conversations: 3
   agent_timeout_seconds: 3600
 ```
@@ -426,12 +432,11 @@ superweb:
 ## Dependencies
 
 ```
-langgraph, langchain-core, langgraph-checkpoint, langgraph-sdk
-pydantic, pyyaml, httpx, aiohttp
+langgraph, langchain-core, langgraph-checkpoint (workflow engine)
+pydantic, pyyaml, httpx (core utilities)
 chromadb (pattern storage)
 opentelemetry-api, opentelemetry-sdk, arize-phoenix (observability + evaluation)
 uvicorn, fastapi (web UI)
-superweb-testing (UAT — agent mode: OpenHands, scripted: Playwright)
 ```
 
 Install: baked into Docker image via `docker compose up -d --build`.
@@ -451,6 +456,8 @@ At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. 
 | `review_score` | ARCH_REVIEW | `thoroughness`, `specificity`, `actionability`, `severity`, `domain_fit` |
 | `build_score` | BUILD | `code_quality`, `test_coverage`, `security_posture`, `maintainability` |
 | `ship_score` | SHIP | `config_completeness`, `resilience`, `observability`, `security_hardening` |
+
+> All evaluators are non-blocking — eval failures never stop the workflow. `ship_score` exists in `service/evaluator.py` but is called at SHIP completion via `eval_ship()`.
 
 ### How It Works
 
@@ -475,6 +482,6 @@ Quality thresholds enforced per phase:
 | `max_arch_uncertainty` | ≤ 0.8 | PLAN |
 | `max_security_findings` | 0 | BUILD |
 | `max_review_revisions` | ≤ 2 | BUILD |
-| `min_uat_pass_rate` | ≥ 0.95 | VERIFY |
-| `max_latency_ms` | ≤ 500 | VERIFY (perf) |
-| `max_test_flakiness_rate` | ≤ 0.1 | VERIFY (debug) |
+| `min_uat_pass_rate` | ≥ 0.95 | BUILD (via quality gates) |
+| `max_latency_ms` | ≤ 500 | VERIFY (perf — placeholder) |
+| `max_test_flakiness_rate` | ≤ 0.1 | VERIFY (debug — placeholder) |
