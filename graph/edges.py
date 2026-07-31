@@ -85,8 +85,9 @@ def route_phase(state: WorkflowState) -> str:
     if loop_count >= max_loops:
         return _forward_paths.get(phase, END)
 
-    # If there's an error, route to ERROR terminal for safe landing
-    if error:
+    # If there's an error, route to ERROR terminal for safe landing.
+    # Exception: next_phase is an intentional override (e.g., BUILD fail guard → REFLECT).
+    if error and not state.get("next_phase"):
         return "ERROR"
 
     # DISCOVER -> always forward to DEFINE (no quality gate needed)

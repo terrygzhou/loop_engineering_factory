@@ -234,6 +234,9 @@ async def submit_input(user_input: UserInput):
     """Submit user input for a waiting phase."""
     bridge.user_inputs[user_input.phase] = user_input.value
     bridge._save_persisted_inputs()
+    # Wake up the polling waiter
+    if user_input.phase in bridge._input_events:
+        bridge._input_events[user_input.phase].set()
     return {"status": "received", "phase": user_input.phase}
 
 
@@ -245,7 +248,7 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await asyncio.sleep(1)
     except WebSocketDisconnect:
-        bridge.disconnect_ws(websocket)
+        await bridge.disconnect_ws(websocket)
 
 
 # Mount static files

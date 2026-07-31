@@ -71,7 +71,10 @@ def _spec_summary(spec_text: str, max_chars: int = 500) -> str:
 
 
 def review_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = lambda *a, **kw: None
     """
     ARCH_REVIEW phase: Human architecture review gate between PLAN and BUILD.
 
@@ -166,6 +169,9 @@ def review_node(state: dict) -> dict:
     resume_data = interrupt(interrupt_payload)
 
     # ── Process resume ──
+    # LangGraph wraps resume payload in a list when resumed via Command(resume=[...])
+    if isinstance(resume_data, list):
+        resume_data = resume_data[0] if resume_data else {}
     if not resume_data:
         resume_data = {}
 

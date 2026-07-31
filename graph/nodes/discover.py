@@ -13,6 +13,7 @@ downstream node after resume does not yield __interrupt__).
 from langgraph.config import get_stream_writer
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -54,6 +55,9 @@ async def discover_node(state: dict) -> dict:
                 {"key": "context_folder", "label": "Existing codebase path (leave empty for greenfield)", "required": False},
             ],
         })
+        # LangGraph may wrap resume payload in a list
+        if isinstance(setup, list):
+            setup = setup[0] if setup else {}
         project_name = setup.get("project_name", "")
         project_description = setup.get("project_description", "")
         context_folder = setup.get("context_folder", "")
@@ -113,38 +117,34 @@ async def discover_node(state: dict) -> dict:
         skills = build_skill_registry(_cfg.workflow.skill_registry_path)
         interview_skill = skills.get("interview-me", {})
 
+        # Generate tailored questions from the project description, guided by the skill
+        interview_questions = _generate_interview_questions(
+            project_name, project_description, interview_skill.get("content", "")
+        )
         interview_prompts = (
-            "Ask the following questions one at a time. Wait for each answer before moving on.\n"
-            "If a question is not applicable, skip it.\n\n"
-            "Questions:\n"
-            "1. core_behavior — What does this feature do?\n"
-            "2. data_model — What entities and fields are involved?\n"
-            "3. api_surface — What HTTP methods, paths, and auth requirements?\n"
-            "4. validation — What input validation rules?\n"
-            "5. ui_template — Any Jinja2 templates or UI requirements?\n"
-            "6. integration — External services, databases, or APIs?\n"
-            "7. deployment — Docker or infrastructure implications?\n"
-            "8. edge_cases — Known edge cases?\n"
-            "9. non_functional — Performance, security, or monitoring needs?\n"
+            f"You are interviewing the user about their project: '{project_name}'.\n"
+            f"Description: {project_description}\n\n"
+            f"Ask the following questions. Tailor your follow-ups to their domain.\n"
+            f"If a question is not applicable, skip it.\n\n"
         )
 
         answers = interrupt({
             "type": "interview",
             "phase": "DISCOVER",
+            "project_description": project_description,
             "instructions": interview_prompts if interview_skill else None,
-            "questions": [
-                {"key": "core_behavior", "prompt": "What does this feature do?"},
-                {"key": "data_model", "prompt": "What entities and fields are involved?"},
-                {"key": "api_surface", "prompt": "What HTTP methods, paths, and auth requirements?"},
-                {"key": "validation", "prompt": "What input validation rules?"},
-                {"key": "ui_template", "prompt": "Any Jinja2 templates or UI requirements?"},
-                {"key": "integration", "prompt": "External services, databases, or APIs?"},
-                {"key": "deployment", "prompt": "Docker or infrastructure implications?"},
-                {"key": "edge_cases", "prompt": "Known edge cases?"},
-                {"key": "non_functional", "prompt": "Performance, security, or monitoring needs?"},
-            ],
+            "questions": interview_questions,
         })
-        interview_notes = answers.get("interview_notes", "")
+        # LangGraph 1.x: if interrupt() is suppressed on resume (returns None),
+        # auto-skip the interview and continue with empty notes.
+        if answers is None:
+            interview_notes = f"Auto-generated interview (suppressed):\nDescription: {project_description}\n"
+        elif isinstance(answers, list):
+            # LangGraph may wrap resume payload in a list
+            answers = answers[0] if answers else {}
+            interview_notes = answers.get("interview_notes", "")
+        else:
+            interview_notes = answers.get("interview_notes", "")
 
     # ── Scan existing codebase ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
@@ -207,6 +207,107 @@ async def discover_node(state: dict) -> dict:
 
 
 # ── Helpers ──
+
+def _generate_interview_questions(project_name: str, project_description: str, skill_content: str = "") -> list:
+    """Generate domain-specific interview questions from the project description.
+
+    Uses the interview-me skill (when available) as the structured question
+    framework, then tailors each category to the project domain via LLM.
+    Falls back to generic questions if description is too short or LLM fails.
+    """
+    generic_questions = [
+        {"key": "core_behavior", "label": "Core Behavior", "prompt": "What does this feature do? What are the primary user actions?"},
+        {"key": "data_model", "label": "Data Model", "prompt": "What entities and fields are involved? Any relationships between them?"},
+        {"key": "api_surface", "label": "API Surface", "prompt": "What endpoints, HTTP methods, and auth requirements do you need?"},
+        {"key": "integration", "label": "Integration", "prompt": "Does this integrate with external services, databases, or third-party APIs?"},
+        {"key": "ui_template", "label": "UI", "prompt": "Any specific UI requirements, templates, or styling preferences?"},
+        {"key": "validation", "label": "Validation", "prompt": "What input validation rules or data integrity constraints apply?"},
+        {"key": "edge_cases", "label": "Edge Cases", "prompt": "Are there known edge cases, error paths, or failure modes to handle?"},
+        {"key": "non_functional", "label": "Non-Functional", "prompt": "Any performance, security, or monitoring requirements?"},
+    ]
+
+    # If description is too short, just use generic questions
+    if len(project_description.strip()) < 20:
+        return generic_questions
+
+    # Build LLM prompt — grounded in the skill's interview framework
+    skill_framework = ""
+    if skill_content:
+        skill_framework = (
+            f"The following skill defines the interview framework. Use its "
+            f"categories (Core Behavior, Data Model, API Surface, Integration, "
+            f"Validation, UI/Template, Deployment, Edge Cases, Non-Functional) "
+            f"as the structure, then tailor each question to this project's domain.\n\n"
+            f"Interview framework:\n{skill_content}\n\n"
+        )
+
+    prompt = (
+        f"You are designing an interview for a new software project.\n\n"
+        f"{skill_framework}"
+        f"Project: {project_name}\n"
+        f"Description: {project_description}\n\n"
+        f"Generate 6-8 interview questions that cover the key categories above, "
+        f"but make each question specific to this project's domain.\n"
+        f"For example, if the project mentions Google Calendar integration,\n"
+        f"ask about OAuth scopes, sync direction, conflict resolution, etc.\n\n"
+        f"Output ONLY a JSON array of question objects with this structure:\n"
+        f'[{{"key": "area_name", "label": "Display Label", "prompt": "The specific question?"}}, ...]\n\n'
+        f"Rules:\n"
+        f"- Use the 'key' field as a short snake_case identifier (e.g. calendar_sync)\n"
+        f"- Map each question to one of the framework categories above\n"
+        f"- Make each question specific to the project, not generic\n"
+        f"- Include at least one question about data model, integration/APIs, and user workflow\n"
+        f"- Keep labels to 2-4 words\n"
+        f"- Output only the JSON array, nothing else"
+    )
+
+    try:
+        from tools.llm import invoke_skill
+        result = invoke_skill(
+            "You are an expert software requirements interviewer.",
+            prompt,
+            "",
+            llm=None,
+        )
+        # Parse the JSON array from LLM output
+        json_match = re.search(r'\[.*\]', result, re.DOTALL)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            if isinstance(parsed, list) and len(parsed) >= 3:
+                # Ensure each question has required fields
+                cleaned = []
+                for q in parsed:
+                    if isinstance(q, dict) and q.get("key") and q.get("prompt"):
+                        cleaned.append({
+                            "key": q["key"],
+                            "label": q.get("label", q["key"].replace("_", " ").title()),
+                            "prompt": q["prompt"],
+                        })
+                if cleaned:
+                    return cleaned
+    except Exception as e:
+        logging.getLogger("discover").warning("Interview question generation failed: %s", e)
+
+    # Fall back to generic questions with project context
+    return [
+        {"key": "core_behavior", "label": "Core Behavior",
+         "prompt": f"For '{project_name}', what are the primary user actions and workflows?"},
+        {"key": "data_model", "label": "Data Model",
+         "prompt": f"What entities does this project manage? What fields and relationships?"},
+        {"key": "integration", "label": "Integration",
+         "prompt": f"The description mentions specific services — which external APIs or databases need integration?"},
+        {"key": "api_surface", "label": "API Surface",
+         "prompt": f"What REST endpoints or GraphQL queries should this expose?"},
+        {"key": "auth_security", "label": "Auth & Security",
+         "prompt": f"Does this require authentication, authorization, or data encryption?"},
+        {"key": "ui_template", "label": "UI",
+         "prompt": f"What does the user interface look like? Any existing design system or templates?"},
+        {"key": "edge_cases", "label": "Edge Cases",
+         "prompt": f"What are the trickiest scenarios or failure modes for this project?"},
+        {"key": "deployment", "label": "Deployment",
+         "prompt": f"Any Docker, infrastructure, or hosting requirements?"},
+    ]
+
 
 def _scan_codebase(context_folder: str, project_name: str, project_folder: str) -> dict:
     writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI

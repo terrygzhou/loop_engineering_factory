@@ -109,7 +109,7 @@ def reflect_node(state: dict) -> dict:
             "error": None,
         }
 
-    # Step 6: Human approval gate (CLI)
+    # Step 6: Human approval gate — auto-approve or CLI interrupt
     if changes:
         writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": "\n  🔍 HUMAN APPROVAL REQUIRED", "ts": time.time()})
         writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"  Proposed {len(changes)} skill config change(s):", "ts": time.time()})
@@ -117,12 +117,25 @@ def reflect_node(state: dict) -> dict:
             writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"  {i}. [{c.get('risk_level', 'high')}] {c.get('skill', '?')}: {c.get('change', '?')}", "ts": time.time()})
             writer({"type": "progress", "phase": "REFLECT", "step": "progress", "detail": f"     Rationale: {c.get('rationale', 'N/A')}", "ts": time.time()})
 
-        from langgraph.types import interrupt as _interrupt
-        try:
-            resp = _interrupt({"type": "reflect_approval", "changes": changes})
-            approved = isinstance(resp, dict) and resp.get("approved", False)
-        except Exception:
-            approved = False  # Non-HIL mode: auto-reject
+        # Auto-approve: check config flag to avoid hanging in headless mode
+        auto_approve = state.get("auto_approve_override")
+        if auto_approve is None:
+            try:
+                auto_approve = getattr(config.workflow, "auto_approve", False)
+            except Exception:
+                auto_approve = False
+
+        approved = False
+        if auto_approve:
+            approved = True
+            writer({"type": "progress", "phase": "REFLECT", "step": "auto_approve", "detail": "  → Auto-approving reflect changes", "ts": time.time()})
+        else:
+            from langgraph.types import interrupt as _interrupt
+            try:
+                resp = _interrupt({"type": "reflect_approval", "changes": changes})
+                approved = isinstance(resp, dict) and resp.get("approved", False)
+            except Exception:
+                approved = False  # Non-HIL mode: auto-reject
 
         if approved:
             writer({"type": "progress", "phase": "REFLECT", "step": "success", "detail": "  ✓ Changes approved — applying config diffs...", "ts": time.time()})

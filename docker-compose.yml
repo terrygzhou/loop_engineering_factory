@@ -31,6 +31,7 @@ services:
     depends_on:
       - chromadb
       - otel-collector
+    entrypoint: ["/bin/sh", "-c", "umask 0000 && mkdir -p /app/output && chmod -R 777 /app/output 2>/dev/null && find /app/output -type d -exec chmod 777 {} + 2>/dev/null && exec /entrypoint.sh"]
     restart: unless-stopped
     networks:
       - loop_factory_network
@@ -42,34 +43,6 @@ services:
       retries: 3
       start_period: 15s
 
-  # ─── Builder: remote BUILD phase ─────────────────────────────────
-  builder:
-    build:
-      context: .
-      dockerfile: builder/Dockerfile
-    ports:
-      - "8200:8200"
-    environment:
-      - LLM_BASE_URL=http://pop-os:8080/v1
-    volumes:
-      - ./output:/app/output
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - build_data:/app/build
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 6G
-    restart: unless-stopped
-    depends_on:
-      - loop
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8200/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
   # ─── Data & Tooling ──────────────────────────────────────────────
   chromadb:
     image: chromadb/chroma:latest
@@ -78,6 +51,9 @@ services:
     volumes:
       - chroma_data:/chroma/chroma
     restart: unless-stopped
+    networks:
+      - loop_factory_default
+      - loop_factory_network
     deploy:
       resources:
         limits:

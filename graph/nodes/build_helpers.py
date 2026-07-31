@@ -227,57 +227,6 @@ def parse_uat_pass_rate(uat_output: str) -> float:
     return pass_count / total if total > 0 else 0.5
 
 
-def resolve_service_name(docker_proj: str) -> str:
-    """Dynamically resolve the application service name from docker-compose.yml.
-
-    The generated compose file can name the app service differently (e.g., 'app',
-    'api', 'web'). This function inspects the actual file and returns the correct
-    service name so docker compose commands don't fail with 'no such service'.
-
-    Falls back to 'api' if no compose file is found or no services can be read.
-    """
-    import subprocess as _sp
-
-    for candidate in [docker_proj, os.path.join(docker_proj, "")]:
-        for pattern in ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']:
-            compose_file = os.path.join(candidate, pattern)
-            if os.path.exists(compose_file):
-                try:
-                    result = _sp.run(
-                        ['docker', 'compose', '-f', compose_file, 'ls', '--format', 'json'],
-                        capture_output=True, text=True, timeout=10, cwd=docker_proj,
-                    )
-                    if result.returncode == 0 and result.stdout:
-                        import json as _json
-                        for svc in _json.loads(result.stdout.strip()):
-                            name = svc.get('Name', '')
-                            if name in ('api', 'app', 'web', 'backend'):
-                                return name
-                except Exception:
-                    pass
-                # Fallback: parse YAML directly
-                try:
-                    with open(compose_file) as f:
-                        content = f.read()
-                    # Simple YAML service extraction
-                    import yaml as _yaml
-                    data = _yaml.safe_load(content)
-                    if data and 'services' in data:
-                        for svc_name in data['services']:
-                            if svc_name in ('api', 'app', 'web', 'backend'):
-                                return svc_name
-                        # If none of the well-known names, take the non-db one
-                        for svc_name in data['services']:
-                            if svc_name not in ('db', 'database', 'redis', 'nginx', 'worker'):
-                                return svc_name
-                except Exception:
-                    pass
-                break  # found compose file, no need to check other patterns
-
-    # Ultimate fallback
-    return 'api'
-
-
 def parse_uat_metrics(uat_output: str) -> dict:
     """Parse UAT metrics: pass_rate, latency_ms, flakiness."""
     uat_pass = parse_uat_pass_rate(uat_output)

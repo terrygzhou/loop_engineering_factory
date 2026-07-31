@@ -357,6 +357,7 @@ class WorkflowRunner:
                 input_data = await on_hil(interrupted_phase, current_chunk)
 
                 # Build resume payload based on phase
+                resume_data = None  # safety default
                 if interrupted_phase == "DISCOVER":
                     # Determine which pause fired: project_setup (Pause 1) or interview (Pause 2)
                     # Check the _pause marker from the CLI handler, or fall back to
@@ -416,7 +417,7 @@ class WorkflowRunner:
                             }
                             w = get_stream_writer() or (lambda **kw: None)
                             w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={answer}", "ts": _time.time()})
-                            input_state = Command(resume=[resume_data])
+                            input_state = Command(resume=resume_data)
                             continue
                         answer = str(answer).lower()
                     else:
@@ -429,7 +430,7 @@ class WorkflowRunner:
                     }
                     w = get_stream_writer() or (lambda **kw: None)
                     w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={approved}", "ts": _time.time()})
-                    input_state = Command(resume=[resume_data])
+                    input_state = Command(resume=resume_data)
                     continue
 
                 else:

@@ -49,16 +49,6 @@ def build_review_metrics(state: Any) -> Dict[str, float]:
         val = metrics.get("spec_confidence", 0.0)
     return {"spec_confidence": float(val)}
 
-def format_review_section_for_cli(title: str, content: str) -> str:
-    """Terminal-friendly section formatting with ASCII separators."""
-    sep = "-" * 60
-    lines = [f"\n{sep}\n  {title}\n{sep}", content]
-    return "\n".join(lines)
-
-def format_review_summary_for_cli(sections: List[Dict[str, Any]]) -> str:
-    """Terminal-friendly summary line per section."""
-    return "\n".join(f"  [{s['label']}]: {s['word_count']} words" for s in sections)
-
 @dataclass
 class SectionFeedback:
     """Structured per-section review feedback — CLI and Web UI return this."""
@@ -79,8 +69,3 @@ class ReviewResult:
 
     def to_dict(self) -> Dict[str, Any]:
         return {"approved": self.approved, "section_feedback": self.section_feedback}
-
-def make_review_result(section_feedback: Dict[str, Dict[str, Any]]) -> ReviewResult:
-    """Build a ReviewResult from raw per-section feedback dicts."""
-    all_approved = all(fb.get("approved", True) for fb in section_feedback.values())
-    return ReviewResult(approved=all_approved, section_feedback=section_feedback)

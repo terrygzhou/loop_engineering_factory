@@ -13,7 +13,7 @@ DISCOVER → DEFINE → PLAN → ARCH_REVIEW → BUILD → SEED_DATA → VERIFY 
 
 Two entry points share `graph/executor.py`:
 - **CLI** (`main.py`): auto-approve mode
-- **Web UI** (`api/app.py`): FastAPI :8011, auto-approve on timeout
+- **Web UI** (`frontend/backend/app.py`): FastAPI :8011, auto-approve on timeout
 
 ## Key Constraints
 
@@ -43,8 +43,8 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 |-----------|---------|-----------|
 | `graph/` | LangGraph workflow | `main.py` (graph), `state.py` (TypedDict), `edges.py` (routing), `executor.py` (shared logic) |
 | `graph/nodes/` | Phase nodes | `discover.py`, `define.py`, `plan.py`, `openhands_build.py` (active BUILD), `build_subgraph_legacy.py` (fallback) |
-| `api/` | FastAPI Web UI | `app.py` :8011, `routes.py`, `schemas/`, `middleware/` |
-| `builder/` | Remote build service | `api.py` :8200, `runner.py` |
+| `frontend/` | Web UI backend | `backend/app.py` :8011, `backend/workflow_bridge.py` |
+| `builder/` | Remote build service (DELETED — OpenHands Gateway handles BUILD) |
 | `tools/` | Shared utilities | `llm.py` (invoke_skill + invoke_skill_async), `loader.py` (skills), `context_manager.py` |
 | `frontend/` | Web UI backend | `backend/workflow_bridge.py` (1141 lines — largest file) |
 | `config/` | Configuration | `config.yaml`, `guardrails.yaml`, `bounds.yaml` |

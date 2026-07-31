@@ -34,6 +34,7 @@ MyWords/
 frontend/backend/__pycache__/
 graph/__pycache__/
 *.pyc
+
 # Local config overrides
 config/config.local.yaml
 
@@ -47,14 +48,11 @@ tests/uat_runner.py
 logs/
 tests/
 
-# Local artifacts
-logs/
-tests/
 # Workflow output directory
 output/
 
 # Scripts (contain local paths and credentials)
-/scripts/
+scripts/
 
 # State directory (local runtime data)
 state/
@@ -75,12 +73,18 @@ architecture.png
 skills/SKILLS_INDEX.json
 
 # README screenshot (large binary, not version-controlled)
-# image.png
+image.png
 
 # Research, design docs, and planning artifacts (not version-controlled)
 docs/
 plan/
 superweb_output/
-state/
-.state/
-HANDOFF.md
+
+# Audit and review artifacts
+audit/
+review/
+
+# Local workflow scripts
+poll_workflow.sh
+requirement.md
+langgraph-state-machine.md

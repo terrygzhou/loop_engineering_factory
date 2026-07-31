@@ -10,6 +10,7 @@ Skill-driven HIL flow:
 import asyncio
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -144,6 +145,7 @@ class WorkflowBridge:
         self._user_inputs_path = self.orchestrator_state_dir / "user_inputs.json"
         self.user_inputs: Dict[str, Any] = self._load_persisted_inputs()
         self._lock = asyncio.Lock()
+        self._ws_lock = asyncio.Lock()
         self._run_task: Optional[asyncio.Task] = None
         self._aborted = False
         self._auto_approve = self._get_auto_approve()
@@ -160,6 +162,7 @@ class WorkflowBridge:
         self._interrupt_counts: Dict[str, int] = {}  # Track interrupt index per phase
         self._thread_id: Optional[str] = self._load_persisted_inputs().get("_thread_id")
         self._checkpointer = None
+        self._input_events: Dict[str, asyncio.Event] = {}
 
         # Initialize phase tracking
         for phase in self.PHASES:
@@ -173,12 +176,10 @@ class WorkflowBridge:
             }
 
     def _get_auto_approve(self) -> bool:
-        """Read auto_approve from config (CLI auto-approves; Web UI may override)."""
-        try:
-            from config.loader import config as _cfg
-            return getattr(_cfg.workflow, "auto_approve", False)
-        except Exception:
-            return False
+        """Web UI is always HIL — never auto-approve. The CLI executor
+        handles auto_approve separately via its own flag. The bridge
+        should always wait for real user input."""
+        return False
 
     def _load_persisted_inputs(self) -> Dict[str, Any]:
         """Load persisted user inputs from disk (survives restarts)."""
@@ -401,29 +402,32 @@ class WorkflowBridge:
     async def broadcast(self, ev: dict):
         """Send event to all WebSocket clients."""
         payload = json.dumps(ev)
-        dead = []
-        for ws in self.websocket_clients:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.websocket_clients.remove(ws)
+        async with self._ws_lock:
+            dead = []
+            for ws in self.websocket_clients:
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                self.websocket_clients.remove(ws)
 
     async def connect_ws(self, websocket: WebSocket):
         """Accept a WebSocket and send recent event history."""
         await websocket.accept()
-        self.websocket_clients.append(websocket)
-        for ev in self.events[-50:]:
-            try:
-                await websocket.send_text(json.dumps(ev))
-            except Exception:
-                pass
+        async with self._ws_lock:
+            self.websocket_clients.append(websocket)
+            for ev in self.events[-50:]:
+                try:
+                    await websocket.send_text(json.dumps(ev))
+                except Exception:
+                    pass
 
-    def disconnect_ws(self, websocket: WebSocket):
+    async def disconnect_ws(self, websocket: WebSocket):
         """Remove a WebSocket client."""
-        if websocket in self.websocket_clients:
-            self.websocket_clients.remove(websocket)
+        async with self._ws_lock:
+            if websocket in self.websocket_clients:
+                self.websocket_clients.remove(websocket)
 
     async def abort(self):
         """Abort the running workflow and fully reset state.
@@ -475,6 +479,11 @@ class WorkflowBridge:
         self._thread_id = None
         self._checkpointer = None
 
+        # Wake any blocked input waiters so they see _aborted
+        for ev in self._input_events.values():
+            ev.set()
+        self._input_events.clear()
+
         # Reset phase tracking
         for phase in self.PHASES:
             self.phase_states[phase] = {
@@ -496,6 +505,48 @@ class WorkflowBridge:
             phase, "interview",
             f"{phase}: skill-driven interview — answer the questions below",
             {"type": "interview", "questions": INTERVIEW_QUESTIONS},
+        )
+        await self.broadcast(ev)
+
+    def _extract_interview_questions(self, state: dict) -> list:
+        """Extract dynamic interview questions from the interrupt graph state.
+
+        The discover node fires interrupt with a 'questions' list. On resume,
+        the graph state carries this in the interrupt value. Extract it here
+        so the UI renders the right questions (not static defaults).
+        """
+        # Try graph state artifacts first
+        artifacts = state.get("artifacts", {})
+        if isinstance(artifacts, dict):
+            q = artifacts.get("interview_questions")
+            if q and isinstance(q, list) and len(q) > 0:
+                return q
+
+        # Try the interrupt value directly (LangGraph 1.x stores it)
+        if hasattr(self, '_interrupt_value') and isinstance(self._interrupt_value, dict):
+            q = self._interrupt_value.get("questions")
+            if q and isinstance(q, list) and len(q) > 0:
+                return q
+
+        # Fall back to static defaults
+        return INTERVIEW_QUESTIONS
+
+    async def _send_interview_with_questions(self, phase: str, questions: list):
+        """Send interview form with the given questions to the UI."""
+        # Normalize question format for the JS frontend
+        normalized = []
+        for q in questions:
+            normalized.append({
+                "category": q.get("key", q.get("category", "general")),
+                "label": q.get("label", q.get("key", "").replace("_", " ").title()),
+                "question": q.get("prompt", q.get("question", "")),
+                "placeholder": q.get("placeholder", f"Answer for {q.get('key', 'this topic')}..."),
+                "required": q.get("required", False),
+            })
+        ev = self.add_event(
+            phase, "interview",
+            f"{phase}: interview — answer the questions below",
+            {"type": "interview", "questions": normalized},
         )
         await self.broadcast(ev)
 
@@ -521,7 +572,7 @@ class WorkflowBridge:
         task_count = getattr(metrics, "task_count", 0) if metrics else 0
         diagram_count = getattr(metrics, "diagram_count", 0) if metrics else 0
 
-        # Lazy-load review_contract module (shared with _send_review)
+        # Lazy-load review_contract once (cached per instance)
         if self._review_contract is None:
             import importlib.util
             _rc_candidates = [
@@ -566,69 +617,6 @@ class WorkflowBridge:
         )
         await self.broadcast(ev)
 
-    async def _send_review(self, phase: str, chunk: dict):
-        """Send full DEFINE output to the UI for human review.
-
-        Uses the shared review_contract to build identical section payloads
-        as the CLI executor — same keys, labels, content, and word counts.
-        """
-        # Lazy-load review_contract once (cached per instance)
-        if self._review_contract is None:
-            import importlib.util
-            from pathlib import Path
-            _rc_candidates = [
-                Path(__file__).resolve().parent.parent.parent / "graph" / "nodes" / "review_contract.py",
-                Path("/loop_factory/graph/nodes/review_contract.py"),
-            ]
-            _rc_path = next((c for c in _rc_candidates if c.exists()), None)
-            if not _rc_path:
-                raise FileNotFoundError(f"Cannot find review_contract.py in {_rc_candidates}")
-            _spec = importlib.util.spec_from_file_location("review_contract", _rc_path)
-            _mod = importlib.util.module_from_spec(_spec)
-            _spec.loader.exec_module(_mod)
-            sys.modules["review_contract"] = _mod
-            self._review_contract = _mod
-        _mod = self._review_contract
-        build_review_sections = _mod.build_review_sections
-        build_review_summary = _mod.build_review_summary
-        build_review_metrics = _mod.build_review_metrics
-
-        artifacts = chunk.get("artifacts", {})
-        sections = build_review_sections(artifacts)
-        metrics = build_review_metrics(chunk)
-
-        ev = self.add_event(
-            phase, "review",
-            f"{phase}: review DEFINE output before proceeding to PLAN",
-            {
-                "type": "human_review",
-                "summary": build_review_summary(sections),
-                "sections": sections,
-                "metrics": metrics,
-            },
-        )
-        await self.broadcast(ev)
-
-    async def _wait_for_user_input(self, phase: str):
-        """Block until user provides input or times out (30 min)."""
-        self.status = "waiting"
-        self.waiting_for = phase
-
-        ev = self.add_event(phase, "waiting", f"Waiting for user input — {phase} phase", {"type": "review_approval"})
-        await self.broadcast(ev)
-
-        for _ in range(1800):  # 30 minutes max
-            await asyncio.sleep(1)
-            if phase in self.user_inputs:
-                inp = self.user_inputs.pop(phase)
-                ev = self.add_event(phase, "progress", f"User input received")
-                await self.broadcast(ev)
-                return inp
-
-        ev = self.add_event(phase, "progress", f"{phase} auto-approved (timeout)")
-        await self.broadcast(ev)
-        return None
-
     async def run_simulated(self):
         """Simulated workflow for testing (no real imports needed)."""
         async with self._lock:
@@ -668,7 +656,7 @@ class WorkflowBridge:
             ev = self.add_event(phase, "artifact", f"Generated: {artifact_name}", {"artifact_name": artifact_name, "artifact_value": artifact_value})
             await self.broadcast(ev)
 
-            # HIL at DEFINE: send interview questions (skill-driven)
+            # Skill-driven interview at DEFINE
             if phase == "DEFINE":
                 await self._send_interview(phase)
                 # Populate simulated artifacts for the review phase
@@ -705,9 +693,6 @@ class WorkflowBridge:
                     "- Deployment: Docker Compose"
                 )
 
-            # Skill-driven interview at DEFINE (not DISCOVER — already handled in on_hil_bridge)
-            if phase == "DEFINE":
-                await self._send_interview(phase)
             if not self._aborted:
                 ev = self.add_event(phase, "completed", f"{phase} phase completed successfully")
                 await self.broadcast(ev)
@@ -741,17 +726,17 @@ class WorkflowBridge:
                 return
 
         # ── OTEL root span ──
-        root_span = None
+        self._root_span = None
         if _OTEL_BRIDGE:
             tracer = _trace.get_tracer("loop.bridge")
-            root_span = tracer.start_span(
+            self._root_span = tracer.start_span(
                 "workflow.run",
                 attributes={
                     "workflow.cycle": self.cycle,
                     "workflow.project": self._project_name or "Untitled",
                 },
             )
-            root_span.set_attribute("workflow.spec_preview", (self._spec_text or "")[:200])
+            self._root_span.set_attribute("workflow.spec_preview", (self._spec_text or "")[:200])
 
         self.status = "running"
         # On recovery (thread_id was pre-set by _recover_workflow), don't increment cycle
@@ -845,10 +830,14 @@ class WorkflowBridge:
                                 iv = interrupt_data[0]
                                 if hasattr(iv, 'value') and isinstance(iv.value, dict):
                                     self._interrupt_type = iv.value.get("type")
+                                    # Store full interrupt value for question extraction
+                                    self._interrupt_value = iv.value
                                 else:
                                     self._interrupt_type = str(iv)
+                                    self._interrupt_value = None
                             else:
                                 self._interrupt_type = None
+                                self._interrupt_value = None
                             from langgraph.errors import GraphInterrupt
                             raise GraphInterrupt("Interrupted for HIL input")
 
@@ -873,17 +862,14 @@ class WorkflowBridge:
                                 ev = self.add_event(self._last_phase, "completed", f"{self._last_phase} completed")
                                 await self.broadcast(ev)
                                 # OTEL: record completed phase
-                                if _OTEL_BRIDGE and root_span:
-                                    root_span.add_event("phase.completed", {"phase": self._last_phase})
+                                if _OTEL_BRIDGE and self._root_span:
+                                    self._root_span.add_event("phase.completed", {"phase": self._last_phase})
                             self.current_phase = phase
                             ev = self.add_event(phase, "started", f"Entering {phase} phase")
                             await self.broadcast(ev)
-                            # OTEL: record phase start as child span
-                            if _OTEL_BRIDGE:
-                                _trace.get_tracer("loop.bridge").start_span(
-                                    f"phase.{phase.lower()}",
-                                    attributes={"workflow.cycle": self.cycle, "workflow.phase": phase},
-                                ).end()
+                            # OTEL: record phase start
+                            if _OTEL_BRIDGE and self._root_span:
+                                self._root_span.add_event("phase.started", {"phase": phase})
                             self._last_phase = phase
                         else:
                             ev = self.add_event(phase, "progress", f"{phase} processing...")
@@ -902,17 +888,45 @@ class WorkflowBridge:
 
                     # Get the suspended graph state for HIL
                     graph_state = await graph.aget_state(config)
-                    if not graph_state.next:
+                    if not graph_state.next and not graph_state.interrupts:
                         # Normal end disguised as interrupt
                         break
+                    # Nodes not in interrupt_after can have empty graph_state.next
+                    # while still having pending interrupts. Check both before breaking.
 
                     current_chunk = graph_state.values or {}
-                    interrupted_phase = (
-                        current_chunk.get("phase")
-                        or current_chunk.get("next_phase")
-                        or self._last_phase
-                        or "UNKNOWN"
-                    )
+                    # Determine interrupted phase — prefer the interrupting node's name
+                    # over the stale phase in current_chunk (which reflects the previous phase).
+                    if graph_state.next and len(graph_state.next) > 0:
+                        node_name = graph_state.next[0]
+                        # Map node names to phase names (node names are typically snake_case of phase)
+                        if "discover" in node_name:
+                            interrupted_phase = "DISCOVER"
+                        elif "define" in node_name:
+                            interrupted_phase = "DEFINE"
+                        elif "plan" in node_name:
+                            interrupted_phase = "PLAN"
+                        elif "review" in node_name or "arch" in node_name:
+                            interrupted_phase = "ARCH_REVIEW"
+                        elif "build" in node_name:
+                            interrupted_phase = "BUILD"
+                        elif "seed" in node_name:
+                            interrupted_phase = "SEED_DATA"
+                        elif "verify" in node_name:
+                            interrupted_phase = "VERIFY"
+                        elif "ship" in node_name:
+                            interrupted_phase = "SHIP"
+                        elif "reflect" in node_name:
+                            interrupted_phase = "REFLECT"
+                        else:
+                            interrupted_phase = node_name
+                    else:
+                        interrupted_phase = (
+                            current_chunk.get("phase")
+                            or current_chunk.get("next_phase")
+                            or self._last_phase
+                            or "UNKNOWN"
+                        )
                     interrupted_type = getattr(self, '_interrupt_type', None)
                     if not interrupted_type:
                         # Fallback: try graph_state.interrupts
@@ -928,19 +942,13 @@ class WorkflowBridge:
                                 interrupted_type = str(first)
                     print(f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}")
                     # OTEL: record HIL pause (guard against None which crashes OTEL)
-                    if _OTEL_BRIDGE and root_span:
+                    if _OTEL_BRIDGE and self._root_span:
                         otel_type = interrupted_type or "unknown"
-                        root_span.add_event("hil.pause", {"phase": interrupted_phase, "type": otel_type})
+                        self._root_span.add_event("hil.pause", {"phase": interrupted_phase, "type": otel_type})
 
-                    hil_type = self._classify_hil_type(interrupted_phase, interrupted_type)
-                    await self._broadcast_hil_form(interrupted_phase, hil_type, current_chunk)
-
-                    user_input = await self._poll_user_input(interrupted_phase)
+                    user_input = await self._handle_hil(interrupted_phase, interrupted_type, current_chunk)
                     if self._aborted:
                         break
-                    # OTEL: record HIL resume
-                    if _OTEL_BRIDGE and root_span:
-                        root_span.add_event("hil.resume", {"phase": interrupted_phase})
 
                     resume_result = self._build_resume_data(interrupted_phase, user_input)
                     resume_data, update_data = resume_result if isinstance(resume_result, tuple) else (resume_result, None)
@@ -948,9 +956,9 @@ class WorkflowBridge:
                     self.status = "running"
                     self.waiting_for = None
                     if update_data:
-                        current_input = Command(resume=resume_data, update=update_data)
+                        current_input = Command(resume=[resume_data], update=update_data)
                     else:
-                        current_input = Command(resume=resume_data)
+                        current_input = Command(resume=[resume_data])
                     continue
 
                 # Cancel abort waiter (normal completion path)
@@ -985,9 +993,9 @@ class WorkflowBridge:
                 print(f"[Bridge] Workflow complete, final state keys: {last_keys}", flush=True)
                 ev = self.add_event("SYSTEM", "completed", f"Cycle {self.cycle} complete — all phases done")
                 await self.broadcast(ev)
-                if _OTEL_BRIDGE and root_span:
-                    root_span.set_status(_trace.Status(_trace.StatusCode.OK))
-                    root_span.end()
+                if _OTEL_BRIDGE and self._root_span:
+                    self._root_span.set_status(_trace.Status(_trace.StatusCode.OK))
+                    self._root_span.end()
                 break
 
         except asyncio.CancelledError:
@@ -1000,16 +1008,16 @@ class WorkflowBridge:
                 self.waiting_for = None
             else:
                 print(f"[Bridge] CancelledError ignored (status=complete)", flush=True)
-            if _OTEL_BRIDGE and root_span:
-                root_span.set_status(_trace.Status(_trace.StatusCode.OK, "cancelled"))
-                root_span.end()
+            if _OTEL_BRIDGE and self._root_span:
+                self._root_span.set_status(_trace.Status(_trace.StatusCode.OK, "cancelled"))
+                self._root_span.end()
         except Exception as e:
             self.status = "error"
             ev = self.add_event("SYSTEM", "error", f"Workflow failed: {str(e)[:200]}")
             await self.broadcast(ev)
-            if _OTEL_BRIDGE and root_span:
-                root_span.set_status(_trace.Status(_trace.StatusCode.ERROR, str(e)[:200]))
-                root_span.end()
+            if _OTEL_BRIDGE and self._root_span:
+                self._root_span.set_status(_trace.Status(_trace.StatusCode.ERROR, str(e)[:200]))
+                self._root_span.end()
             raise
 
     def _classify_hil_type(self, interrupted_phase, interrupted_type):
@@ -1021,13 +1029,46 @@ class WorkflowBridge:
         else:
             return "generic"
 
+    async def _handle_hil(self, phase, interrupted_type, state):
+        """Handle HIL interruption: classify, broadcast form, poll for input."""
+        hil_type = self._classify_hil_type(phase, interrupted_type)
+        print(f"  → HIL pause: {phase}, type={interrupted_type}, hil_type={hil_type}", flush=True)
+        # OTEL: record HIL pause
+        if _OTEL_BRIDGE and hasattr(self, '_root_span') and self._root_span:
+            self._root_span.add_event("hil.pause", {"phase": phase, "type": interrupted_type or "unknown"})
+
+        # Auto-resume project_setup if data already provided via start request
+        if hil_type == "project_setup" and self._project_name:
+            print(f"  → Auto-resuming project_setup (data from start request)", flush=True)
+            return {
+                "project_name": self._project_name,
+                "project_description": self._spec_text,
+                "context_folder": self._context_folder or "",
+            }
+
+        # Auto-resume any HIL pause when auto_approve is enabled
+        if self._auto_approve:
+            print(f"  → Auto-approving HIL pause: {phase} type={interrupted_type}", flush=True)
+            if interrupted_type == "review":
+                return {"approved": True, "feedback": "Auto-approved"}
+            if hil_type == "interview":
+                return {"interview_notes": f"Auto-approved interview for {self._project_name}", "discover_interview_done": True}
+            return {"approved": True, "human_approval_required": False}
+
+        await self._broadcast_hil_form(phase, hil_type, state)
+        user_input = await self._poll_user_input(phase)
+        # OTEL: record HIL resume
+        if _OTEL_BRIDGE and hasattr(self, '_root_span') and self._root_span:
+            self._root_span.add_event("hil.resume", {"phase": phase})
+        return user_input
+
     async def _broadcast_hil_form(self, phase, hil_type, state):
         """Broadcast appropriate form based on HIL type."""
         self.status = "waiting"
         self.waiting_for = phase
 
         if phase == "DISCOVER" and hil_type == "project_setup":
-            ev = self.add_event(phase, "interview",
+            ev = self.add_event(phase, "setup",
                 "DISCOVER: project setup required",
                 {"type": "project_setup", "fields": [
                     {"key": "project_name", "label": "Project name", "required": True},
@@ -1036,7 +1077,9 @@ class WorkflowBridge:
                 ]})
             await self.broadcast(ev)
         elif phase == "DISCOVER" and hil_type == "interview":
-            await self._send_interview(phase)
+            # Extract dynamic questions from the interrupt's graph state
+            dynamic_questions = self._extract_interview_questions(state)
+            await self._send_interview_with_questions(phase, dynamic_questions)
         elif phase == "ARCH_REVIEW":
             print(f"  → ARCH_REVIEW HIL detected", flush=True)
             await self._send_review_plan("ARCH_REVIEW", state)
@@ -1045,22 +1088,72 @@ class WorkflowBridge:
             await self.broadcast(ev)
 
     async def _poll_user_input(self, phase):
-        """Poll for user input (up to 30 min), with abort check."""
-        for _ in range(1800):
-            if self._aborted:
-                return None
-            await asyncio.sleep(1)
-            if phase in self.user_inputs:
-                user_input = self.user_inputs.pop(phase)
-                self._save_persisted_inputs()
-                ev = self.add_event(phase, "progress", "User input received")
-                await self.broadcast(ev)
-                return user_input
+        """Wait for user input with abort check (up to 30 min)."""
+        # Ensure an event exists for this phase
+        if phase not in self._input_events:
+            self._input_events[phase] = asyncio.Event()
+        event = self._input_events[phase]
+        event.clear()
 
-        # Timeout → auto-approve
-        ev = self.add_event(phase, "progress", f"{phase} auto-approved (timeout)")
-        await self.broadcast(ev)
+        try:
+            # Wait for either: input received, abort, or timeout
+            await asyncio.wait_for(event.wait(), timeout=1800)  # 30 min
+        except asyncio.TimeoutError:
+            ev = self.add_event(phase, "progress", f"{phase} auto-approved (timeout)")
+            await self.broadcast(ev)
+            return {"approved": True, "interview_notes": ""}
+
+        if self._aborted:
+            return None
+
+        if phase in self.user_inputs:
+            user_input = self.user_inputs.pop(phase)
+            self._save_persisted_inputs()
+            ev = self.add_event(phase, "progress", "User input received")
+            await self.broadcast(ev)
+            return user_input
+
+        # Event fired but no input (e.g. abort signal)
         return {"approved": True, "interview_notes": ""}
+
+    def _parse_formatted_input(self, text: str) -> Optional[Dict[str, str]]:
+        """Parse formatted input strings from the JS frontend.
+
+        The frontend sends formatted text like:
+          "[Project Name] ContactHub\n\n[Description] App for contacts and calendar\n\n[Context Folder] /path"
+
+        Maps known label keywords to their canonical keys so the backend
+        can reconstruct the resume dict regardless of whether the frontend
+        sent a dict or a formatted string.
+        """
+        label_to_key = {
+            "project name": "project_name",
+            "description": "project_description",
+            "context folder": "context_folder",
+            "core behavior": "core_behavior",
+            "data model": "data_model",
+            "api surface": "api_surface",
+            "validation": "validation",
+            "deployment": "deployment",
+            "user experience": "user_experience",
+            "error handling": "error_handling",
+            "authentication": "authentication",
+            "testing": "testing",
+        }
+
+        parsed = {}
+        for line in text.split("\n"):
+            line = line.strip()
+            match = re.match(r'^\[([^\]]+)\]\s*(.*)', line)
+            if match:
+                label = match.group(1).lower()
+                value = match.group(2).strip()
+                if not value:
+                    continue
+                key = label_to_key.get(label, label.replace(" ", "_"))
+                parsed[key] = value
+
+        return parsed if parsed else None
 
     def _build_resume_data(self, phase, user_input):
         """Build resume payload for Command(resume=...).
@@ -1077,7 +1170,12 @@ class WorkflowBridge:
             if isinstance(user_input, dict):
                 resume = user_input
             elif isinstance(user_input, str):
-                resume = {"interview_notes": user_input}
+                # Parse formatted strings like "[Project Name] X\n[Description] Y"
+                parsed = self._parse_formatted_input(user_input)
+                if parsed:
+                    resume = parsed
+                else:
+                    resume = {"interview_notes": user_input}
             else:
                 resume = {"interview_notes": str(user_input)}
 
@@ -1091,9 +1189,20 @@ class WorkflowBridge:
                     # Convert answer dict to structured notes string
                     parts = []
                     for k, v in resume.items():
-                        if k not in ("approved",):
+                        if k not in ("approved",) and v:
                             parts.append(f"{k}: {v}")
                     interview_notes = "\n".join(parts)
+                    resume["interview_notes"] = interview_notes
+                elif isinstance(resume, dict) and resume:
+                    # Generic key-value answers (from dynamic questions)
+                    parts = []
+                    for k, v in resume.items():
+                        if k not in ("approved", "input_type") and v:
+                            label = k.replace("_", " ").title()
+                            parts.append(f"[{label}] {v}")
+                    interview_notes = "\n\n".join(parts)
+                    if not interview_notes:
+                        interview_notes = str(resume.get("interview_notes", ""))
                     resume["interview_notes"] = interview_notes
                 else:
                     interview_notes = str(resume.get("interview_notes", ""))
@@ -1141,6 +1250,20 @@ class WorkflowBridge:
         state["auto_approve_override"] = False
         # Force HIL: ensure setup node doesn't skip when project_name is provided
         state["force_hil"] = True
+        # Pre-seed project data so DISCOVER skips the project_setup interrupt
+        # and goes straight to the interview interrupt. The web UI already
+        # collects project_name / description in the start request, so pausing
+        # for project_setup is redundant. Critically, this avoids the
+        # "orphaned resume" bug: when the bridge auto-resumed project_setup
+        # with Command(resume=..., update={discover_setup_done: True}), the
+        # node re-ran and skipped the setup interrupt() (because
+        # discover_setup_done was True), but LangGraph still consumed the
+        # resume value. The subsequent interview interrupt() was then
+        # suppressed — it returned the stale resume dict instead of pausing.
+        # By pre-setting discover_setup_done here, the setup interrupt never
+        # fires, so no resume is consumed and the interview interrupt fires cleanly.
+        state["discover_setup_done"] = True
+        state["project_description"] = spec_text or ""
         return state
 
     async def run(self, spec_text: str = "", project_name: str = "", project_path: str = "", context_folder: str = ""):

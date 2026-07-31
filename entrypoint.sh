@@ -4,6 +4,11 @@
 
 set -e
 
+# Ensure all files/dirs created by this container are world-writable
+# so OpenHands (UID 1000) can access project dirs on shared volume
+umask 0000
+umask 0 # belt-and-suspenders
+
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 
 # ── Health server (port 8081) — background process ───────────
