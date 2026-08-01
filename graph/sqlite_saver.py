@@ -190,9 +190,30 @@ class SqliteSaver(BaseCheckpointSaver[int]):
     # ── Serialization helpers ──
 
     def _serialize(self, obj: Any) -> bytes:
-        """Serialize using the base serde (msgpack via dumps_typed)."""
+        """Serialize using the base serde (msgpack via dumps_typed).
+
+        Strips non-serializable keys (e.g. Python functions like skill_callback)
+        from checkpoint state to prevent msgpack TypeError.
+        """
+        obj = self._strip_unserializable(obj)
         _, blob = self.serde.dumps_typed(obj)
         return blob
+
+    @staticmethod
+    def _strip_unserializable(obj: Any) -> Any:
+        """Recursively remove non-serializable values (functions, callables)."""
+        if callable(obj):
+            return None  # top-level callable (e.g. skill_callback in writes)
+        if isinstance(obj, dict):
+            result = {}
+            for k, v in obj.items():
+                if callable(v):
+                    continue  # skip functions
+                result[k] = SqliteSaver._strip_unserializable(v)
+            return result
+        elif isinstance(obj, (list, tuple)):
+            return type(obj)(SqliteSaver._strip_unserializable(item) for item in obj)
+        return obj
 
     def _deserialize(self, blob: bytes) -> Any:
         """Deserialize using the base serde (msgpack via loads_typed)."""

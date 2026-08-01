@@ -12,6 +12,7 @@ downstream node after resume does not yield __interrupt__).
 """
 from langgraph.config import get_stream_writer
 
+import asyncio
 import json
 import logging
 import os
@@ -118,7 +119,9 @@ async def discover_node(state: dict) -> dict:
         interview_skill = skills.get("interview-me", {})
 
         # Generate tailored questions from the project description, guided by the skill
-        interview_questions = _generate_interview_questions(
+        # (Run in thread to avoid blocking the event loop inside async node)
+        interview_questions = await asyncio.to_thread(
+            _generate_interview_questions,
             project_name, project_description, interview_skill.get("content", "")
         )
         interview_prompts = (
@@ -151,13 +154,18 @@ async def discover_node(state: dict) -> dict:
     context = _scan_codebase(context_folder, project_name, project_folder)
 
     # ── Idea refinement: sharpen interview notes into actionable concept ──
-    idea_refinement = _refine_idea(interview_notes, project_name, project_description, context, state)
+    idea_refinement = await asyncio.to_thread(
+        _refine_idea, interview_notes, project_name, project_description, context, state
+    )
 
     # ── Context engineering: build focused project context ──
-    engineered_context = _build_context(interview_notes, project_name, project_description, context, state)
+    engineered_context = await asyncio.to_thread(
+        _build_context, interview_notes, project_name, project_description, context, state
+    )
 
     # ── Generate discovery artifact ──
-    requirement_md = _generate_requirement_via_fabric(
+    requirement_md = await asyncio.to_thread(
+        _generate_requirement_via_fabric,
         project_name=project_name,
         project_description=project_description,
         interview_notes=interview_notes,
