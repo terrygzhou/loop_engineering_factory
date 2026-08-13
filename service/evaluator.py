@@ -2,7 +2,7 @@
 Phoenix LLM-evaluator for Loop Factory workflow phases.
 
 Architecture:
-    Phase output → LLM-as-judge (Qwen3.6-27B) → OTel span → Phoenix UI
+    Phase output → LLM-as-judge (Qwen3.6-35B-A3B) → OTel span → Phoenix UI
 
 Context-aware evaluation: the LLM first extracts project domain/context
 from the spec, then scores against criteria tailored to that domain.
@@ -282,20 +282,30 @@ class Evaluator:
             # Fallback: find first { ... }
             m = re.search(r"(\{.*\})", text, re.DOTALL)
             if m:
-                return json.loads(m.group(1))
+                try:
+                    return json.loads(m.group(1))
+                except json.JSONDecodeError:
+                    pass
             return {"score": 0.0, "rationale": raw[:500], "dimensions": {}}
 
     def _record_to_otel(self, result: EvalResult):
-        """Attach eval result as OTel span attributes."""
+        """Attach eval result as OTel span linked to parent workflow context."""
         if not self.tracer or not self.tracer.is_configured():
             return
 
         attrs = result.to_attributes()
         # Emit a dedicated eval span under the current workflow context
         if trace:
+            # Get the current active span (parent workflow span) for linkage
+            ctx = trace.get_current_span()
+            parent_context = None
+            if ctx and ctx.get_span_context() and ctx.get_span_context().is_valid:
+                parent_context = trace.set_span_in_context(ctx)
+
             span = trace.get_tracer("eval").start_span(
                 f"eval.{result.name}",
                 attributes=attrs,
+                context=parent_context if parent_context else None,
             )
             span.end()
 

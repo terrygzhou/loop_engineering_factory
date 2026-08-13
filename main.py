@@ -90,7 +90,10 @@ def main():
     )
 
     duration = round(time.time() - start, 1)
-    health_module.track_workflow_end(name, duration)
+    if result.get("error"):
+        health_module.track_workflow_error(name)
+    else:
+        health_module.track_workflow_end(name, duration)
 
     print(f"\n=== Cycle {result.get('cycle_id', '?')} complete ({duration}s) ===")
     print(f"Phase: {result.get('phase')}")

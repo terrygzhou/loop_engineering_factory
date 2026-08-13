@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Lock, Thread
+from typing import Optional
 from prometheus_client import Counter, Histogram, Gauge, generate_latest  # type: ignore
 
 # ── Prometheus metrics ──
@@ -86,22 +87,27 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(generate_latest())
 
 def start_health_server(port: int = 0):
-    """Start health server in a background thread."""
-    global health_server
+    """Start health server in a background thread. Guards against double-start."""
+    global _health_server
+    if _health_server is not None:
+        print(f"[Health] Server already running on :{port}, skipping duplicate start")
+        return _health_server
     if port == 0:
         from config.loader import config
         port = int(config.services.observability.port)
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    health_server = server
+    _health_server = server
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     print(f"[Health] Server listening on :{port}")
     return server
 
+_health_server: Optional["HTTPServer"] = None  # type: ignore
+
 def _shutdown_health_server():
     try:
-        if 'health_server' in globals() and health_server:
-            health_server.shutdown()
+        if _health_server is not None:
+            _health_server.shutdown()
     except Exception:
         pass
 
@@ -114,6 +120,12 @@ def track_workflow_start(project_name: str):
 
 def track_workflow_end(project_name: str, duration: float):
     WORKFLOW_DURATION.labels(project=project_name).observe(duration)
+    with _stats_lock:
+        _active_workflows.pop(project_name, None)
+        ACTIVE_WORKFLOWS.set(len(_active_workflows))
+
+def track_workflow_error(project_name: str):
+    """Reset active_workflows gauge when a workflow fails mid-cycle."""
     with _stats_lock:
         _active_workflows.pop(project_name, None)
         ACTIVE_WORKFLOWS.set(len(_active_workflows))

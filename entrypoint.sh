@@ -4,10 +4,14 @@
 
 set -e
 
-# Ensure all files/dirs created by this container are world-writable
-# so OpenHands (UID 1000) can access project dirs on shared volume
-umask 0000
-umask 0 # belt-and-suspenders
+# Ensure output directory is accessible by shared containers (UID 1000)
+# Use group-writable permissions instead of world-writable (chmod 777)
+umask 0002
+APP_UID=1000
+APP_GID=1000
+mkdir -p /app/output
+chown -R ${APP_UID}:${APP_GID} /app/output 2>/dev/null || true
+chmod -R g+rw /app/output 2>/dev/null || true
 
 export PYTHONPATH="/app:${PYTHONPATH:-}"
 

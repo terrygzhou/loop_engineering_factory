@@ -22,16 +22,16 @@ services:
       - build_data:/app/build
       - skill_data:/app/skills
       - ./output:/app/output
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker socket removed for security — use Docker API over TLS if needed
     deploy:
       resources:
         limits:
           cpus: '2'
-          memory: 1G
+          memory: 3G
     depends_on:
       - chromadb
       - otel-collector
-    entrypoint: ["/bin/sh", "-c", "umask 0000 && mkdir -p /app/output && chmod -R 777 /app/output 2>/dev/null && find /app/output -type d -exec chmod 777 {} + 2>/dev/null && exec /entrypoint.sh"]
+    entrypoint: ["/bin/sh", "-c", "umask 0002 && mkdir -p /app/output && chown -R 1000:1000 /app/output 2>/dev/null || true && exec /entrypoint.sh"]
     restart: unless-stopped
     networks:
       - loop_factory_network
@@ -98,7 +98,7 @@ services:
       - PHOENIX_COLLECTOR_HTTP_PORT=4318
     volumes:
       - phoenix_data:/var/lib/phoenix
-    restart: unless-stopped
+    restart: "no"
     networks:
       - loop_factory_default
       - loop_factory_network
@@ -118,16 +118,16 @@ services:
   openhands:
     image: ghcr.io/openhands/agent-server:1.30.0-python
     container_name: openhands-server
-    restart: unless-stopped
+    restart: "no"
     ports:
       - "3005:8000"
     volumes:
       - ~/.openhands:/.openhands
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker socket removed — OpenHands sandbox uses its own network isolation
       - ./output:/opt/workspace_base/output
     environment:
       - LLM_BASE_URL=http://host.docker.internal:8080/v1
-      - LLM_MODEL=Qwen3.6-27B
+      - LLM_MODEL=Qwen3.6-35B-A3B
       - OH_SECRET_KEY=${OH_SECRET_KEY}
       - SANDBOX_USER_ID=1000
       - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
@@ -149,7 +149,7 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 60s
   promtail:
     image: grafana/promtail:3.0.0
@@ -158,7 +158,7 @@ services:
       - ./observability/promtail/promtail-config.yaml:/etc/promtail/promtail.yaml:ro
     command: ["-config.file=/etc/promtail/promtail.yaml"]
     # No host ports — internal-only, talks to Loki on grafana-stack network
-    restart: unless-stopped
+    restart: "no"
     deploy:
       resources:
         limits:

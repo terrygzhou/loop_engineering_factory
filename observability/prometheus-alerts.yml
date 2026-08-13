@@ -1,0 +1,86 @@
+# Prometheus alerting rules for Loop Engineering Factory
+# Deploy: mount this file into the Grafana stack Prometheus config
+# or add via Grafana > Alerts > Contact Points > Alert Rules UI
+
+groups:
+  - name: loop_engineering
+    rules:
+      # ── Workflow health ──
+
+      - alert: WorkflowPhaseErrorsHigh
+        expr: |
+          increase(phase_errors_total[5m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High phase error rate detected (instance {{ $labels.instance }})"
+          description: "Phase '{{ $labels.phase }}' has had {{ $value }} errors in the last 5 minutes."
+          runbook_url: "https://github.com/eywalink/loop-engineering/blob/main/docs/runbooks/phase-errors.md"
+
+      - alert: WorkflowStuckActive
+        expr: |
+          active_workflows > 5
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Too many active workflows ({{ $value }})"
+          description: "More than 5 workflows have been running for over 30 minutes. Possible deadlock or queue buildup."
+
+      - alert: WorkflowDurationExceeded
+        expr: |
+          histogram_quantile(0.95, rate(workflow_duration_seconds_bucket[15m])) > 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "95th percentile workflow duration exceeded 1 hour"
+          description: "P95 workflow duration is {{ $value }} seconds."
+
+      # ── LLM service health ──
+
+      - alert: LLMCallErrorRateHigh
+        expr: |
+          sum(rate(llm_calls_total{status="error"}[5m]))
+          /
+          sum(rate(llm_calls_total[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM error rate exceeds 10%"
+          description: "{{ $value | humanizePercentage }} of LLM calls are failing in the last 5 minutes."
+
+      - alert: LLMCallLatencyHigh
+        expr: |
+          histogram_quantile(0.95, rate(llm_duration_seconds_bucket[5m])) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P95 LLM latency exceeds 30 seconds"
+          description: "P95 LLM call duration is {{ $value }} seconds."
+
+      # ── Service availability ──
+
+      - alert: OrchestratorDown
+        expr: |
+          up{job="loop-orchestrator"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Loop orchestrator is down (instance {{ $labels.instance }})"
+          description: "Health endpoint unreachable for over 2 minutes."
+
+      - alert: ChromaDBDown
+        expr: |
+          up{job="chromadb"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ChromaDB is down (instance {{ $labels.instance }})"
+          description: "ChromaDB unreachable for over 2 minutes. Workflow embeddings will fail."

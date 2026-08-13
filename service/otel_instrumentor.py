@@ -133,12 +133,9 @@ class OTelTracer:
                 "gen_ai.operation.name": "chat.completions",
                 "gen_ai.request.model": model,
                 "gen_ai.request.type": "chat",
-                "gen_ai.request.input.token_usage": prompt_len,
-                "gen_ai.response.model": model,
-                "gen_ai.response.output.token.usage": response_len,
-                "gen_ai.usage.total_tokens": total_tokens,
                 "gen_ai.usage.input_tokens": prompt_len,
                 "gen_ai.usage.output_tokens": response_len,
+                "gen_ai.usage.total_tokens": total_tokens,
                 # ── Custom: skill context ──
                 "llm.skill": skill,
                 "llm.duration_s": round(duration_s, 3),
