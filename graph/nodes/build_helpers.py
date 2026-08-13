@@ -58,14 +58,17 @@ def parse_llm_output(text: str) -> tuple[list[tuple[str, str]], list[tuple[str, 
 
 
 def write_files_to_project(files: list[tuple[str, str]], project_path: str) -> list[str]:
-    """Write parsed files to disk. Safety: reject paths escaping project."""
+    """Write parsed files to disk. Safety: resolve realpath before write, reject escapes."""
     written = []
     proj = os.path.realpath(project_path)
     for path, content in files:
-        target = os.path.realpath(os.path.join(project_path, path))
+        # Resolve realpath BEFORE the escape check so symlink chains are caught
+        target = os.path.realpath(os.path.join(proj, path))
         if not target.startswith(proj + os.sep) and target != proj:
             continue
-        os.makedirs(os.path.dirname(target), exist_ok=True)
+        parent = os.path.dirname(target)
+        if parent:  # Guard: dirname("") returns "" which makedirs("") silently fails
+            os.makedirs(parent, exist_ok=True)
         with open(target, 'w') as f:
             f.write(content)
         written.append(path)

@@ -3,6 +3,7 @@ LLM integration via local vLLM (Qwen3.6-27B) using OpenAI-compatible API.
 Uses distilled skill instructions (Purpose + Process only) for fast context windows.
 """
 import asyncio
+import re
 import time
 from tools.distiller import distill_skill
 from tools.context_manager import prepare_context_for_llm
@@ -19,6 +20,31 @@ except ImportError as e:
     SystemMessage = None
 
 from config.loader import config
+
+# ── Prompt injection protection ──────────────────────────────────────
+_USER_INPUT_MARKER_START = "<<USER_INPUT_START>>"
+_USER_INPUT_MARKER_END = "<<USER_INPUT_END>>"
+_PROMPT_INJECTION_PATTERNS = re.compile(
+    r'(ignore\s+all\s+instructions|system\s*:?|<\s*system|</\s*system|'
+    r'disregard\s+previous|ignore\s+previous|you\s+are\s+now|'
+    r'despite\s+what|act\s+as\s+if|pretend\s+to|roleplay|'
+    r'^\s*\[\/?root\]|\[system:|execute\.system|eval\()',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_user_input(text: str) -> str:
+    """Wrap user-provided text in delimiters and filter injection attempts.
+
+    This wraps content so the model can distinguish instructions from user data,
+    and flags suspicious patterns for the model to reject.
+    """
+    if not text:
+        return text
+    # Flag injection patterns by prefixing with a warning
+    flagged = _PROMPT_INJECTION_PATTERNS.sub(lambda m: f"[WARNING: INJECTION_ATTEMPT: {m.group(0)}]", text)
+    return f"{_USER_INPUT_MARKER_START}\n{flagged}\n{_USER_INPUT_MARKER_END}"
+
 
 def get_llm(model: str = None, base_url: str = None):
     """Get a configured LLM instance. Returns None if langchain_openai unavailable."""
@@ -75,7 +101,7 @@ def invoke_skill(skill_content: str, task: str, context: str = "", llm=None, max
     headroom_info = prepared["headroom"]
 
     # Use compressed context from prepare_context_for_llm — not raw contexts
-    compressed_context = prepared['context']
+    compressed_context = _sanitize_user_input(prepared['context'])
 
     system_prompt = (
         f"You are an expert following these instructions:\n\n"
@@ -83,7 +109,7 @@ def invoke_skill(skill_content: str, task: str, context: str = "", llm=None, max
         f"Respond with actionable output. Be specific, include file paths, "
         f"code snippets, and verification steps."
     )
-    user_prompt = compressed_context if compressed_context else contexts['task']
+    user_prompt = _sanitize_user_input(compressed_context) if compressed_context else _sanitize_user_input(contexts['task'])
 
     try:
         response = llm.invoke([

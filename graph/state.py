@@ -80,7 +80,7 @@ class WorkflowState(TypedDict):
     user_review_comments: str
     status: str
     retry_count: int
-    loop_counts: Annotated[Dict[str, int], _dict_merge]
-    spec_confidence: float
+    # NOTE: loop_counts is in artifacts (not top-level) — deduplicated S-003
+    # NOTE: spec_confidence is in metrics.spec_confidence (CycleMetrics) — deduplicated S-003
     tasks_text: str
     solution_md: str
