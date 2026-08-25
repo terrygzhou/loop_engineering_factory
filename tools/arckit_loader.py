@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import logging
 import re
-from dataclasses import dataclass, field as dc_field
-from datetime import datetime
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import yaml
 
@@ -32,7 +32,7 @@ logger = logging.getLogger("arckit_loader")
 # ── Contract constants ────────────────────────────────────────────────────────
 
 #: Doc-type codes DISCOVER consumes, in fixed precedence order (§1.1).
-DISCOVER_TYPES: Tuple[str, ...] = ("ADMP", "REQ", "STKE", "OAAL", "PRIN")
+DISCOVER_TYPES: tuple[str, ...] = ("ADMP", "REQ", "STKE", "OAAL", "PRIN")
 
 #: Canonical filename: ARC-{PID}-{TYPE}[-{SEQ}]-v{MAJOR}[.{MINOR}].md (§2).
 ARTIFACT_FILENAME_RE = re.compile(
@@ -63,7 +63,7 @@ LABEL_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+\*\*(?P<label>[^*]+?)\*\*\s*:\s*(?P
 TOPLEVEL_LABEL_RE = re.compile(r"^\*\*(?P<label>[^*]+?)\*\*\s*:\s*(?P<value>.*)$")
 
 
-def _clean_value(value: Optional[str]) -> Optional[str]:
+def _clean_value(value: str | None) -> str | None:
     """Strip markdown code ticks/bold; return None for unfilled `[placeholder]` values."""
     if value is None:
         return None
@@ -90,7 +90,7 @@ def _norm_heading(text: str) -> str:
     return " ".join(t.lower().split())
 
 
-def split_sections(md: str) -> List[Tuple[int, str, str]]:
+def split_sections(md: str) -> list[tuple[int, str, str]]:
     """Split markdown into [(level, heading_text, body)] in document order.
 
     A section's body extends to the next heading of the SAME or SHALLOWER
@@ -98,12 +98,12 @@ def split_sections(md: str) -> List[Tuple[int, str, str]]:
     while also being listed as their own entries. Re-run on a body to descend.
     """
     lines = md.splitlines()
-    heads: List[Tuple[int, int, str]] = []
+    heads: list[tuple[int, int, str]] = []
     for i, line in enumerate(lines):
         m = HEADING_RE.match(line)
         if m:
             heads.append((i, len(m.group(1)), m.group(2).strip()))
-    sections: List[Tuple[int, str, str]] = []
+    sections: list[tuple[int, str, str]] = []
     for n, (idx, level, text) in enumerate(heads):
         end = len(lines)
         for idx2, level2, _t2 in heads[n + 1:]:
@@ -114,7 +114,7 @@ def split_sections(md: str) -> List[Tuple[int, str, str]]:
     return sections
 
 
-def find_section(sections: List[Tuple[int, str, str]], *patterns: str) -> Optional[str]:
+def find_section(sections: list[tuple[int, str, str]], *patterns: str) -> str | None:
     """Return the body of the first section whose normalized heading matches.
 
     Patterns are matched case-insensitively; an exact match anywhere in the
@@ -122,9 +122,9 @@ def find_section(sections: List[Tuple[int, str, str]], *patterns: str) -> Option
     An exact H1 match (the document title, e.g. ADMP's '# Architecture Vision'
     vs its '## 1. Architecture Vision' section) loses to any exact H2+ match.
     """
-    exact: Optional[str] = None      # first exact match at level >= 2
-    exact_l1: Optional[str] = None   # exact match at H1 — last resort
-    prefix_hit: Optional[str] = None
+    exact: str | None = None      # first exact match at level >= 2
+    exact_l1: str | None = None   # exact match at H1 — last resort
+    prefix_hit: str | None = None
     for level, text, body in sections:
         norm = _norm_heading(text)
         matched_exact = False
@@ -149,24 +149,24 @@ def find_section(sections: List[Tuple[int, str, str]], *patterns: str) -> Option
     return prefix_hit
 
 
-def split_blocks(body: str, min_level: int = 3) -> List[Tuple[str, str]]:
+def split_blocks(body: str, min_level: int = 3) -> list[tuple[str, str]]:
     """Split a section body into [(heading_text, block_body)] at headings ≥ min_level."""
     lines = body.splitlines()
-    heads: List[Tuple[int, str, int]] = []
+    heads: list[tuple[int, str, int]] = []
     for i, line in enumerate(lines):
         m = HEADING_RE.match(line)
         if m and len(m.group(1)) >= min_level:
             heads.append((i, m.group(2).strip(), len(m.group(1))))
-    out: List[Tuple[str, str]] = []
+    out: list[tuple[str, str]] = []
     for n, (idx, text, _lvl) in enumerate(heads):
         end = heads[n + 1][0] if n + 1 < len(heads) else len(lines)
         out.append((text, "\n".join(lines[idx + 1:end])))
     return out
 
 
-def _first_table_body(text: str) -> Optional[str]:
+def _first_table_body(text: str) -> str | None:
     """Return the raw lines of the first markdown table in text, or None."""
-    lines = [l for l in text.splitlines() if l.strip()]
+    lines = [line for line in text.splitlines() if line.strip()]
     for i, line in enumerate(lines):
         if line.strip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|[\s:\-|]+\|\s*$", lines[i + 1]):
             j = i + 2
@@ -178,28 +178,28 @@ def _first_table_body(text: str) -> Optional[str]:
     return None
 
 
-def parse_md_table(table_text: str) -> List[Dict[str, str]]:
+def parse_md_table(table_text: str) -> list[dict[str, str]]:
     """Parse one markdown table into [{header: cell}] row dicts (first table in text)."""
     raw = _first_table_body(table_text) if not table_text.lstrip().startswith("|") else table_text
     if not raw:
         return []
-    lines = [l for l in raw.splitlines() if l.strip()]
+    lines = [line for line in raw.splitlines() if line.strip()]
     header = [c.strip().strip("*").strip() for c in lines[0].strip().strip("|").split("|")]
-    rows: List[Dict[str, str]] = []
+    rows: list[dict[str, str]] = []
     for line in lines[2:]:
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         rows.append({h: (cells[k] if k < len(cells) else "") for k, h in enumerate(header)})
     return rows
 
 
-def table_to_rows(section_body: str, key_aliases: Optional[Dict[str, str]] = None) -> List[Dict[str, str]]:
+def table_to_rows(section_body: str, key_aliases: dict[str, str] | None = None) -> list[dict[str, str]]:
     """Parse the first table in a section body, mapping headers via key_aliases (lowercase keys)."""
     rows = parse_md_table(section_body)
     if not rows:
         return []
     out = []
     for r in rows:
-        nr: Dict[str, str] = {}
+        nr: dict[str, str] = {}
         for k, v in r.items():
             # stable lowercase keys, word separators kept as underscores
             nk = (key_aliases or {}).get(k.lower().replace(" ", "_"),
@@ -212,9 +212,9 @@ def table_to_rows(section_body: str, key_aliases: Optional[Dict[str, str]] = Non
     return out
 
 
-def bullets(text: str) -> List[str]:
+def bullets(text: str) -> list[str]:
     """Extract bullet/numbered list items from text, dropping unfilled placeholders."""
-    items: List[str] = []
+    items: list[str] = []
     for line in (text or "").splitlines():
         m = re.match(r"^\s*(?:[-*]|\d+\.)\s+(.*)$", line)
         if not m:
@@ -225,9 +225,9 @@ def bullets(text: str) -> List[str]:
     return items
 
 
-def paragraphs(text: str) -> List[str]:
+def paragraphs(text: str) -> list[str]:
     """Non-empty, non-placeholder, non-table/heading paragraphs, whitespace-squashed."""
-    out: List[str] = []
+    out: list[str] = []
     for para in re.split(r"\n\s*\n", text or ""):
         p = " ".join(para.split())
         if not p or p.startswith(("#", "|", ">", "---")) or _is_placeholder(p):
@@ -236,7 +236,7 @@ def paragraphs(text: str) -> List[str]:
     return out
 
 
-def labeled_fields(block_body: str) -> Dict[str, Any]:
+def labeled_fields(block_body: str) -> dict[str, Any]:
     """Parse `**Label**: value` fields from a block (BR/FR/UC/persona/SD/Goal blocks).
 
     - Top-level labels (no bullet prefix) always start a new field.
@@ -244,39 +244,36 @@ def labeled_fields(block_body: str) -> Dict[str, Any]:
       a label with an EMPTY value (i.e. it is a list item under that field).
     Field values: consecutive bullet lines collapse to a list; otherwise joined text.
     """
-    fields: Dict[str, Any] = {}
+    fields: dict[str, Any] = {}
     lines = (block_body or "").splitlines()
 
-    def _flush(key: Optional[str], buf: List[str]) -> None:
+    def _flush(key: str | None, buf: list[str]) -> None:
         if key is None:
             return
-        stripped = [l for l in buf if l.strip() and l.strip() != "---"]
+        stripped = [line for line in buf if line.strip() and line.strip() != "---"]
         if not stripped:
             fields.setdefault(key, "")
             return
-        all_bullets = all(re.match(r"^\s*(?:[-*]|\d+\.)\s+", l) for l in stripped)
+        all_bullets = all(re.match(r"^\s*(?:[-*]|\d+\.)\s+", line) for line in stripped)
         if all_bullets:
-            fields[key] = [re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", l).strip() for l in stripped]
+            fields[key] = [re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line).strip() for line in stripped]
         else:
-            fields[key] = " ".join(" ".join(l.split()) for l in stripped)
+            fields[key] = " ".join(" ".join(line.split()) for line in stripped)
 
-    current: Optional[str] = None
-    buf: List[str] = []
-    prev_line: Optional[str] = None
+    current: str | None = None
+    buf: list[str] = []
+    prev_line: str | None = None
     for line in lines:
         label_m = None
-        label_has_inline = False
         is_bulleted = False
         m = LABEL_RE.match(line)
         if m:
             label_m = m
             is_bulleted = True
-            label_has_inline = bool(m.group("value").strip())
         else:
             m2 = TOPLEVEL_LABEL_RE.match(line)
             if m2:
                 label_m = m2
-                label_has_inline = bool(m2.group("value").strip())
         if label_m is not None:
             new_field = True
             if is_bulleted:
@@ -315,7 +312,7 @@ def _snake_key(text: str) -> str:
     return "_".join(parts) or "field"
 
 
-def parse_frontmatter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
+def parse_frontmatter(text: str) -> tuple[dict[str, Any] | None, str]:
     """Split optional YAML frontmatter. Returns (meta_or_None, body).
 
     meta is None (and the whole text returned) when frontmatter is present but
@@ -349,11 +346,11 @@ class ArtifactRecord:
     status: str
     frontmatter: bool
     schema_valid: bool
-    fields_extracted: List[str] = dc_field(default_factory=list)
-    errors: List[str] = dc_field(default_factory=list)
-    parsed: Dict[str, Any] = dc_field(default_factory=dict)
+    fields_extracted: list[str] = dc_field(default_factory=list)
+    errors: list[str] = dc_field(default_factory=list)
+    parsed: dict[str, Any] = dc_field(default_factory=dict)
 
-    def audit_dict(self) -> Dict[str, Any]:
+    def audit_dict(self) -> dict[str, Any]:
         return {
             "type": self.type,
             "path": self.path,
@@ -374,17 +371,17 @@ class ArcKitContext:
     project_name: str = ""
     project_description: str = ""
     context_folder_hint: str = ""
-    records: List[ArtifactRecord] = dc_field(default_factory=list)
+    records: list[ArtifactRecord] = dc_field(default_factory=list)
     #: merged interview seeds (stakeholders, success criteria, constraints, ...)
-    seeds: Dict[str, Any] = dc_field(default_factory=dict)
+    seeds: dict[str, Any] = dc_field(default_factory=dict)
     #: PRIN principles text, truncated to MAX_PRINCIPLES_CHARS (§3.4.5)
     principles: str = ""
     #: OAAL sprint map rows (§3.4.4) — handoff to PLAN/BUILD (§7)
-    sprint_map: List[Dict[str, str]] = dc_field(default_factory=list)
+    sprint_map: list[dict[str, str]] = dc_field(default_factory=list)
     #: §6.4 audit record
-    audit: Dict[str, Any] = dc_field(default_factory=dict)
+    audit: dict[str, Any] = dc_field(default_factory=dict)
     #: (error_code, detail) pairs
-    errors: List[Tuple[str, str]] = dc_field(default_factory=list)
+    errors: list[tuple[str, str]] = dc_field(default_factory=list)
 
     @property
     def has_valid_artifacts(self) -> bool:
@@ -402,7 +399,7 @@ def _err(ctx: ArcKitContext, code: str, detail: str) -> None:
 #: Artefact types with their search patterns relative to the scan root.
 #: Primary (§2): projects/{NNN}-{slug}/ARC-{NNN}-{TYPE}-v*.md.
 #: Fallback: context_folder pointing directly at a project directory.
-_TYPE_GLOBS: Dict[str, Tuple[str, ...]] = {
+_TYPE_GLOBS: dict[str, tuple[str, ...]] = {
     "ADMP": ("projects/*/ARC-*-ADMP-v*.md", "ARC-*-ADMP-v*.md"),
     "REQ": ("projects/*/ARC-*-REQ-v*.md", "ARC-*-REQ-v*.md"),
     "STKE": ("projects/*/ARC-*-STKE-v*.md", "ARC-*-STKE-v*.md"),
@@ -415,15 +412,15 @@ _TYPE_GLOBS: Dict[str, Tuple[str, ...]] = {
 }
 
 
-def discover_artifact_files(root: Path, project_id: str = "") -> Dict[str, List[Path]]:
+def discover_artifact_files(root: Path, project_id: str = "") -> dict[str, list[Path]]:
     """Glob all DISCOVER artefact types under `root` (§2 discovery algorithm).
 
     Returns {TYPE: [paths]} — all versioned instances; the caller picks the
     highest version per (project, type).
     """
-    out: Dict[str, List[Path]] = {}
+    out: dict[str, list[Path]] = {}
     for type_code in DISCOVER_TYPES:
-        found: List[Path] = []
+        found: list[Path] = []
         for pat in _TYPE_GLOBS[type_code]:
             for p in root.glob(pat):
                 if p.is_file() and p not in found:
@@ -441,7 +438,7 @@ def discover_artifact_files(root: Path, project_id: str = "") -> Dict[str, List[
     return out
 
 
-def _pick_highest(paths: List[Path]) -> Optional[Path]:
+def _pick_highest(paths: list[Path]) -> Path | None:
     """Select the highest semantic version (MAJOR.MINOR); `v1` ≡ `v1.0` (§2)."""
     if not paths:
         return None
@@ -457,11 +454,11 @@ def _pick_highest(paths: List[Path]) -> Optional[Path]:
 
 # ── Per-artefact extraction (§3.4) ─────────────────────────────────────────
 
-def _doc_control(sections: List[Tuple[int, str, str]]) -> Dict[str, str]:
+def _doc_control(sections: list[tuple[int, str, str]]) -> dict[str, str]:
     """Parse the Document Control table into {label: value} (lowercased keys)."""
     body = find_section(sections, "document control") or ""
     rows = parse_md_table(body)
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for r in rows:
         cells = list(r.values())
         if len(cells) < 2:
@@ -473,7 +470,7 @@ def _doc_control(sections: List[Tuple[int, str, str]]) -> Dict[str, str]:
     return out
 
 
-def _h1_project_name(text: str, prefix: str) -> Optional[str]:
+def _h1_project_name(text: str, prefix: str) -> str | None:
     """Extract the project name from an H1 of the form '# {prefix} {NAME}'."""
     m = re.search(r"^#\s+" + re.escape(prefix) + r"\s+(?P<name>.+)$", text, re.MULTILINE)
     if m:
@@ -488,7 +485,7 @@ def _first_mermaid(body: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _extract_admp(body: str) -> Dict[str, Any]:
+def _extract_admp(body: str) -> dict[str, Any]:
     """§3.4.1 — ADMP → project_setup + interview seed."""
     sections = split_sections(body)
     dc = _doc_control(sections)
@@ -504,9 +501,9 @@ def _extract_admp(body: str) -> Dict[str, Any]:
     stakeholder_rows = table_to_rows(find_section(sections, "stakeholder map") or "")
     landscape = _first_mermaid(find_section(sections, "architecture landscape") or "")
 
-    def _sub_bullets(parent: str, *subs: str) -> List[str]:
+    def _sub_bullets(parent: str, *subs: str) -> list[str]:
         parent_body = find_section(sections, parent) or ""
-        items: List[str] = []
+        items: list[str] = []
         for sub in subs:
             items.extend(bullets(find_section(split_sections(parent_body), sub) or ""))
         return items
@@ -528,14 +525,14 @@ def _extract_admp(body: str) -> Dict[str, Any]:
     }
 
 
-def _blocks_by_heading(body: str, pattern: str, min_level: int = 3) -> List[Dict[str, Any]]:
+def _blocks_by_heading(body: str, pattern: str, min_level: int = 3) -> list[dict[str, Any]]:
     """Extract `### {pattern}` blocks and parse their **Label**: value fields.
 
     Blocks without any parseable fields are dropped so a near-empty parent
     heading cannot shadow its child blocks (e.g. 'Data Entities' wrapping
     'Entity: X' blocks).
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for heading, block_body in split_blocks(body, min_level=min_level):
         if re.search(pattern, heading, re.IGNORECASE):
             fields = labeled_fields(block_body)
@@ -551,7 +548,7 @@ def _blocks_by_heading(body: str, pattern: str, min_level: int = 3) -> List[Dict
     return out
 
 
-def _extract_req(body: str) -> Dict[str, Any]:
+def _extract_req(body: str) -> dict[str, Any]:
     """§3.4.2 — REQ → authoritative interview content."""
     sections = split_sections(body)
     dc = _doc_control(sections)
@@ -579,7 +576,7 @@ def _extract_req(body: str) -> Dict[str, Any]:
     frs = _blocks_by_heading(fr_section, r"FR-\d+")
 
     nfr_section = find_section(sections, "non-functional requirements") or ""
-    nfrs: Dict[str, List[str]] = {}
+    nfrs: dict[str, list[str]] = {}
     for heading, block_body in split_blocks(nfr_section, min_level=3):
         items = bullets(block_body)
         if items:
@@ -624,7 +621,7 @@ def _extract_req(body: str) -> Dict[str, Any]:
     }
 
 
-def _extract_stke(body: str) -> Dict[str, Any]:
+def _extract_stke(body: str) -> dict[str, Any]:
     """§3.4.3 — STKE → stakeholder / driver / goal enrichment."""
     sections = split_sections(body)
     dc = _doc_control(sections)
@@ -650,13 +647,13 @@ def _extract_stke(body: str) -> Dict[str, Any]:
     }
 
 
-def _extract_oaal(body: str) -> Dict[str, Any]:
+def _extract_oaal(body: str) -> dict[str, Any]:
     """§3.4.4 — OAAL → template header block + sprint map."""
     sections = split_sections(body)
     # O-AA templates have no Document Control — use the 2-col header table.
     header_body = find_section(sections, "template") or body[:2000]
     header_rows = parse_md_table(header_body)
-    header: Dict[str, str] = {}
+    header: dict[str, str] = {}
     for r in header_rows:
         cells = list(r.values())
         if len(cells) >= 2:
@@ -669,7 +666,7 @@ def _extract_oaal(body: str) -> Dict[str, Any]:
     return {"header": header, "sprint_map": sprint_rows}
 
 
-def _extract_prin(body: str) -> Dict[str, Any]:
+def _extract_prin(body: str) -> dict[str, Any]:
     """§3.4.5 — PRIN → principles context (≤ MAX_PRINCIPLES_CHARS)."""
     sections = split_sections(body)
     dc = _doc_control(sections)
@@ -681,7 +678,7 @@ def _extract_prin(body: str) -> Dict[str, Any]:
         "strategic principles", "tactical principles", "operational principles",
         "complete traceability matrix", "communication plan", "governance",
     }
-    principles: List[str] = []
+    principles: list[str] = []
     for _lvl, text, _body_ in sections:
         # Principles sit at H2/H3; H1 is the org name, H1-level noise is skipped.
         if not (2 <= _lvl <= 3):
@@ -708,9 +705,9 @@ _EXTRACTORS = {
 
 # ── Validation (§5 required-field subset, §6.3 pipeline) ───────────────────
 
-def _validate_parsed(type_code: str, parsed: Dict[str, Any], record: ArtifactRecord, filename_doc_id: str) -> None:
+def _validate_parsed(type_code: str, parsed: dict[str, Any], record: ArtifactRecord, filename_doc_id: str) -> None:
     """Check the §5 required-field subset for one artefact; append errors."""
-    problems: List[str] = []
+    problems: list[str] = []
 
     # Document ID cross-check (§6.3 step 4)
     doc_id = parsed.get("document_id", "")
@@ -753,9 +750,11 @@ def _validate_parsed(type_code: str, parsed: Dict[str, Any], record: ArtifactRec
     record.schema_valid = not problems
 
 
-def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> Optional[ArtifactRecord]:
+def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> ArtifactRecord | None:
     """§6.3 validation pipeline for one artefact file."""
     m = ARTIFACT_FILENAME_RE.match(path.name)
+    if m is None:
+        return None
     filename_doc_id = path.name[:-3]
     version = f"v{m.group('major')}.{m.group('minor') or '0'}"
     record = ArtifactRecord(
@@ -813,8 +812,8 @@ def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> Optiona
         record.fields_extracted = sorted(k for k, v in parsed.items() if v not in ("", [], {}, None))
     ctx.records.append(record)
     if record.errors:
-        for e in record.errors:
-            _err(ctx, e.split(":")[0], f"{path.name}: {e}")
+        for err in record.errors:
+            _err(ctx, err.split(":")[0], f"{path.name}: {err}")
     return record
 
 
@@ -855,22 +854,24 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
         if len(pids) == 1:
             ctx.project_id = pids.pop()
 
-    chosen: Dict[str, Optional[Path]] = {}
+    chosen: dict[str, Path | None] = {}
     for type_code in DISCOVER_TYPES:
         candidates = [p for p in files.get(type_code, [])
                       if type_code == "PRIN"
                       or not (ctx.project_id
-                              and ARTIFACT_FILENAME_RE.match(p.name)
-                              and ARTIFACT_FILENAME_RE.match(p.name).group("pid") != ctx.project_id)]
+                              and (m := ARTIFACT_FILENAME_RE.match(p.name))
+                              and m.group("pid") != ctx.project_id)]
         chosen[type_code] = _pick_highest(candidates)
 
     # Conflict detection: two different files for the same (type, version)
     for type_code in DISCOVER_TYPES:
         cand = files.get(type_code, [])
         if len(cand) > 1:
-            by_version: Dict[Tuple[int, int], List[Path]] = {}
+            by_version: dict[tuple[int, int], list[Path]] = {}
             for p in cand:
                 m = ARTIFACT_FILENAME_RE.match(p.name)
+                if m is None:
+                    continue
                 by_version.setdefault((int(m.group("major")), int(m.group("minor") or 0)), []).append(p)
             for _v, group in by_version.items():
                 if len(group) > 1:
@@ -889,7 +890,7 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
             _err(ctx, NO_ARTIFACTS, f"no ArcKit artefacts found under '{root_p}'")
 
     # ── §1.1 precedence merge ──
-    def parsed_of(type_code: str) -> Dict[str, Any]:
+    def parsed_of(type_code: str) -> dict[str, Any]:
         for r in ctx.records:
             if r.type == type_code and r.schema_valid:
                 return r.parsed
@@ -900,9 +901,9 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
     # project_name: ADMP Document Control → REQ (DC or H1) → directory slug
     ctx.project_name = admp.get("project") or req.get("project") or ""
     if not ctx.project_name:
-        for p in (chosen.get("ADMP"), chosen.get("REQ")):
-            if p:
-                parent = p.parent.name
+        for cand_path in (chosen.get("ADMP"), chosen.get("REQ")):
+            if cand_path:
+                parent = cand_path.parent.name
                 m = re.match(r"^\d{3}-(.+)$", parent)
                 if m and m.group(1).lower() not in ("global", ""):
                     ctx.project_name = m.group(1).replace("-", " ").title()
@@ -919,7 +920,7 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
 
     # Stakeholders: merge ADMP + REQ + STKE, de-duped by name (case-insensitive)
     seen: set = set()
-    stakeholders: List[Dict[str, str]] = []
+    stakeholders: list[dict[str, str]] = []
     for row in list(admp.get("stakeholders", [])) + list(req.get("stakeholders", [])) \
             + list(stke.get("internal_stakeholders", [])) + list(stke.get("external_stakeholders", [])):
         name = (row.get("name") or row.get("stakeholder") or "").lower().strip()
@@ -963,7 +964,7 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
     return ctx
 
 
-def _build_audit(ctx: ArcKitContext) -> Dict[str, Any]:
+def _build_audit(ctx: ArcKitContext) -> dict[str, Any]:
     """§6.4 — discover_artifact_audit record."""
     records = [r.audit_dict() for r in ctx.records]
     valid = sum(1 for r in ctx.records if r.schema_valid)
@@ -994,7 +995,7 @@ def synthesize_interview_notes(ctx: ArcKitContext) -> str:
     """
     s = ctx.seeds
     name = ctx.project_name or "Untitled"
-    lines: List[str] = [f"# Auto-Interview: {name}", "", "_Synthesised from ArcKit artefacts (EYW-171 data contract)._"]
+    lines: list[str] = [f"# Auto-Interview: {name}", "", "_Synthesised from ArcKit artefacts (EYW-171 data contract)._"]
 
     def section(title: str, body: str):
         lines.append(f"\n## {title}\n")

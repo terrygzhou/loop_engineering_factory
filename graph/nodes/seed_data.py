@@ -8,14 +8,14 @@ initial data generation) in a future iteration.
 Output: marks seed phase as complete, preserves all artifacts.
 """
 
-from langgraph.config import get_stream_writer
 
 import time
 from tools.audit_logger import AuditLog
+from tools.stream_writer import safe_stream_writer
 
 
 def seed_data_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """
     SEED_DATA phase: Placeholder for data seeding.
 

@@ -33,9 +33,10 @@ def _run(tmp_path, state):
     from graph.nodes.discover import discover_node
     state.setdefault("cycle_id", "0")
     state.setdefault("trace_id", "test")
-    # get_stream_writer() raises outside a graph context — return a callable
-    # that swallows the single dict arg the node passes positionally.
-    with patch("graph.nodes.discover.get_stream_writer",
+    # safe_stream_writer() falls back to no-op outside a graph context; patch
+    # the source binding so the node's writer is a known no-op callable that
+    # swallows the single dict arg the node passes positionally.
+    with patch("tools.stream_writer.get_stream_writer",
                return_value=lambda *a, **k: None):
         return asyncio.run(discover_node(state))
 

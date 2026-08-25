@@ -5,6 +5,7 @@ Uses distilled skill instructions (Purpose + Process only) for fast context wind
 import asyncio
 import re
 import time
+from pydantic import SecretStr
 from tools.distiller import distill_skill
 from tools.context_manager import prepare_context_for_llm
 from tools.prompt_logger import log_llm_call
@@ -15,11 +16,11 @@ try:
     from langchain_core.messages import HumanMessage, SystemMessage
 except ImportError as e:
     _import_error = str(e)
-    ChatOpenAI = None
-    HumanMessage = None
-    SystemMessage = None
+    ChatOpenAI = None  # type: ignore[assignment,misc]
+    HumanMessage = None  # type: ignore[assignment,misc]
+    SystemMessage = None  # type: ignore[assignment,misc]
 
-from config.loader import config
+from config.loader import config  # noqa: E402
 
 # ── Prompt injection protection ──────────────────────────────────────
 _USER_INPUT_MARKER_START = "<<USER_INPUT_START>>"
@@ -46,7 +47,7 @@ def _sanitize_user_input(text: str) -> str:
     return f"{_USER_INPUT_MARKER_START}\n{flagged}\n{_USER_INPUT_MARKER_END}"
 
 
-def get_llm(model: str = None, base_url: str = None):
+def get_llm(model: str | None = None, base_url: str | None = None):
     """Get a configured LLM instance. Returns None if langchain_openai unavailable."""
     from config.loader import config as _cfg
     if ChatOpenAI is None:
@@ -61,9 +62,9 @@ def get_llm(model: str = None, base_url: str = None):
     return ChatOpenAI(
         model=model,
         base_url=base_url,
-        api_key=config.services.llm.api_key,
+        api_key=SecretStr(config.services.llm.api_key),
         temperature=config.services.llm.temperature,
-        max_tokens=config.services.llm.max_tokens,
+        max_tokens=config.services.llm.max_tokens,  # type: ignore[call-arg]
     )
 
 def invoke_skill(skill_content: str, task: str, context: str = "", llm=None, max_prompt_chars: int = 2000,

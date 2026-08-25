@@ -161,7 +161,7 @@ def generate_backlog_md(items: list[dict], project_folder: str) -> str:
 
 def extract_data_models(docker_proj: str) -> list[dict]:
     """Extract data models from project code."""
-    models = []
+    models: list[dict] = []
     p = Path(docker_proj) / "app" / "models"
     if not p.exists():
         return models

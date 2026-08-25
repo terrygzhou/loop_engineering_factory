@@ -348,7 +348,7 @@ class WorkflowBridge:
             overall_status = "idle"
 
         # Build phase states
-        phases = []
+        phases: list[dict] = []
         for p in self.PHASES:
             phases.append(
                 {
@@ -738,6 +738,14 @@ class WorkflowBridge:
                 _spec = importlib.util.spec_from_file_location(
                     "graph.nodes.review_contract", _rc_path
                 )
+                if _spec is None:
+                    raise ImportError(
+                        f"cannot load review_contract module from {_rc_path}"
+                    )
+                if _spec.loader is None:
+                    raise ImportError(
+                        f"no loader for review_contract module at {_rc_path}"
+                    )
                 _mod = importlib.util.module_from_spec(_spec)
                 sys.modules["graph.nodes.review_contract"] = _mod
                 _spec.loader.exec_module(_mod)
@@ -792,7 +800,6 @@ class WorkflowBridge:
         await self.broadcast(ev)
 
         # If no context folder, skip DISCOVER immediately
-        skip_discover = not bool(self._context_folder)
         # DISCOVER always runs — if project_name provided, interrupt(project_setup) is skipped automatically
         phases_to_run = self.PHASES
         self._last_phase = None
@@ -996,7 +1003,6 @@ class WorkflowBridge:
         await self.broadcast(ev)
 
         self._last_phase = None
-        abort_mgr = AbortManager.get()
 
         try:
             from graph.main import build_graph

@@ -10,7 +10,6 @@ import re
 import time
 from pathlib import Path
 
-from langgraph.config import get_stream_writer
 
 from config.bounds_loader import bounds
 from config.loader import config
@@ -20,10 +19,11 @@ from tools.audit_logger import AuditLog
 from tools.context_manager import prepare_context_for_llm
 from tools.llm import invoke_skill, invoke_skill_async
 from tools.loader import build_skill_registry
+from tools.stream_writer import safe_stream_writer
 
 
 def define_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """
     DEFINE phase: Gather requirements through interview, generate spec,
     design API interfaces. Uses project_context from DISCOVER to inform
@@ -473,7 +473,7 @@ api_and_interface_design = (
 
 
 def _load_feedback_context(state: dict) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Query ChromaDB for historical patterns relevant to this project type."""
     try:
         client = get_chroma_client()
@@ -515,7 +515,6 @@ def _load_feedback_context(state: dict) -> str:
 
 
 def _estimate_spec_confidence(artifacts: dict) -> float:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Derive spec confidence from actual artifact content."""
     score = 0.0
     spec_text = artifacts.get("spec_refined", "")

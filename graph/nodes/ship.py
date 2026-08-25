@@ -2,20 +2,21 @@
 SHIP node: Add observability, run pre-launch checklist, generate production deployment config, version with git.
 Skills: observability-and-instrumentation → shipping-and-launch → production-deployment → git-workflow
 """
-from langgraph.config import get_stream_writer
-
 import json
 import os
 import time
 from datetime import datetime
-from config.loader import config
+
+
 from config.bounds_loader import bounds
-from tools.loader import build_skill_registry
+from config.loader import config
 from tools.llm import invoke_skill
+from tools.loader import build_skill_registry
+from tools.stream_writer import safe_stream_writer
 
 
 def ship_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """
     SHIP phase: Add observability, run launch checklist, deploy via Docker Compose,
     commit with git workflow.
@@ -145,5 +146,5 @@ Target environment considerations:
     if metrics_update:
         update["metrics"] = metrics_update
 
-    writer({"type": "progress", "phase": "SHIP", "step": "success", "detail": f"  ✓ launch_success=True", "ts": time.time()})
+    writer({"type": "progress", "phase": "SHIP", "step": "success", "detail": "  ✓ launch_success=True", "ts": time.time()})
     return update

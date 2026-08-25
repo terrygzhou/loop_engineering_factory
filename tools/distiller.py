@@ -63,7 +63,7 @@ def distill_skill(skill_content: str, max_chars: int = 2000) -> str:
 
 def distill_all_skills(skills_dir: str = './skills') -> dict:
     """Distill all skills in a directory."""
-    result = {}
+    result: dict = {}
     skills_path = Path(skills_dir)
     if not skills_path.exists():
         return result

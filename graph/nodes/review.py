@@ -89,15 +89,16 @@ def _spec_summary(spec_text: str, max_chars: int = 500) -> str:
 
 
 def review_node(state: dict) -> dict:
-    try:
-        writer = get_stream_writer()
-    except RuntimeError:
-        writer = lambda *a, **kw: None
     """
     ARCH_REVIEW phase: Human architecture review gate between PLAN and BUILD.
 
     Returns partial update dict (LangGraph reducer merges).
     """
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        def writer(*_args, **_kwargs):
+            return None
     writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "started", "detail": "\n=== ARCH_REVIEW PHASE ===", "ts": time.time()})
 
     # ── Audit logging ──

@@ -40,7 +40,7 @@ def _resolve(env_var: str | None, config: Dict[str, Any], key_path: str, default
         if env_val:
             return env_val
     # Walk nested keys
-    val = config
+    val: Any = config
     for k in key_path.split("."):
         if isinstance(val, dict):
             val = val.get(k)

@@ -2,11 +2,11 @@
 WorkflowState definition for the self-improving AI loop.
 """
 import operator
-from typing import Annotated, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from pydantic import BaseModel
 
 
-def _dict_merge(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
+def _dict_merge(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     """Reducer: merge two dicts (right wins on conflict). Empty right is NO-OP."""
     if not right:
         return left
@@ -67,7 +67,7 @@ class WorkflowState(TypedDict):
     # ── BUILD subgraph state (carried through for merge) ──
     superweb_mode: str
     superweb_agent_report: Optional[dict]
-    artifacts: Annotated[Dict[str, str], _dict_merge]
+    artifacts: Annotated[Dict[str, Any], _dict_merge]
     # Contract artefact keys (merged into `artifacts` by nodes):
     #   achg_context           — ACHG context for ARCH_REVIEW (EYW-171 §8.3,
     #                            written by graph/nodes/review.py)

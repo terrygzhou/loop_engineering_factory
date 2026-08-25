@@ -29,7 +29,7 @@ testable with a mocked evaluator singleton.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 __all__ = ["GateResult", "PxGate"]
 
@@ -40,10 +40,10 @@ class GateResult:
 
     passed: bool
     evaluator_available: bool = True
-    scores: Dict[str, float] = field(default_factory=dict)
-    failures: List[str] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)
+    failures: list[str] = field(default_factory=list)
 
-    def to_artifact(self) -> Dict[str, Any]:
+    def to_artifact(self) -> dict[str, Any]:
         return {
             "passed": self.passed,
             "evaluator_available": self.evaluator_available,
@@ -118,13 +118,14 @@ class PxGate:
             )
 
         from service.evaluator import evaluator as px_evaluator
+        assert px_evaluator is not None, "guaranteed by _evaluator_available() above"
 
-        failures: List[str] = []
-        scores: Dict[str, float] = {}
+        failures: list[str] = []
+        scores: dict[str, float] = {}
 
         spec_result = px_evaluator.eval_spec(spec_text) if spec_text else None
         if spec_text:
-            if not self._score_ok(spec_result):
+            if spec_result is None or not self._score_ok(spec_result):
                 failures.append(
                     "px eval_spec errored — treated as gate failure "
                     f"(fail_closed={self.fail_closed})"
@@ -142,7 +143,7 @@ class PxGate:
 
         plan_result = px_evaluator.eval_plan(plan_text, spec_ref=spec_text) if plan_text else None
         if plan_text:
-            if not self._score_ok(plan_result):
+            if plan_result is None or not self._score_ok(plan_result):
                 failures.append(
                     "px eval_plan errored — treated as gate failure "
                     f"(fail_closed={self.fail_closed})"

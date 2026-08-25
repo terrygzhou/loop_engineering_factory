@@ -12,15 +12,18 @@ API endpoints used (agent-server v1.30.0):
 """
 
 import json
-import re
-import time
 import logging
-from typing import Optional
+import re
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, cast
 
 import httpx
 
 from config.loader import config
 from graph.nodes.build_subgraph_legacy import (
+    BuildSubState,
     build_input_mapping,
     build_output_mapping,
     get_compiled_subgraph,
@@ -33,12 +36,13 @@ POLL_INTERVAL = 5         # seconds between status polls
 BUILD_TIMEOUT = 3600       # 1-hour hard limit (matches build_subgraph legacy)
 PROMPT_CHAR_LIMIT = 16_000 # Truncate spec/tasks to avoid context overflow
 STATUS_FINISHED = "finished"
+_DEFAULT_WORKING_DIR = str(Path(tempfile.gettempdir()) / "oh_build")
 STATUS_ERROR = "error"
 STATUS_TIMEOUT = "timeout"
 
 # -- Conversation creation (agent-server v1.30.0) ---------------------
 def _create_conversation(client: httpx.Client, prompt: str, project_path: str,
-                         secret_key: str, max_iterations: int = 50) -> Optional[str]:
+                         secret_key: str, max_iterations: int = 50) -> str | None:
     """
     Create a conversation on agent-server v1.30.0.
 
@@ -58,7 +62,7 @@ def _create_conversation(client: httpx.Client, prompt: str, project_path: str,
     payload = {
         "workspace": {
             "kind": "LocalWorkspace",
-            "working_dir": project_path or "/tmp/oh_build",
+            "working_dir": project_path or _DEFAULT_WORKING_DIR,
         },
         "agent": {
             "kind": "Agent",
@@ -124,7 +128,7 @@ def _build_prompt(state: dict) -> str:
             import pathlib
             solution_md = pathlib.Path(artifacts["solution_path"]).read_text()
         except Exception:
-            pass
+            logger.debug("solution_path read failed", exc_info=True)
 
     return f"""You are a senior software engineer building a project end-to-end.
 
@@ -174,7 +178,7 @@ def _parse_assistant_text(text: str) -> dict:
 
     This is the bridge between Gateway response and WorkflowState artifacts.
     """
-    result = {
+    result: dict[str, Any] = {
         "generated_code": [],     # list of {"path": str, "content": str}
         "test_results": "",       # raw test output text
         "build_log": "",         # file list / commands executed
@@ -264,7 +268,7 @@ def _poll_conversation(
     conv_id: str,
     secret_key: str,
     timeout: int = BUILD_TIMEOUT,
-) -> Optional[str]:
+) -> str | None:
     """
     Poll GET /api/conversations/{conv_id} until finished/errored.
     Then fetch final response via GET /api/conversations/{conv_id}/agent_final_response.
@@ -322,7 +326,7 @@ def _run_local_subgraph(state: dict) -> dict:
     child_state = build_input_mapping(state)
     compiled = get_compiled_subgraph()
     result = compiled.invoke(child_state)
-    return build_output_mapping(result)
+    return build_output_mapping(cast(BuildSubState, result))
 
 
 # -- OpenHands delegation helpers -------------------------------------
@@ -378,10 +382,10 @@ def _merge_results(state: dict, parsed: dict) -> dict:
         artifacts_delta["uat_report"] = f"OpenHands agent completed successfully.\n{parsed['build_log']}"
         uat_pass_rate = 1.0
     elif status == "partial":
-        artifacts_delta["uat_report"] = f"OpenHands agent completed with issues.\nErrors:\n" + "\n".join(parsed["errors"][:5])
+        artifacts_delta["uat_report"] = "OpenHands agent completed with issues.\nErrors:\n" + "\n".join(parsed["errors"][:5])
         uat_pass_rate = 0.5
     else:
-        artifacts_delta["uat_report"] = f"OpenHands agent failed.\nErrors:\n" + "\n".join(parsed["errors"])
+        artifacts_delta["uat_report"] = "OpenHands agent failed.\nErrors:\n" + "\n".join(parsed["errors"])
         uat_pass_rate = 0.0
 
     # -- UAT pass rate via metrics update --
@@ -527,7 +531,7 @@ openhands_build_node = openhands_build_wrapper
 # -- Public factory (same interface as build_proxy_node) --------------
 def openhands_build_proxy_factory(
     builder_url: str = "",  # Deprecated: kept for API compatibility
-) -> callable:
+) -> Any:
     """
     Factory for LangGraph integration.
 

@@ -3,7 +3,6 @@ REFLECT node: Meta-agent reflection — analyze cycle, propose config updates,
 request human approval, archive feedback.
 Skills: meta-agent-reflection (internal) → git-workflow (commit approved diffs)
 """
-from langgraph.config import get_stream_writer
 
 import json
 import time
@@ -14,10 +13,11 @@ from tools.llm import get_llm, invoke_skill
 from feedback.aggregator import FeedbackAggregator
 from feedback.diff_engine import generate_config_diffs, dry_run_validation
 from feedback.chroma_client import get_chroma_client, store_pattern, query_patterns
+from tools.stream_writer import safe_stream_writer
 
 
 def reflect_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """
     REFLECT phase: Analyze the completed cycle, compare against historical patterns,
     generate proposed skill config updates, request human approval, and archive.

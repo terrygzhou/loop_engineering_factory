@@ -3,6 +3,7 @@
 import asyncio
 import re
 from pathlib import Path
+
 from playwright.async_api import async_playwright
 
 # Local mermaid.min.js bundle — resolves relative to this file (works in Docker).
@@ -127,7 +128,7 @@ async def convert_all_diagrams(diagrams_dir: Path):
 
 
 if __name__ == "__main__":
-    import sys, os
+    import sys
     diagrams_dir = Path(sys.argv[1])
 
     results: dict[str, list[str]] = {}

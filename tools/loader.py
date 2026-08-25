@@ -47,7 +47,7 @@ def validate_skill(skill: Dict[str, Any]) -> bool:
 
 def load_skills(skills_dir: str = "") -> List[Dict[str, Any]]:
     """Scan skills_dir for all SKILL.md files and return parsed skill objects."""
-    skills = []
+    skills: List[Dict[str, Any]] = []
     if not skills_dir:
         skills_dir = str(LOCAL_SKILLS_DIR)
 

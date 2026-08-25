@@ -279,11 +279,11 @@ def build_resume_payload(
 
         if hil_type == "project_setup":
             arts = _artifacts()
-            resume: dict[str, Any] = {
+            resume = {
                 "human_approval_required": False,
                 "artifacts": arts,
             }
-            update: dict[str, Any] = {"discover_setup_done": True}
+            update = {"discover_setup_done": True}
             for key in ("project_name", "project_description", "context_folder"):
                 value = user_input.get(key)
                 if key in user_input:

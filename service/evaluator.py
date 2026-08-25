@@ -23,10 +23,10 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Graceful import — phoenix SDK is optional for evals
-_import_error: Optional[str] = None
+_import_error: str | None = None
 try:
     import phoenix.trace_eval as _px_eval  # type: ignore  # noqa: F401
 except ImportError as e:
@@ -35,7 +35,7 @@ except ImportError as e:
 try:
     from opentelemetry import trace  # type: ignore
 except ImportError:
-    trace = None
+    trace = None  # type: ignore[assignment]
 
 __all__ = ["Evaluator", "evaluator"]
 
@@ -48,13 +48,13 @@ class EvalResult:
     name: str
     score: float                        # 0.0–1.0
     rationale: str = ""
-    dimensions: Dict[str, float] = field(default_factory=dict)
+    dimensions: dict[str, float] = field(default_factory=dict)
     duration_s: float = 0.0
     model: str = ""
 
-    def to_attributes(self) -> Dict[str, Any]:
+    def to_attributes(self) -> dict[str, Any]:
         """Shape for OTel span attributes."""
-        attrs: Dict[str, Any] = {
+        attrs: dict[str, Any] = {
             "eval.name": self.name,
             "eval.score": round(self.score, 3),
             "eval.rationale": self.rationale[:2000],
@@ -268,7 +268,7 @@ class Evaluator:
         self._record_to_otel(result)
         return result
 
-    def _parse_json(self, raw: str) -> Dict[str, Any]:
+    def _parse_json(self, raw: str) -> dict[str, Any]:
         """Extract JSON from LLM response (handle markdown fences, whitespace)."""
         import re
         text = raw.strip()
@@ -313,7 +313,7 @@ class Evaluator:
 # ── Module singleton ─────────────────────────────────────────────────
 
 # Created lazily when executor imports it (passes tracer + config).
-evaluator: Optional["Evaluator"] = None
+evaluator: Evaluator | None = None
 
 
 def init_evaluator(llm_base_url: str, llm_model: str, tracer_instance: Any, api_key: str = ""):

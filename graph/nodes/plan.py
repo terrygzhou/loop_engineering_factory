@@ -10,8 +10,8 @@ import asyncio
 import os
 import time
 from pathlib import Path
+from typing import Any
 
-from langgraph.config import get_stream_writer
 
 from config.bounds_loader import bounds
 from config.loader import config as _cfg
@@ -21,6 +21,7 @@ from tools.audit_logger import AuditLog
 from tools.context_manager import prepare_context_for_llm
 from tools.llm import invoke_skill, invoke_skill_async
 from tools.loader import build_skill_registry
+from tools.stream_writer import safe_stream_writer
 
 
 def plan_node(state: dict) -> dict:
@@ -32,7 +33,7 @@ def plan_node(state: dict) -> dict:
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    w = get_stream_writer() or (lambda **kw: None)
+    w = safe_stream_writer()
     w(
         {
             "type": "progress",
@@ -91,7 +92,7 @@ def plan_node(state: dict) -> dict:
         context_parts.append(f"\n\n{feedback_context}\n")
     base_context = "\n\n".join(context_parts)
 
-    artifacts_delta: dict[str, str] = {}
+    artifacts_delta: dict[str, Any] = {}
 
     # ── Step 1: Generate structured task breakdown with milestones and dependencies ──
     plan_skill = skills.get("planning-and-task-breakdown", {})
@@ -377,7 +378,7 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
 
     # Guard: if no real context, return placeholder instead of feeding empty input to LLM
     if not combined:
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -397,7 +398,7 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     if not skill_content:
         local = _load_local_diagram_skill()
         if local:
-            w = get_stream_writer() or (lambda **kw: None)
+            w = safe_stream_writer()
             w(
                 {
                     "type": "progress",
@@ -411,7 +412,7 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
 
     # 3) Fall back to inline instructions + LLM
     if not skill_content:
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -455,7 +456,7 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     )
 
     if context_length < 200:
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -490,7 +491,7 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     async def _run_parallel():
         tasks = []
         for dtype, filename in diagram_types:
-            w = get_stream_writer() or (lambda **kw: None)
+            w = safe_stream_writer()
             w(
                 {
                     "type": "progress",
@@ -516,7 +517,7 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     for (dtype, filename), result in zip(diagram_types, results):
         diagram_text: str
         if isinstance(result, Exception):
-            w = get_stream_writer() or (lambda **kw: None)
+            w = safe_stream_writer()
             w(
                 {
                     "type": "error",
@@ -561,7 +562,7 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
                 tmp_html_path = make_html(block)
                 conversions.append((dtype, _Path(tmp_html_path), png_path, is_primary))
             except Exception as e:
-                w = get_stream_writer() or (lambda **kw: None)
+                w = safe_stream_writer()
                 w(
                     {
                         "type": "progress",
@@ -592,7 +593,7 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
                         results[dtype] = str(png_path)
                     else:
                         extra.setdefault(dtype, []).append(str(png_path))
-                    w = get_stream_writer() or (lambda **kw: None)
+                    w = safe_stream_writer()
                     w(
                         {
                             "type": "progress",
@@ -603,7 +604,7 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
                         }
                     )
                 except Exception as e:
-                    w = get_stream_writer() or (lambda **kw: None)
+                    w = safe_stream_writer()
                     w(
                         {
                             "type": "progress",
@@ -647,7 +648,7 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
     available = [k for k in artifact_keys if merged.get(k)]
     missing = [k for k in artifact_keys if not merged.get(k)]
     if missing:
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -658,7 +659,7 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
             }
         )
     if available:
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -754,7 +755,7 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
     # ── Metrics (safe formatting — handles non-numeric values) ──
     lines.extend(["## Metrics", ""])
     metrics = state.get("metrics")
-    if hasattr(metrics, "model_dump"):
+    if metrics is not None and hasattr(metrics, "model_dump"):
         md = metrics.model_dump()
     else:
         md = metrics or {}

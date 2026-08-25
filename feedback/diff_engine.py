@@ -1,10 +1,10 @@
 """
 Diff engine: analyze feedback and generate proposed skill config updates.
 """
-import re
 import json
-import yaml
+import re
 
+import yaml
 
 
 def generate_config_diffs(cycle_records: list, guardrails: dict, llm=None) -> dict:
@@ -31,15 +31,15 @@ def generate_config_diffs(cycle_records: list, guardrails: dict, llm=None) -> di
 
     # Aggregate key metrics across cycles
     total_revisions = sum(
-        int(c.get("metrics", {}).get("review_revisions", 0))
+        int(c.get("metrics", {}).get("review_revisions", 0) or 0)
         for c in cycle_records
     )
     total_findings = sum(
-        int(c.get("metrics", {}).get("security_findings", 0))
+        int(c.get("metrics", {}).get("security_findings", 0) or 0)
         for c in cycle_records
     )
     avg_confidence = (
-        sum(float(c.get("metrics", {}).get("spec_confidence", 0)) for c in cycle_records)
+        sum(float(c.get("metrics", {}).get("spec_confidence", 0) or 0) for c in cycle_records)
         / len(cycle_records)
     ) if cycle_records else 0
 
@@ -72,7 +72,7 @@ Return JSON with:
 """
 
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        from langchain_core.messages import HumanMessage, SystemMessage
         response = llm.invoke([
             SystemMessage(content="You are a meta-agent optimizing an AI development workflow. Output JSON only."),
             HumanMessage(content=analysis_prompt),
@@ -82,7 +82,7 @@ Return JSON with:
             result = json.loads(response.content)
             return result
         except (json.JSONDecodeError, KeyError):
-            print(f"  ⚠ Could not parse LLM response as JSON")
+            print("  ⚠ Could not parse LLM response as JSON")
             return {
                 "overall_assessment": response.content[:200],
                 "changes": [],
@@ -125,7 +125,7 @@ def apply_yaml_diff(config_path: str, diffs: dict) -> bool:
             return apply_prompt_diff(skill_name, diffs)
 
     try:
-        with open(config_path, 'r') as f:
+        with open(config_path) as f:
             config = yaml.safe_load(f) or {}
 
         for change in diffs.get("changes", []):
@@ -210,14 +210,12 @@ def apply_prompt_diff(template_name: str, diffs: dict) -> bool:
     and applies the LLM-suggested changes.
     Returns True on success.
     """
-    import importlib
-    import inspect
     import os
 
     try:
         template_file = os.path.join(os.path.dirname(os.path.dirname(__file__)),
                                      "config", "prompt_templates.py")
-        with open(template_file, "r") as f:
+        with open(template_file) as f:
             content = f.read()
 
         # Find the target template in the file
@@ -253,7 +251,7 @@ def _find_config_target(config: dict, skill_name: str):
     """Find a config entry by name — search top-level and one level deep."""
     if skill_name in config:
         return config[skill_name]
-    for key, val in config.items():
+    for val in config.values():
         if isinstance(val, dict) and skill_name in val:
             return val[skill_name]
     return None

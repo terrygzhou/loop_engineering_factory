@@ -14,14 +14,15 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
-from langgraph.config import get_stream_writer
 
 from config.loader import config
 from graph.ui_bridge import SkillTimer
 from tools.audit_logger import AuditLog
 from tools.llm import invoke_skill
 from tools.loader import build_skill_registry
+from tools.stream_writer import safe_stream_writer
 
 # ── Source-file collectors ─────────────────────────────────────────
 
@@ -29,7 +30,6 @@ from tools.loader import build_skill_registry
 def _collect_source_files(
     project_path: str, max_files: int = 30, max_file_bytes: int = 80_000
 ) -> list[dict]:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Walk *project_path* and return a list of {path, content} dicts for
     reviewable source files (skipping __pycache__, .git, build/, node_modules)."""
     root = Path(project_path)
@@ -69,7 +69,6 @@ def _collect_source_files(
 
 
 def _build_review_context(files: list[dict], spec_text: str) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Assemble a context string for the code review LLM call."""
     parts: list[str] = []
     if spec_text:
@@ -84,7 +83,6 @@ def _build_review_context(files: list[dict], spec_text: str) -> str:
 
 
 def _parse_review_result(review_text: str) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Extract structured findings from LLM review text.
 
     Returns dict with keys:
@@ -137,7 +135,6 @@ def _parse_review_result(review_text: str) -> dict:
 
 
 def _write_review_report(project_path: str, review_text: str, findings: dict) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Write code_review.md to the project's build/ directory."""
     build_dir = Path(project_path) / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +166,7 @@ def _write_review_report(project_path: str, review_text: str, findings: dict) ->
 
 
 def verify_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """
     VERIFY phase: Run multi-axis code quality review on the generated project.
 
@@ -202,8 +199,7 @@ def verify_node(state: dict) -> dict:
     )
 
     # ── Default findings (no project / skip) ──
-    findings = {
-        "issues": [],
+    findings: dict[str, Any] = {
         "critical": 0,
         "required": 0,
         "optional": 0,
@@ -495,8 +491,8 @@ def _run_test_infrastructure(project_path: str, writer, audit) -> dict:
                 timeout=120,
             )
             results["pytest"] = {
-                "passed": len([l for l in proc.stdout.split("\n") if "passed" in l]),
-                "failed": len([l for l in proc.stdout.split("\n") if "failed" in l]),
+                "passed": len([line for line in proc.stdout.split("\n") if "passed" in line]),
+                "failed": len([line for line in proc.stdout.split("\n") if "failed" in line]),
                 "errors": proc.returncode,
                 "output": proc.stdout[-500:],
             }
@@ -534,9 +530,9 @@ def _run_test_infrastructure(project_path: str, writer, audit) -> dict:
                 timeout=60,
             )
             violation_lines = [
-                l
-                for l in proc.stdout.split("\n")
-                if l.strip() and not l.startswith("Found")
+                line
+                for line in proc.stdout.split("\n")
+                if line.strip() and not line.startswith("Found")
             ]
             results["ruff"] = {
                 "violations": len(violation_lines),
@@ -575,7 +571,7 @@ def _run_test_infrastructure(project_path: str, writer, audit) -> dict:
                 text=True,
                 timeout=120,
             )
-            error_lines = [l for l in proc.stdout.split("\n") if ": error:" in l]
+            error_lines = [line for line in proc.stdout.split("\n") if ": error:" in line]
             results["mypy"] = {"errors": len(error_lines), "output": proc.stdout[-500:]}
         except subprocess.TimeoutExpired:
             results["mypy"] = {"errors": 0, "output": "Timeout"}

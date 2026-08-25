@@ -10,7 +10,7 @@ from typing import Optional
 from log.logging import setup_logger, log_event
 
 logger = setup_logger("prompt_logger")
-from config.loader import config
+from config.loader import config  # noqa: E402
 
 PROMPT_LOG_DIR = Path(config.paths.prompt_log_dir)
 
@@ -58,7 +58,7 @@ def log_llm_call(
 
 def get_logs(workflow_id: str = "", phase: str = "") -> list[dict]:
     """Retrieve prompt logs, optionally filtered by workflow or phase."""
-    logs = []
+    logs: list[dict] = []
     if not PROMPT_LOG_DIR.exists():
         return logs
 

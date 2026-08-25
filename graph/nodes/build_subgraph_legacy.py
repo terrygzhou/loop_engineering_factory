@@ -11,27 +11,33 @@ Internal routing:
   UAT fail → route back to BUILD parent (outer graph handles retry)
   SECURITY_GATE → runs security-and-hardening + requesting-code-review aggregate passes
 """
-import re
-import json
 import ast
+import json
+import re
 import subprocess
+import time
 from pathlib import Path
 from typing import TypedDict
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.config import get_stream_writer
-import time
+from langgraph.graph import END, START, StateGraph
 
 from config.bounds_loader import bounds
-from graph.state import CycleMetrics
-from tools.loader import build_skill_registry
 from tools.llm import invoke_skill
+from tools.loader import build_skill_registry
+
 from .build_helpers import (
-    parse_llm_output, write_files_to_project, run_command, find_docker_project,
-    resolve_app_service,
-    parse_tasks_to_backlog, generate_backlog_md, extract_data_models, extract_api_specs,
+    extract_api_specs,
+    extract_data_models,
+    find_docker_project,
+    generate_backlog_md,
+    parse_llm_output,
+    parse_tasks_to_backlog,
     parse_uat_metrics,
+    resolve_app_service,
+    run_command,
+    write_files_to_project,
 )
+from tools.stream_writer import safe_stream_writer
 
 # ── Sub-state ──────────────────────────────────────────────────────
 
@@ -72,9 +78,8 @@ MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
 # ── Sub-node functions ─────────────────────────────────────────────
 
 def impl_plan_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Generate implementation plan from spec + tasks."""
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "IMPL_PLAN", "detail": "Generating implementation plan...", "ts": time.time()})
     skills = state["skills"]
     spec = state["spec_text"]
@@ -98,9 +103,8 @@ def impl_plan_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def create_backlog_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Parse tasks into backlog items, write backlog.md."""
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "CREATE_BACKLOG", "detail": "Creating backlog...", "ts": time.time()})
     tasks_text = state["tasks_text"]
     project_folder = state["project_path"]
@@ -119,7 +123,7 @@ def create_backlog_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def implement_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Generate code + tests for current backlog item."""
     idx = state["backlog_idx"]
     if idx >= len(state["backlog"]):
@@ -132,7 +136,6 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         state["sub_phase"] = "IMPLEMENT"
         return implement_node(state)  # Skip to next
 
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": f"Item {idx + 1}/{len(state['backlog'])}: {item['description'][:80]}", "ts": time.time()})
     writer({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": f"Retry: {state['retry_count']}/{bounds.build.max_item_retries}", "ts": time.time()})
 
@@ -210,7 +213,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def unit_test_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Run Docker build + pytest for current item."""
     idx = state["backlog_idx"]
     if state["sub_phase"] == "NO_MORE_ITEMS":
@@ -229,7 +232,6 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return unit_test_node(state)
 
     docker_proj = state["docker_proj"]
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Building and testing item {item['id']}...", "ts": time.time()})
 
     # Write files
@@ -338,9 +340,8 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def int_test_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Integration test: verify Docker app is running, run aggregate checks."""
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": "Running integration tests...", "ts": time.time()})
     docker_proj = state["docker_proj"]
     from config.loader import config as _cfg
@@ -368,7 +369,7 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
     else:
         state["int_test_result"] = "fail"
         state["int_test_output"] = f"Health check failed: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
-        state["errors"].append(f"INT_TEST: Health check failed")
+        state["errors"].append("INT_TEST: Health check failed")
         state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
         writer({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": f"Integration test failed: HTTP {health_out.strip()}", "ts": time.time()})
 
@@ -376,9 +377,8 @@ def int_test_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def seed_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Generate and execute seed data script."""
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Generating and running seed data...", "ts": time.time()})
     skills = state["skills"]
     docker_proj = state["docker_proj"]
@@ -479,7 +479,6 @@ Requirements:
     return state
 
 def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Run SuperWeb in agent mode — OpenHands agent explores and tests."""
     agent_timeout = getattr(getattr(bounds, "superweb", None), "agent_timeout_seconds", 3600)
     # LLM config is in config.yaml, not bounds.yaml — use config loader
@@ -523,7 +522,6 @@ def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -
 
 
 def _run_superweb_scripted(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Run SuperWeb in scripted mode — deterministic Playwright pipeline."""
     timeout = getattr(getattr(bounds, "superweb", None), "timeout_seconds", 600)
     variations = getattr(getattr(bounds, "superweb", None), "variations", 3)
@@ -559,7 +557,6 @@ def _run_superweb_scripted(state: BuildSubState, base_url: str, output_dir: Path
 
 
 def _run_llm_uat_fallback(state: BuildSubState, base_url: str) -> tuple[str, float]:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Fallback to LLM-prompt UAT (original behavior)."""
     skills = state["skills"]
     uat_skill = skills.get("uat-workflow", {})
@@ -588,13 +585,12 @@ def _run_llm_uat_fallback(state: BuildSubState, base_url: str) -> tuple[str, flo
 
 
 def deploy_gate_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Validate container is healthy before UAT begins.
 
     Gate: container running, HTTP health endpoint responds, seed data exists.
     If unhealthy, skip UAT — nothing to test.
     """
-    w = get_stream_writer() or (lambda **kw: None)
     writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": "Validating deployment health...", "ts": time.time()})
     docker_proj = state["docker_proj"]
     from config.loader import config as _cfg
@@ -606,7 +602,7 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
     if rc != 0 or "Up" not in out:
         writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Container {_svc} not running — skipping UAT", "ts": time.time()})
         state["uat_result"] = "skip"
-        state["uat_output"] = f"DEPLOY_GATE failed: container not running"
+        state["uat_output"] = "DEPLOY_GATE failed: container not running"
         state["uat_pass_rate"] = 1.0  # skip counts as pass
         state["sub_phase"] = "DEPLOY_GATE"
         return state
@@ -632,7 +628,7 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
 
 
 def uat_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Run UAT tests — agent mode default, scripted fallback, LLM fallback."""
     writer({"type": "progress", "phase": "BUILD", "step": "progress", "detail": "  → [UAT] Running UAT tests...", "ts": time.time()})
     from config.loader import config as _cfg
@@ -702,7 +698,6 @@ def uat_node(state: BuildSubState) -> BuildSubState:
 # ── Conditional routing ────────────────────────────────────────────
 
 def route_build(state: BuildSubState) -> str:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Route within the BUILD subgraph."""
     sub_phase = state["sub_phase"]
 
@@ -744,7 +739,7 @@ def route_build(state: BuildSubState) -> str:
     return END
 
 def security_review_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Aggregate security review pass after all implementation items.
 
     Runs security-and-hardening skill on the generated codebase.
@@ -774,7 +769,7 @@ def security_review_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def code_review_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Aggregate code quality review pass.
 
     Runs requesting-code-review skill on the generated codebase.
@@ -803,7 +798,6 @@ def code_review_node(state: BuildSubState) -> BuildSubState:
     return state
 
 def security_gate_node(state: BuildSubState) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Security and code review gate before DEPLOY_GATE.
 
     Runs security audit and code review, then proceeds to DEPLOY_GATE.
@@ -815,21 +809,16 @@ def security_gate_node(state: BuildSubState) -> BuildSubState:
 # ── State mapping functions (parent ↔ child) ──────────────────────
 
 def build_input_mapping(parent: dict) -> BuildSubState:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Map parent WorkflowState → BuildSubState for native subgraph entry.
 
     Called by LangGraph automatically when entering the BUILD subgraph.
     Replaces the manual BuildSubState construction in build.py.
     """
-    import os as _os
-    from .build_helpers import find_docker_project
 
     project_path = parent.get("project_path", "")
-    project_folder = parent.get("project_folder", project_path)
     docker_proj = find_docker_project(project_path)
 
     from config import loader as config_loader
-    from tools.loader import build_skill_registry
     skills = build_skill_registry(config_loader.config.workflow.skill_registry_path)
 
     return BuildSubState({
@@ -860,10 +849,12 @@ def build_input_mapping(parent: dict) -> BuildSubState:
         "parent_artifacts": parent.get("artifacts", {}),
         "superweb_mode": "agent",  # Default: agent mode
         "superweb_agent_report": {},
+        "security_review": "",
+        "code_review": "",
     })
 
 def build_output_mapping(child: BuildSubState) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
     """Map BuildSubState → parent WorkflowState update for native subgraph exit.
 
     Called by LangGraph automatically when the BUILD subgraph completes.
@@ -940,7 +931,6 @@ def build_output_mapping(child: BuildSubState) -> dict:
 # ── Build subgraph ─────────────────────────────────────────────────
 
 def build_subgraph() -> StateGraph:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Build the BUILD subgraph (returns the StateGraph, not compiled)."""
     sub = StateGraph(BuildSubState)
 
@@ -968,12 +958,10 @@ def build_subgraph() -> StateGraph:
     return sub
 
 def get_compiled_subgraph():
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Return the compiled BUILD subgraph for native parent integration."""
     return build_subgraph().compile()
 
 def build_subgraph_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     """Wrapper node that bridges WorkflowState ↔ BuildSubState.
 
     Maps parent state to subgraph input, invokes the subgraph,

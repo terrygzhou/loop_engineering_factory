@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from langgraph.config import get_stream_writer as _raw_get_stream_writer
+from tools.stream_writer import safe_stream_writer
 
 
 def get_stream_writer():
@@ -182,6 +183,7 @@ def build_executor_state(
         feedback_context="",
         interview_notes="",
         discover_interview_done=False,
+        discover_setup_done=False,
         auto_approve_override=None,
         force_hil=False,
         trace_id="",
@@ -197,8 +199,6 @@ def build_executor_state(
         user_review_comments="",
         status="",
         retry_count=0,
-        loop_counts={},
-        spec_confidence=0.0,
         tasks_text="",
         solution_md="",
     )
@@ -346,7 +346,7 @@ class WorkflowRunner:
                 self._prev = None
 
             def _w(self):
-                return get_stream_writer() or (lambda **kw: None)
+                return safe_stream_writer()
 
             async def on_values(self, chunk, phase):
                 # Phase transition bookkeeping — mirrors the old inline block:
@@ -468,7 +468,7 @@ class WorkflowRunner:
             # call instead. (Headless without a TTY will halt on the prompt —
             # deliberately fail-safe: a regulated change is not auto-approved.)
             if phase == "ARCH_REVIEW" and self._archg_pending_blocks(state):
-                w = get_stream_writer() or (lambda **kw: None)
+                w = safe_stream_writer()
                 w(
                     {
                         "type": "progress",
@@ -503,7 +503,7 @@ class WorkflowRunner:
 
     def _hil_auto_approve(self, phase: str, state: WorkflowState) -> dict:
         """Generate automatic responses when auto_approve=True."""
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -556,7 +556,7 @@ class WorkflowRunner:
 
     def _hil_cli_sync(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """Synchronous part that actually blocks on input()."""
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",
@@ -654,7 +654,7 @@ class WorkflowRunner:
         tasks = artifacts.get("tasks", "")[:500]
         analysis = artifacts.get("analysis", "")[:300]
 
-        w = get_stream_writer() or (lambda **kw: None)
+        w = safe_stream_writer()
         w(
             {
                 "type": "progress",

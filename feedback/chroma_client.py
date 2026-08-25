@@ -4,13 +4,14 @@ ChromaDB client for storing and retrieving pattern embeddings.
 # Graceful import — chromadb may not be available locally
 _chroma_error = None
 try:
-    import chromadb
+    import chromadb  # type: ignore[import-unresolved]
 except ImportError as e:
     _chroma_error = str(e)
     chromadb = None  # type: ignore
 
 
-def get_chroma_client(url: str = None):
+
+def get_chroma_client(url: str | None = None):
     """Get a ChromaDB client. Returns None if chromadb unavailable."""
     from config.loader import config as _cfg
     if chromadb is None:
@@ -29,7 +30,7 @@ def get_chroma_client(url: str = None):
         # Fallback to embedded client when no server is available
         try:
             client = chromadb.Client()
-            print(f"INFO: Using embedded ChromaDB (HTTP server unavailable)")
+            print("INFO: Using embedded ChromaDB (HTTP server unavailable)")
             return client
         except Exception as embed_err:
             print(f"WARNING: Could not connect to ChromaDB: {e} (embedded fallback failed: {embed_err})")
@@ -53,7 +54,7 @@ def init_collections(client):
 
 
 def store_pattern(client, pattern_id: str,
-                  metrics: dict, feedback: list, tags: list = None) -> bool:
+                  metrics: dict, feedback: list, tags: list | None = None) -> bool:
     """Store a pattern in ChromaDB for future retrieval."""
     if client is None:
         return False

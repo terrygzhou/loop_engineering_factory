@@ -21,7 +21,6 @@ import time
 from pathlib import Path
 
 import httpx
-from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 from config.loader import config as _cfg
@@ -29,10 +28,11 @@ from graph.ui_bridge import SkillTimer
 from tools.audit_logger import AuditLog
 from tools.llm import invoke_skill
 from tools.loader import build_skill_registry
+from tools.stream_writer import safe_stream_writer
 
 
 async def discover_node(state: dict) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
+    writer = safe_stream_writer()  # fallback for tests/CLI
 
     # ── State override wins if explicitly set; None = use config fallback ──
     override = state.get("auto_approve_override")
@@ -61,7 +61,7 @@ async def discover_node(state: dict) -> dict:
         project_name = state.get("project_name") or "Untitled"
         project_description = state.get("project_description", "")
         context_folder = state.get("context_folder", "")
-    elif arckit_autopop:
+    elif arckit_autopop and arckit_ctx is not None:
         # EYW-171 §1.1: ADMP → REQ precedence; state values (explicit inputs)
         # win over artefact-derived values.
         project_name = (
@@ -162,7 +162,7 @@ async def discover_node(state: dict) -> dict:
         )
     elif state.get("discover_interview_done") or state.get("interview_notes"):
         interview_notes = state.get("interview_notes", "")
-    elif arckit_autopop:
+    elif arckit_autopop and arckit_ctx is not None:
         # EYW-171 §4.2: deterministic synthesis from the scanned artefacts —
         # no LLM call, no human interrupt.
         from tools.arckit_loader import synthesize_interview_notes
@@ -455,7 +455,6 @@ def _generate_interview_questions(
 
 
 def _scan_codebase(context_folder: str, project_name: str, project_folder: str) -> dict:
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     if context_folder and Path(context_folder).is_dir():
         project_type = _detect_project_type(context_folder)
         return {
@@ -492,9 +491,8 @@ def _generate_requirement_via_fabric(
     interview_notes,
     context,
     project_folder,
-    state: dict = None,
+    state: dict | None = None,
 ):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     fabric_skill = skills.get("fabric-prompts", {})
 
@@ -542,7 +540,6 @@ def _generate_requirement_via_fabric(
 def _generate_requirement_template(
     project_name, project_description, interview_notes, context, project_folder
 ):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     return (
         f"# {project_name} — Discovery Report\n\n"
         f"## Project Overview\n{project_description or '(none)'}\n\n"
@@ -556,7 +553,6 @@ def _generate_requirement_template(
 
 
 def _load_improve_telemetry(state, project_name):
-    writer = get_stream_writer() or (lambda **kw: None)  # fallback for tests/CLI
     try:
         from config.loader import config as _cfg
 
@@ -604,7 +600,7 @@ def _detect_project_type(project_path: str) -> str:
 def _inventory_tree(context_folder: str, max_depth: int = 3):
     """Walk the project tree up to max_depth."""
     base = Path(context_folder)
-    tree = {}
+    tree: dict = {}
     if not base.is_dir():
         return tree
     for entry in sorted(base.iterdir()):
@@ -664,7 +660,7 @@ def _detect_framework(project_path: str):
 
 def _discover_routes(context_folder: str, project_type: str) -> list:
     """Extract route definitions from backends."""
-    routes = []
+    routes: list = []
     if not context_folder or not Path(context_folder).is_dir():
         return routes
     if project_type == "fastapi":
@@ -706,7 +702,7 @@ def _discover_routes(context_folder: str, project_type: str) -> list:
 
 def _discover_models(context_folder: str, project_type: str) -> list:
     """Extract model definitions from backends."""
-    models = []
+    models: list = []
     if not context_folder or not Path(context_folder).is_dir():
         return models
     if project_type == "django":
@@ -722,7 +718,7 @@ def _discover_models(context_folder: str, project_type: str) -> list:
 
 def _discover_templates(context_folder: str, project_type: str) -> list:
     """List Jinja2 or JSX template paths."""
-    templates = []
+    templates: list = []
     if not context_folder or not Path(context_folder).is_dir():
         return templates
     ext = (
@@ -741,9 +737,9 @@ def _discover_dependencies(context_folder: str) -> dict:
     base = Path(context_folder)
     if (base / "requirements.txt").exists():
         deps["requirements"] = [
-            l.strip()
-            for l in base.joinpath("requirements.txt").read_text().splitlines()
-            if l.strip() and not l.startswith("#")
+            dep.strip()
+            for dep in base.joinpath("requirements.txt").read_text().splitlines()
+            if dep.strip() and not dep.startswith("#")
         ]
     if (base / "pyproject.toml").exists():
         import toml
@@ -777,7 +773,7 @@ def _get_git_status(context_folder: str) -> dict:
         )
         lines = result.stdout.strip().split("\n")
         branch = lines[0].replace("## ", "").split("...")[0] if lines else "unknown"
-        dirty = len([l for l in lines if l.strip()]) > 1
+        dirty = len([line for line in lines if line.strip()]) > 1
         return {"branch": branch, "dirty": dirty}
     except (subprocess.SubprocessError, FileNotFoundError):
         return {"branch": "unknown", "dirty": False}
@@ -815,7 +811,6 @@ def _refine_idea(
     interview_notes, project_name, project_description, context, state=None
 ):
     """Sharpen interview notes into a focused concept for DEFINE."""
-    writer = get_stream_writer() or (lambda **kw: None)
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
     refine_skill = skills.get("creative-ideation", {})
     if not refine_skill or not interview_notes:
@@ -838,7 +833,6 @@ def _build_context(
     interview_notes, project_name, project_description, context, state=None
 ):
     """Engineer focused project context for DEFINE phase."""
-    writer = get_stream_writer() or (lambda **kw: None)
     return json.dumps(
         {
             "project_name": project_name,

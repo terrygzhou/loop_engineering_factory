@@ -9,6 +9,7 @@ Usage:
     max_items  = bounds.build.max_item_retries
 """
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -25,7 +26,7 @@ def _load_yaml(path: str) -> dict:
 
 def _resolve(data: dict, key_path: str, default):
     """Resolve: config dict (nested key) > default."""
-    val = data
+    val: Any = data
     for k in key_path.split("."):
         if isinstance(val, dict):
             val = val.get(k)
