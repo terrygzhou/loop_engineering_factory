@@ -24,7 +24,7 @@ each re-implementing LangGraph's resume quirks:
 the entire cycle. Adapters are thin and only supply:
 
 | Adapter | File | Input handler | Event sink |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | CLI | `graph/executor.py` `WorkflowRunner._astream_with_hil` | auto-approve + interactive prompt | `_CliEvents` (OTEL, phase transitions, artifact dedup, log) |
 | Web | `frontend/backend/workflow_bridge.py` `run_real` | `_handle_hil` (WS form broadcast + poll) | `_BridgeEvents` (WS events, OTEL, artifact dedup) |
 
