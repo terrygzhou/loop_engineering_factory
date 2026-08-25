@@ -20,6 +20,7 @@ Design notes
   ``_ensure_connected``). Each workflow run gets a fresh checkpointer
   instance against the same DB file — same behavior as before.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -81,7 +82,9 @@ class LazyAsyncSqliteSaver(BaseCheckpointSaver[str]):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        return await self._materialize().aput(config, checkpoint, metadata, new_versions)
+        return await self._materialize().aput(
+            config, checkpoint, metadata, new_versions
+        )
 
     async def aput_writes(
         self,

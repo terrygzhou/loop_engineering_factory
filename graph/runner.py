@@ -451,7 +451,7 @@ async def run_workflow(
                 await events.on_values(chunk, phase)
                 yield chunk
 
-        except (GraphInterrupt):  # class-based clause; parenthesized per lint rule
+        except GraphInterrupt:  # legacy LangGraph (<1.x) raise-path; see comment below
             # Legacy LangGraph (<1.x) raised the interrupt instead of
             # yielding __interrupt__. Same suspension path.
             graph_state = await graph.aget_state(config)
