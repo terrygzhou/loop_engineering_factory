@@ -68,6 +68,13 @@ class WorkflowState(TypedDict):
     superweb_mode: str
     superweb_agent_report: Optional[dict]
     artifacts: Annotated[Dict[str, str], _dict_merge]
+    # Contract artefact keys (merged into `artifacts` by nodes):
+    #   achg_context           — ACHG context for ARCH_REVIEW (EYW-171 §8.3,
+    #                            written by graph/nodes/review.py)
+    #   discover_artifact_audit— ArcKit ingestion audit (EYW-171 §6.4,
+    #                            written by DISCOVER)
+    #   oaal_sprint_map        — OAAL sprint map handoff to PLAN/BUILD
+    #                            (EYW-171 §7, written by DISCOVER)
 
     # ── Parent graph runtime keys (S-001: schema enforcement) ──
     project_context: str

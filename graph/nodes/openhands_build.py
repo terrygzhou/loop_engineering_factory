@@ -138,6 +138,7 @@ INSTRUCTIONS:
 4. Run the tests and fix any failures
 5. Write a seed script for database initialization
 6. Perform a security review of the generated code
+7. For any user-facing UI (web pages, dashboards, forms, components), apply production-grade frontend engineering: accessible (WCAG 2.1 AA), responsive, semantic HTML, and visually polished — not a generic "AI-generated" look. Honor the spec's UI & User Experience section (screens, flows, design constraints) when present.
 
 OUTPUT FORMAT:
 For each file, output in this format:

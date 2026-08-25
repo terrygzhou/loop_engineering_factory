@@ -159,6 +159,17 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         if idx > 0:
             impl_context += "\n\nPreviously generated code:\n" + "\n".join(state["all_generated_code"][-bounds.build.recent_code_snippets:])[:bounds.build.recent_code_chars]
 
+        # Inject UI implementation guidance for frontend items so the
+        # generated interface is production-quality (accessible, responsive,
+        # not "AI-look"). frontend-ui-engineering skill drives this.
+        item_desc_lower = item["description"].lower()
+        ui_keywords = ("ui", "interface", "frontend", "front-end", "component", "page", "form", "dashboard", "view", "layout", "html", "css", "react", "vue", "svelte", "component")
+        if any(k in item_desc_lower for k in ui_keywords):
+            ui_skill = skills.get("frontend-ui-engineering", {})
+            if ui_skill:
+                writer({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": "  → Applying frontend-ui-engineering skill (UI item)", "ts": time.time()})
+                impl_context += "\n\n=== FRONTEND UI GUIDANCE (frontend-ui-engineering) ===\n" + ui_skill["content"][:3000]
+
         result = invoke_skill(
             impl_skill["content"],
             item_task if state["retry_count"] == 0 else f"{item_task}\n\nPrevious attempt failed. Fix and retry.",

@@ -5,20 +5,22 @@ Outputs: $project_folder/build/solution.md — complete solution design with dia
 Skill chain:
   planning-and-task-breakdown → doubt-driven-development → architecture-diagram-generator
 """
+
 import asyncio
 import os
-import re
+import time
 from pathlib import Path
-from config.loader import config as _cfg
+
+from langgraph.config import get_stream_writer
+
 from config.bounds_loader import bounds
-from tools.loader import build_skill_registry
-from tools.llm import invoke_skill, invoke_skill_async
-from tools.context_manager import prepare_context_for_llm
-from tools.audit_logger import AuditLog
+from config.loader import config as _cfg
 from feedback.chroma_client import get_chroma_client, query_patterns
 from graph.ui_bridge import SkillTimer
-from langgraph.config import get_stream_writer
-import time
+from tools.audit_logger import AuditLog
+from tools.context_manager import prepare_context_for_llm
+from tools.llm import invoke_skill, invoke_skill_async
+from tools.loader import build_skill_registry
 
 
 def plan_node(state: dict) -> dict:
@@ -31,14 +33,25 @@ def plan_node(state: dict) -> dict:
     Returns partial update dict (LangGraph reducer merges).
     """
     w = get_stream_writer() or (lambda **kw: None)
-    w({"type": "progress", "phase": "PLAN", "step": "start", "detail": "PLAN PHASE", "ts": time.time()})
+    w(
+        {
+            "type": "progress",
+            "phase": "PLAN",
+            "step": "start",
+            "detail": "PLAN PHASE",
+            "ts": time.time(),
+        }
+    )
 
     # ── Audit logging ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
-    audit.log_node_input("PLAN", {
-        "has_spec": bool(state.get("artifacts", {}).get("spec_refined")),
-        "has_interview": bool(state.get("artifacts", {}).get("interview_notes")),
-    })
+    audit.log_node_input(
+        "PLAN",
+        {
+            "has_spec": bool(state.get("artifacts", {}).get("spec_refined")),
+            "has_interview": bool(state.get("artifacts", {}).get("interview_notes")),
+        },
+    )
 
     # ── Load skills (lazy-load via cached registry) ──
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
@@ -47,10 +60,31 @@ def plan_node(state: dict) -> dict:
     # ── Load historical feedback context ──
     feedback_context = _load_feedback_context(state)
 
+    # ── ARCH_REVIEW rejection feedback (EYW-184 reject-loop) ──
+    # When PLAN re-runs after a rejection, the reviewer's comments must lead
+    # the planning context so the regenerated plan addresses them.
+    review_comments = (state.get("user_review_comments") or "").strip()
+    if review_comments:
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "replan",
+                "detail": "  → Re-planning with ARCH_REVIEW rejection feedback",
+                "ts": time.time(),
+            }
+        )
+
     # Build context for all skill invocations
     spec = state.get("artifacts", {}).get("spec_refined", "")
     interview = state.get("artifacts", {}).get("interview_notes", "")
-    context_parts = [spec]
+    context_parts: list[str] = []
+    if review_comments:
+        context_parts.append(
+            "## ARCH_REVIEW Rejection Feedback (must be addressed in the regenerated plan)\n"
+            + review_comments
+        )
+    context_parts.append(spec)
     if interview:
         context_parts.append(f"Interview notes:\n{interview}")
     if feedback_context:
@@ -63,41 +97,83 @@ def plan_node(state: dict) -> dict:
     plan_skill = skills.get("planning-and-task-breakdown", {})
     plan_result = None
     if plan_skill:
-        w({"type": "progress", "phase": "PLAN", "step": "planning", "detail": "Running planning-and-task-breakdown...", "ts": time.time()})
-        plan_timer = SkillTimer(state, "planning-and-task-breakdown")
-        optimized = prepare_context_for_llm({"context": base_context}, max_tokens=bounds.context.plan_max_tokens)
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "planning",
+                "detail": "Running planning-and-task-breakdown...",
+                "ts": time.time(),
+            }
+        )
+        plan_timer = SkillTimer("planning-and-task-breakdown")
+        optimized = prepare_context_for_llm(
+            {"context": base_context}, max_tokens=bounds.context.plan_max_tokens
+        )
         plan_result = invoke_skill(
             plan_skill["content"],
             "Break down the implementation into structured tasks with milestones, dependencies, effort estimates, and acceptance criteria. Use vertical slicing. Output phases (Foundation, Core Features, Polish) with checkpoints between them. Include a dependency graph, risk table, and parallelization notes.",
             optimized["context"],
-            llm=None
+            llm=None,
         )
         plan_timer.complete()
-        artifacts_delta["plan"] = plan_result[:bounds.artifacts.max_plan_chars]
+        artifacts_delta["plan"] = plan_result[: bounds.artifacts.max_plan_chars]
         # Store structured task breakdown as separate artifact for downstream phases
         # "task_breakdown" = detailed structure, "tasks" = compat key for solution.md + BUILD
-        artifacts_delta["task_breakdown"] = plan_result[:bounds.artifacts.max_plan_chars]
-        artifacts_delta["tasks"] = plan_result[:bounds.artifacts.max_plan_chars]
-        feedback_entries.append({"skill": "planning-and-task-breakdown", "output": plan_result[:bounds.feedback.max_feedback_entry_chars]})
+        artifacts_delta["task_breakdown"] = plan_result[
+            : bounds.artifacts.max_plan_chars
+        ]
+        artifacts_delta["tasks"] = plan_result[: bounds.artifacts.max_plan_chars]
+        feedback_entries.append(
+            {
+                "skill": "planning-and-task-breakdown",
+                "output": plan_result[: bounds.feedback.max_feedback_entry_chars],
+            }
+        )
 
     # ── Step 2: Doubt-driven development (challenge assumptions) ──
     doubt_skill = skills.get("doubt-driven-development", {})
     doubt_result = None
     if doubt_skill:
-        w({"type": "progress", "phase": "PLAN", "step": "doubt", "detail": "Running doubt-driven-development...", "ts": time.time()})
-        doubt_timer = SkillTimer(state, "doubt-driven-development")
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "doubt",
+                "detail": "Running doubt-driven-development...",
+                "ts": time.time(),
+            }
+        )
+        doubt_timer = SkillTimer("doubt-driven-development")
         doubt_result = invoke_skill(
             doubt_skill["content"],
             "Challenge the architectural assumptions in the plan. Be concise — focus on top 3 risks only.",
-            artifacts_delta.get("plan", state.get("artifacts", {}).get("plan", ""))[:bounds.artifacts.max_analysis_chars],
-            llm=None
+            artifacts_delta.get("plan", state.get("artifacts", {}).get("plan", ""))[
+                : bounds.artifacts.max_analysis_chars
+            ],
+            llm=None,
         )
         doubt_timer.complete()
-        artifacts_delta["doubt_resolution"] = doubt_result[:bounds.artifacts.max_doubt_chars]
-        feedback_entries.append({"skill": "doubt-driven-development", "output": doubt_result[:bounds.feedback.max_feedback_entry_chars]})
+        artifacts_delta["doubt_resolution"] = doubt_result[
+            : bounds.artifacts.max_doubt_chars
+        ]
+        feedback_entries.append(
+            {
+                "skill": "doubt-driven-development",
+                "output": doubt_result[: bounds.feedback.max_feedback_entry_chars],
+            }
+        )
 
     # ── Step 9: Generate architecture diagrams ──
-    w({"type": "progress", "phase": "PLAN", "step": "diagrams", "detail": "Running architecture-diagram-generator...", "ts": time.time()})
+    w(
+        {
+            "type": "progress",
+            "phase": "PLAN",
+            "step": "diagrams",
+            "detail": "Running architecture-diagram-generator...",
+            "ts": time.time(),
+        }
+    )
     diagrams = _generate_all_diagrams(skills, state)
 
     # ── Convert diagrams to PNG ──
@@ -113,7 +189,15 @@ def plan_node(state: dict) -> dict:
     solution_path = build_dir / "solution.md"
     solution_path.write_text(solution_md)
     audit.log_file_write("PLAN", str(solution_path), "markdown", len(solution_md))
-    w({"type": "progress", "phase": "PLAN", "step": "solution", "detail": f"solution.md written: {solution_path} ({len(solution_md)} chars)", "ts": time.time()})
+    w(
+        {
+            "type": "progress",
+            "phase": "PLAN",
+            "step": "solution",
+            "detail": f"solution.md written: {solution_path} ({len(solution_md)} chars)",
+            "ts": time.time(),
+        }
+    )
 
     # Store in artifacts for openhands_build to pick up
     artifacts_delta["solution_md"] = solution_md
@@ -124,32 +208,50 @@ def plan_node(state: dict) -> dict:
     # Extract task count
     task_count = 1
     if plan_result:
-        task_count = plan_result.count("- [") + plan_result.count("1.") + plan_result.count("2.") + plan_result.count("3.")
+        task_count = (
+            plan_result.count("- [")
+            + plan_result.count("1.")
+            + plan_result.count("2.")
+            + plan_result.count("3.")
+        )
 
     # ── Derive architectural uncertainty ──
     merged_artifacts = {**state.get("artifacts", {}), **artifacts_delta}
     arch_uncertainty = _estimate_arch_uncertainty(merged_artifacts)
 
     # ── Audit output ──
-    audit.log_node_output("PLAN", {
-        "solution_path": str(solution_path),
-        "diagram_count": diagram_count,
-        "task_count": task_count,
-        "arch_uncertainty": arch_uncertainty,
-    })
+    audit.log_node_output(
+        "PLAN",
+        {
+            "solution_path": str(solution_path),
+            "diagram_count": diagram_count,
+            "task_count": task_count,
+            "arch_uncertainty": arch_uncertainty,
+        },
+    )
     audit.log_node_transition("PLAN", "BUILD", "plan generation complete")
 
     # Update metrics
     current_metrics = state.get("metrics")
     metrics_update = None
     if current_metrics and hasattr(current_metrics, "model_copy"):
-        metrics_update = current_metrics.model_copy(update={
-            "task_count": max(task_count, 1),
-            "diagram_count": diagram_count,
-            "arch_uncertainty": arch_uncertainty,
-        })
+        metrics_update = current_metrics.model_copy(
+            update={
+                "task_count": max(task_count, 1),
+                "diagram_count": diagram_count,
+                "arch_uncertainty": arch_uncertainty,
+            }
+        )
 
-    w({"type": "progress", "phase": "PLAN", "step": "metrics", "detail": f"task_count={task_count}, arch_uncertainty={arch_uncertainty:.2f}, diagrams={diagram_count}", "ts": time.time()})
+    w(
+        {
+            "type": "progress",
+            "phase": "PLAN",
+            "step": "metrics",
+            "detail": f"task_count={task_count}, arch_uncertainty={arch_uncertainty:.2f}, diagrams={diagram_count}",
+            "ts": time.time(),
+        }
+    )
 
     # Build partial update
     update: dict = {
@@ -177,16 +279,22 @@ def _load_feedback_context(state: dict) -> str:
             return ""
         project_name = state.get("project_name", "unknown")
         query_text = f"project: {project_name} phase: plan"
-        results = query_patterns(client, {"project": project_name, "context": query_text}, top_k=bounds.feedback.max_chroma_patterns)
+        results = query_patterns(
+            client,
+            {"project": project_name, "context": query_text},
+            top_k=bounds.feedback.max_chroma_patterns,
+        )
         if not results:
             return ""
         parts = ["== Historical Planning Lessons =="]
         for i, pat in enumerate(results, 1):
             doc = pat.get("document", "")
-            parts.append(f"\n[Past Cycle {i}] (distance: {pat.get('distance', '?'):.3f})\n{doc[:bounds.feedback.max_pattern_doc_chars]}")
+            parts.append(
+                f"\n[Past Cycle {i}] (distance: {pat.get('distance', '?'):.3f})\n{doc[: bounds.feedback.max_pattern_doc_chars]}"
+            )
         parts.append("\n== End Historical Lessons ==")
         return "\n".join(parts)
-    except Exception as e:
+    except Exception:
         return ""
 
 
@@ -220,12 +328,19 @@ Diagram type mappings:
 - "data flow" → use `graph LR` or `graph TD` showing entity relationships and data movement
 - "deployment" → use `graph TD` with infrastructure nodes (servers, containers, networks)"""
 
+
 def _load_local_diagram_skill() -> str | None:
     """Load architecture-diagram-generator skill from local project skills dir."""
-    local_path = Path(__file__).resolve().parent.parent.parent / "skills" / "architecture-diagram-generator" / "SKILL.md"
+    local_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "skills"
+        / "architecture-diagram-generator"
+        / "SKILL.md"
+    )
     if local_path.exists():
         return local_path.read_text().split("---", 2)[-1].strip()
     return None
+
 
 def _get_diagram_skill(skills: dict) -> str:
     """Resolve diagram skill content: registry → local → inline fallback."""
@@ -246,11 +361,13 @@ def _build_diagram_context(state: dict) -> str:
     plan = state.get("artifacts", {}).get("plan", "")
     tasks = state.get("artifacts", {}).get("tasks", "")
     doubt = state.get("artifacts", {}).get("doubt_resolution", "")
-    return f"Spec:\n{spec[:bounds.context.diagram_spec_chars]}\n\nPlan:\n{plan[:bounds.context.diagram_plan_chars]}\n\nTasks:\n{tasks[:bounds.context.diagram_tasks_chars]}\n\nDoubt Resolution:\n{doubt[:bounds.context.diagram_doubt_chars]}"
+    return f"Spec:\n{spec[: bounds.context.diagram_spec_chars]}\n\nPlan:\n{plan[: bounds.context.diagram_plan_chars]}\n\nTasks:\n{tasks[: bounds.context.diagram_tasks_chars]}\n\nDoubt Resolution:\n{doubt[: bounds.context.diagram_doubt_chars]}"
 
 
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
-    _DIAGRAM_PLACEHOLDER = 'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
+    _DIAGRAM_PLACEHOLDER = (
+        'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
+    )
 
     spec = state.get("artifacts", {}).get("spec_refined", "")
     plan = state.get("artifacts", {}).get("plan", "")
@@ -261,7 +378,15 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     # Guard: if no real context, return placeholder instead of feeding empty input to LLM
     if not combined:
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": f"Empty context for {diagram_type} diagram; using placeholder", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "diagram",
+                "detail": f"Empty context for {diagram_type} diagram; using placeholder",
+                "ts": time.time(),
+            }
+        )
         return _DIAGRAM_PLACEHOLDER
 
     # 1) Try the registered skill first
@@ -273,19 +398,35 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
         local = _load_local_diagram_skill()
         if local:
             w = get_stream_writer() or (lambda **kw: None)
-            w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": "Using local architecture-diagram-generator skill", "ts": time.time()})
+            w(
+                {
+                    "type": "progress",
+                    "phase": "PLAN",
+                    "step": "diagram",
+                    "detail": "Using local architecture-diagram-generator skill",
+                    "ts": time.time(),
+                }
+            )
             skill_content = local
 
     # 3) Fall back to inline instructions + LLM
     if not skill_content:
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": "No diagram skill found; using inline LLM generation", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "diagram",
+                "detail": "No diagram skill found; using inline LLM generation",
+                "ts": time.time(),
+            }
+        )
         skill_content = _DIAGRAM_SKILL_INSTRUCTIONS
 
-    spec = spec[:bounds.context.diagram_spec_chars]
-    plan = plan[:bounds.context.diagram_plan_chars]
-    tasks = tasks[:bounds.context.diagram_tasks_chars]
-    doubt = doubt[:bounds.context.diagram_doubt_chars]
+    spec = spec[: bounds.context.diagram_spec_chars]
+    plan = plan[: bounds.context.diagram_plan_chars]
+    tasks = tasks[: bounds.context.diagram_tasks_chars]
+    doubt = doubt[: bounds.context.diagram_doubt_chars]
     context = f"Spec:\n{spec}\n\nPlan:\n{plan}\n\nTasks:\n{tasks}\n\nDoubt Resolution:\n{doubt}"
     task = f"Generate a {diagram_type} diagram as a Mermaid graph. Include all components, relationships, and data flows. Use the spec and plan as the primary source of truth."
     diagram = invoke_skill(
@@ -309,11 +450,21 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     plan = state.get("artifacts", {}).get("plan", "")
     interview = state.get("artifacts", {}).get("interview_notes", "")
     context_length = len(f"{spec}{plan}{interview}".strip())
-    _DIAGRAM_PLACEHOLDER = 'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
+    _DIAGRAM_PLACEHOLDER = (
+        'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
+    )
 
     if context_length < 200:
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": "Skipping diagram generation — insufficient project context", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "diagram",
+                "detail": "Skipping diagram generation — insufficient project context",
+                "ts": time.time(),
+            }
+        )
         diagrams = {}
         diagram_types = [
             ("component", "component-diagram.mmd"),
@@ -340,15 +491,25 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
         tasks = []
         for dtype, filename in diagram_types:
             w = get_stream_writer() or (lambda **kw: None)
-            w({"type": "progress", "phase": "PLAN", "step": "diagram", "detail": f"Generating {dtype} diagram (parallel)...", "ts": time.time()})
-            tasks.append(invoke_skill_async(
-                skill_content=_get_diagram_skill(skills),
-                task=f"Generate a {dtype} diagram as a Mermaid graph. Include all components, relationships, and data flows. Use the spec and plan as the primary source of truth.",
-                context=_build_diagram_context(state),
-                llm=None,
-                workflow_id=state.get("project_name", ""),
-                phase="PLAN",
-            ))
+            w(
+                {
+                    "type": "progress",
+                    "phase": "PLAN",
+                    "step": "diagram",
+                    "detail": f"Generating {dtype} diagram (parallel)...",
+                    "ts": time.time(),
+                }
+            )
+            tasks.append(
+                invoke_skill_async(
+                    skill_content=_get_diagram_skill(skills),
+                    task=f"Generate a {dtype} diagram as a Mermaid graph. Include all components, relationships, and data flows. Use the spec and plan as the primary source of truth.",
+                    context=_build_diagram_context(state),
+                    llm=None,
+                    workflow_id=state.get("project_name", ""),
+                    phase="PLAN",
+                )
+            )
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     results = asyncio.run(_run_parallel())
@@ -356,7 +517,15 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
         diagram_text: str
         if isinstance(result, Exception):
             w = get_stream_writer() or (lambda **kw: None)
-            w({"type": "error", "phase": "PLAN", "step": "diagram", "detail": f"Diagram {dtype} failed: {result}", "ts": time.time()})
+            w(
+                {
+                    "type": "error",
+                    "phase": "PLAN",
+                    "step": "diagram",
+                    "detail": f"Diagram {dtype} failed: {result}",
+                    "ts": time.time(),
+                }
+            )
             diagram_text = _DIAGRAM_PLACEHOLDER
         else:
             diagram_text = str(result)
@@ -368,12 +537,11 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
 
 def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
     import asyncio
-    import os
     import sys as _sys
     from pathlib import Path as _Path
 
     _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent.parent))
-    from tools.convert_diagrams import extract_mermaid, extract_mermaids, make_html
+    from tools.convert_diagrams import extract_mermaids, make_html
 
     conversions: list[tuple[str, _Path, _Path, bool]] = []
     for dtype, mmd_path_str in diagrams.items():
@@ -382,21 +550,34 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
             continue
         blocks = extract_mermaids(mmd_path.read_text())
         for idx, block in enumerate(blocks, 1):
-            is_primary = (idx == 1)
-            name = f"{mmd_path.stem}.png" if len(blocks) <= 1 else f"{mmd_path.stem}-{idx}.png"
+            is_primary = idx == 1
+            name = (
+                f"{mmd_path.stem}.png"
+                if len(blocks) <= 1
+                else f"{mmd_path.stem}-{idx}.png"
+            )
             png_path = _Path(str(mmd_path.parent) + "/" + name)
             try:
                 tmp_html_path = make_html(block)
                 conversions.append((dtype, _Path(tmp_html_path), png_path, is_primary))
             except Exception as e:
                 w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": "PLAN", "step": "diagram_png", "detail": f"Failed to prepare {dtype} block {idx}: {e}", "ts": time.time()})
+                w(
+                    {
+                        "type": "progress",
+                        "phase": "PLAN",
+                        "step": "diagram_png",
+                        "detail": f"Failed to prepare {dtype} block {idx}: {e}",
+                        "ts": time.time(),
+                    }
+                )
 
     if not conversions:
         return {}
 
     async def _batch_convert(convs):
         from playwright.async_api import async_playwright
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(viewport={"width": 1400, "height": 1000})
@@ -412,10 +593,26 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
                     else:
                         extra.setdefault(dtype, []).append(str(png_path))
                     w = get_stream_writer() or (lambda **kw: None)
-                    w({"type": "progress", "phase": "PLAN", "step": "diagram_png", "detail": f"{tmp_html.name} → {png_path.name}", "ts": time.time()})
+                    w(
+                        {
+                            "type": "progress",
+                            "phase": "PLAN",
+                            "step": "diagram_png",
+                            "detail": f"{tmp_html.name} → {png_path.name}",
+                            "ts": time.time(),
+                        }
+                    )
                 except Exception as e:
                     w = get_stream_writer() or (lambda **kw: None)
-                    w({"type": "progress", "phase": "PLAN", "step": "diagram_png", "detail": f"Failed to convert {dtype}: {e}", "ts": time.time()})
+                    w(
+                        {
+                            "type": "progress",
+                            "phase": "PLAN",
+                            "step": "diagram_png",
+                            "detail": f"Failed to convert {dtype}: {e}",
+                            "ts": time.time(),
+                        }
+                    )
             await browser.close()
             return results, extra
 
@@ -439,15 +636,38 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
     merged = {**state.get("artifacts", {}), **artifacts_delta}
 
     # ── Diagnostic logging ──
-    artifact_keys = ["spec_refined", "plan", "tasks", "analysis", "doubt_resolution", "checklist"]
+    artifact_keys = [
+        "spec_refined",
+        "plan",
+        "tasks",
+        "analysis",
+        "doubt_resolution",
+        "checklist",
+    ]
     available = [k for k in artifact_keys if merged.get(k)]
     missing = [k for k in artifact_keys if not merged.get(k)]
     if missing:
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "PLAN", "step": "solution", "detail": f"Solution.md: missing artifacts: {', '.join(missing)}", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "solution",
+                "detail": f"Solution.md: missing artifacts: {', '.join(missing)}",
+                "ts": time.time(),
+            }
+        )
     if available:
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "PLAN", "step": "solution", "detail": f"Solution.md: has artifacts: {', '.join(available)}", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": "PLAN",
+                "step": "solution",
+                "detail": f"Solution.md: has artifacts: {', '.join(available)}",
+                "ts": time.time(),
+            }
+        )
 
     lines = ["# Solution Design", ""]
 
@@ -524,10 +744,12 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
             lines.append("```")
             lines.append("")
         if has_placeholder:
-            lines.extend([
-                "> **Note:** Architecture diagrams could not be generated — insufficient project context from DISCOVER/DEFINE phases.",
-                "",
-            ])
+            lines.extend(
+                [
+                    "> **Note:** Architecture diagrams could not be generated — insufficient project context from DISCOVER/DEFINE phases.",
+                    "",
+                ]
+            )
 
     # ── Metrics (safe formatting — handles non-numeric values) ──
     lines.extend(["## Metrics", ""])
@@ -551,11 +773,13 @@ def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
 
     # ── Note about missing artifacts ──
     if missing:
-        lines.extend([
-            "## Notes",
-            f"*Artifacts not generated (may need LLM connection or skill configuration):* {', '.join(missing)}",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Notes",
+                f"*Artifacts not generated (may need LLM connection or skill configuration):* {', '.join(missing)}",
+                "",
+            ]
+        )
 
     lines.append("---")
     lines.append("*Generated by Loop Engineering PLAN phase*")
