@@ -10,6 +10,7 @@ Uses LangGraph OOTB APIs:
 Both modes import this module. Graph construction and state initialization
 are identical. Only the UX layer (CLI prompts vs WebSocket) differs.
 """
+
 import asyncio
 import json
 import os
@@ -26,6 +27,7 @@ def get_stream_writer():
         return _raw_get_stream_writer()
     except RuntimeError:
         return lambda *a, **kw: None
+
 
 # Ensure project root is on path so config.loader resolves
 _project_root = Path(__file__).resolve().parent.parent
@@ -57,7 +59,9 @@ def _run_phase_eval(phase: str, chunk: dict) -> None:
     artifacts = chunk.get("artifacts") or {}
 
     if phase == "DISCOVER":
-        spec_text = artifacts.get("spec_refined", "") or artifacts.get("requirement_md", "")
+        spec_text = artifacts.get("spec_refined", "") or artifacts.get(
+            "requirement_md", ""
+        )
         if spec_text:
             px_evaluator.eval_spec(spec_text)
 
@@ -147,9 +151,15 @@ def build_executor_state(
         next_phase="DEFINE",
         project_name=project_name,
         metrics=CycleMetrics(
-            spec_confidence=0.0, arch_uncertainty=0.0, task_count=0,
-            review_revisions=0, security_findings=0, uat_pass_rate=0.0,
-            latency_ms=0.0, test_flakiness_rate=0.0, launch_success=False,
+            spec_confidence=0.0,
+            arch_uncertainty=0.0,
+            task_count=0,
+            review_revisions=0,
+            security_findings=0,
+            uat_pass_rate=0.0,
+            latency_ms=0.0,
+            test_flakiness_rate=0.0,
+            launch_success=False,
         ),
         config_version="1",
         artifacts={
@@ -206,6 +216,7 @@ def _get_checkpointer():
     <build_dir>/checkpoints.db.
     """
     from config.loader import config as _cfg
+
     build_dir = _cfg.paths.build_dir
     db_path = os.environ.get("CHECKPOINT_DB", os.path.join(build_dir, "checkpoints.db"))
     db_dir = os.path.dirname(db_path)
@@ -224,8 +235,11 @@ class WorkflowRunner:
 
     def __init__(self, auto_approve=False):
         import uuid as _uuid
+
         self.checkpointer = _get_checkpointer()
-        self.graph = get_graph(checkpointer=self.checkpointer, auto_approve=auto_approve)
+        self.graph = get_graph(
+            checkpointer=self.checkpointer, auto_approve=auto_approve
+        )
         self.thread_id = str(_uuid.uuid4())
         self.auto_approve = auto_approve
 
@@ -244,7 +258,9 @@ class WorkflowRunner:
         """Run the workflow synchronously with observability instrumentation."""
         config.reset_paths(project_name)
         self.checkpointer = self._get_fresh_checkpointer()
-        self.graph = build_graph(checkpointer=self.checkpointer, auto_approve=self.auto_approve)
+        self.graph = build_graph(
+            checkpointer=self.checkpointer, auto_approve=self.auto_approve
+        )
         self.thread_id = str(__import__("uuid").uuid4())
 
         cycle_id = "1"
@@ -259,23 +275,48 @@ class WorkflowRunner:
         if auto_approve:
             state["diagram_status"] = "approved"
 
-        log_event(logger, "workflow.run", project=project_name, skip_discover=state.get("skip_discover"))
+        log_event(
+            logger,
+            "workflow.run",
+            project=project_name,
+            skip_discover=state.get("skip_discover"),
+        )
 
         writer = get_stream_writer()
         if state.get("skip_discover"):
-            writer({"type": "progress", "phase": "DISCOVER", "step": "status", "detail": "Skipped — no context folder (greenfield mode)", "ts": time.time()})
+            writer(
+                {
+                    "type": "progress",
+                    "phase": "DISCOVER",
+                    "step": "status",
+                    "detail": "Skipped — no context folder (greenfield mode)",
+                    "ts": time.time(),
+                }
+            )
         else:
-            writer({"type": "progress", "phase": "DISCOVER", "step": "status", "detail": f"Scanning {context_folder}...", "ts": time.time()})
+            writer(
+                {
+                    "type": "progress",
+                    "phase": "DISCOVER",
+                    "step": "status",
+                    "detail": f"Scanning {context_folder}...",
+                    "ts": time.time(),
+                }
+            )
 
         async def _run():
             last = None
-            async for chunk in self._astream_with_hil(state, auto_approve, on_hil=self._hil_cli):
+            async for chunk in self._astream_with_hil(
+                state, auto_approve, on_hil=self._hil_cli
+            ):
                 last = chunk
             return last
 
         return asyncio.run(_run())
 
-    async def _astream_with_hil(self, state: WorkflowState, auto_approve: bool, on_hil, config=None):
+    async def _astream_with_hil(
+        self, state: WorkflowState, auto_approve: bool, on_hil, config=None
+    ):
         """Thin CLI adapter over the shared HIL/resume loop (EYW-236).
 
         The stream → interrupt → resume cycle now lives in
@@ -319,66 +360,78 @@ class WorkflowRunner:
                     tracer.record_phase(prev, duration, success, project=project_name)
                     health_module.track_phase(prev, duration, success)
                     _run_phase_eval(prev, chunk)
-                    self._w()({
-                        "type": "progress",
-                        "phase": prev,
-                        "step": "status",
-                        "detail": f"Completed ({duration}s)",
-                        "ts": time.time(),
-                    })
+                    self._w()(
+                        {
+                            "type": "progress",
+                            "phase": prev,
+                            "step": "status",
+                            "detail": f"Completed ({duration}s)",
+                            "ts": time.time(),
+                        }
+                    )
                 self._phase_start[phase] = time.time()
                 self._prev = phase
-                self._w()({
-                    "type": "progress",
-                    "phase": phase,
-                    "step": "status",
-                    "detail": "Started...",
-                    "ts": time.time(),
-                })
+                self._w()(
+                    {
+                        "type": "progress",
+                        "phase": phase,
+                        "step": "status",
+                        "detail": "Started...",
+                        "ts": time.time(),
+                    }
+                )
                 health_module.set_current_phase(project_name, phase)
 
             async def on_interrupt(self, pause):
-                self._w()({
-                    "type": "progress",
-                    "phase": pause.phase or "UNKNOWN",
-                    "step": "interrupt",
-                    "detail": "GraphInterrupt caught",
-                    "ts": time.time(),
-                })
+                self._w()(
+                    {
+                        "type": "progress",
+                        "phase": pause.phase or "UNKNOWN",
+                        "step": "interrupt",
+                        "detail": "GraphInterrupt caught",
+                        "ts": time.time(),
+                    }
+                )
 
             async def on_resumed(self, pause, resume_data, update_data):
                 detail = "Resuming with Command(resume=...)"
                 if pause.phase == "ARCH_REVIEW" and isinstance(resume_data, dict):
                     detail = f"approved={resume_data.get('approved')}"
-                self._w()({
-                    "type": "progress",
-                    "phase": pause.phase,
-                    "step": "resume",
-                    "detail": detail,
-                    "ts": time.time(),
-                })
+                self._w()(
+                    {
+                        "type": "progress",
+                        "phase": pause.phase,
+                        "step": "resume",
+                        "detail": detail,
+                        "ts": time.time(),
+                    }
+                )
 
             async def on_complete(self, final_state):
                 # Old CLI: final-phase writer event only (no tracer/health/eval).
                 if self._prev and self._prev in self._phase_start:
                     duration = round(time.time() - self._phase_start[self._prev], 3)
-                    self._w()({
-                        "type": "progress",
-                        "phase": self._prev,
-                        "step": "status",
-                        "detail": f"Completed ({duration}s)",
-                        "ts": time.time(),
-                    })
+                    self._w()(
+                        {
+                            "type": "progress",
+                            "phase": self._prev,
+                            "step": "status",
+                            "detail": f"Completed ({duration}s)",
+                            "ts": time.time(),
+                        }
+                    )
 
             async def on_error(self, error):
                 log_event(logger, "stream.error", error=str(error))
-                self._w()({
-                    "type": "progress",
-                    "phase": "STREAM",
-                    "step": "error",
-                    "detail": str(error),
-                    "ts": time.time(),
-                })
+                self._w()(
+                    {
+                        "type": "progress",
+                        "phase": "STREAM",
+                        "step": "error",
+                        "detail": str(error),
+                        "ts": time.time(),
+                    }
+                )
 
         events = _CliEvents()
 
@@ -416,7 +469,15 @@ class WorkflowRunner:
             # deliberately fail-safe: a regulated change is not auto-approved.)
             if phase == "ARCH_REVIEW" and self._archg_pending_blocks(state):
                 w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": "  → Auto-approve BLOCKED — pending ACHG in flight (EYW-184 interlock). Manual decision required.", "ts": time.time()})
+                w(
+                    {
+                        "type": "progress",
+                        "phase": "ARCH_REVIEW",
+                        "step": "progress",
+                        "detail": "  → Auto-approve BLOCKED — pending ACHG in flight (EYW-184 interlock). Manual decision required.",
+                        "ts": time.time(),
+                    }
+                )
             else:
                 return self._hil_auto_approve(phase, state)
 
@@ -428,9 +489,13 @@ class WorkflowRunner:
         """EYW-184: True while any ACHG has PENDING board status (blocks ARCH_REVIEW auto-approve)."""
         try:
             from graph.achg_scanner import has_pending_achg, scan_achg_context
+
             arts = (state or {}).get("artifacts") or {}
             ctx = arts.get("achg_context")
-            if not (isinstance(ctx, dict) and (ctx.get("pending_achgs") or ctx.get("rejected_achgs"))):
+            if not (
+                isinstance(ctx, dict)
+                and (ctx.get("pending_achgs") or ctx.get("rejected_achgs"))
+            ):
                 ctx = scan_achg_context((state or {}).get("context_folder") or "")
             return has_pending_achg(ctx)
         except Exception:
@@ -439,10 +504,20 @@ class WorkflowRunner:
     def _hil_auto_approve(self, phase: str, state: WorkflowState) -> dict:
         """Generate automatic responses when auto_approve=True."""
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": phase, "step": "auto_approve", "detail": "Auto-approving HIL gate", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": phase,
+                "step": "auto_approve",
+                "detail": "Auto-approving HIL gate",
+                "ts": time.time(),
+            }
+        )
 
         if phase == "DISCOVER":
-            hil_count = int((state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0)
+            hil_count = int(
+                (state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0
+            )
             if hil_count == 0:
                 # Setup pause — extract from state
                 return {
@@ -454,7 +529,7 @@ class WorkflowRunner:
             else:
                 # Interview pause — generate answers from spec
                 spec = (state or {}).get("spec_text", "")
-                interview = {
+                interview: dict = {
                     "core_behavior": "",
                     "data_model": "",
                     "api_surface": "",
@@ -468,7 +543,10 @@ class WorkflowRunner:
                 if spec:
                     interview["core_behavior"] = spec
                 interview["discover_hil_count"] = hil_count + 1
-                return {"interview_notes": json.dumps(interview), "discover_interview_done": True}
+                return {
+                    "interview_notes": json.dumps(interview),
+                    "discover_interview_done": True,
+                }
 
         if phase == "ARCH_REVIEW":
             return {"approved": True, "feedback": "Auto-approved"}
@@ -479,12 +557,22 @@ class WorkflowRunner:
     def _hil_cli_sync(self, phase: str, state: WorkflowState):  # type: ignore[override]
         """Synchronous part that actually blocks on input()."""
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": phase, "step": "hil", "detail": "Human Input Required", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": phase,
+                "step": "hil",
+                "detail": "Human Input Required",
+                "ts": time.time(),
+            }
+        )
 
         if phase == "DISCOVER":
             # Determine which interrupt fired by checking the suspended state
             # for discover_hil_count — Pause 1 = 0, Pause 2 = 1+
-            hil_count = (state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0
+            hil_count = (state or {}).get("artifacts", {}).get(
+                "discover_hil_count", 0
+            ) or 0
             if hil_count == 0:
                 return self._cli_project_setup(state)
             return self._cli_interview(state)
@@ -567,25 +655,89 @@ class WorkflowRunner:
         analysis = artifacts.get("analysis", "")[:300]
 
         w = get_stream_writer() or (lambda **kw: None)
-        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": "ARCHITECTURE & PLAN REVIEW", "ts": time.time()})
-        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Spec: {len(artifacts.get('spec_refined', ''))} chars", "ts": time.time()})
-        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Plan: {len(plan)} chars preview → {plan[:120]}...", "ts": time.time()})
-        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Tasks: {len(tasks)} chars", "ts": time.time()})
+        w(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "display",
+                "detail": "ARCHITECTURE & PLAN REVIEW",
+                "ts": time.time(),
+            }
+        )
+        w(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "display",
+                "detail": f"Spec: {len(artifacts.get('spec_refined', ''))} chars",
+                "ts": time.time(),
+            }
+        )
+        w(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "display",
+                "detail": f"Plan: {len(plan)} chars preview → {plan[:120]}...",
+                "ts": time.time(),
+            }
+        )
+        w(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "display",
+                "detail": f"Tasks: {len(tasks)} chars",
+                "ts": time.time(),
+            }
+        )
         if analysis:
-            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Analysis: {analysis[:120]}...", "ts": time.time()})
+            w(
+                {
+                    "type": "progress",
+                    "phase": "ARCH_REVIEW",
+                    "step": "display",
+                    "detail": f"Analysis: {analysis[:120]}...",
+                    "ts": time.time(),
+                }
+            )
         if diagrams:
-            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"Diagrams: {', '.join(diagrams.keys())}", "ts": time.time()})
+            w(
+                {
+                    "type": "progress",
+                    "phase": "ARCH_REVIEW",
+                    "step": "display",
+                    "detail": f"Diagrams: {', '.join(diagrams.keys())}",
+                    "ts": time.time(),
+                }
+            )
             for dtype, png_path in diagram_pngs.items():
                 status = "✓ rendered" if png_path else "✗ no PNG"
-                w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": f"- {dtype}: {status}", "ts": time.time()})
-        w({"type": "progress", "phase": "ARCH_REVIEW", "step": "display", "detail": "End of review", "ts": time.time()})
+                w(
+                    {
+                        "type": "progress",
+                        "phase": "ARCH_REVIEW",
+                        "step": "display",
+                        "detail": f"- {dtype}: {status}",
+                        "ts": time.time(),
+                    }
+                )
+        w(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "display",
+                "detail": "End of review",
+                "ts": time.time(),
+            }
+        )
 
         answer = input("  Approve architecture & plan? (y/n): ").strip().lower()
         if answer == "y":
             return {"approved": True, "feedback": ""}
         elif answer == "n":
-            feedback = input("  Feedback for PLAN (will be sent back for regeneration): ").strip()
+            feedback = input(
+                "  Feedback for PLAN (will be sent back for regeneration): "
+            ).strip()
             return {"approved": False, "feedback": feedback}
         return {"approved": True, "feedback": ""}
-
-

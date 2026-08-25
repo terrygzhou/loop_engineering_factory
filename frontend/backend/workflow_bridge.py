@@ -11,7 +11,6 @@ Skill-driven HIL flow:
 import asyncio
 import json
 import os
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -39,6 +38,7 @@ except ImportError:
 
 # ── EYW-184 safety interlocks (ACHG ↔ ARCH_REVIEW, EYW-171 §8) ──
 from graph.achg_scanner import has_pending_achg, scan_achg_context
+from graph.runner import WorkflowEvents, run_workflow
 
 # ─── Skill-driven interview questions ─────────────────────────────
 # Derived from interview-me SKILL.md — the 9 question categories
@@ -107,6 +107,59 @@ INTERVIEW_QUESTIONS = [
         "required": False,
     },
 ]
+
+
+class _BridgeEvents(WorkflowEvents):
+    """EYW-236: Web bridge event sink for the shared HIL/resume runner.
+
+    Each hook maps 1:1 onto the code that used to be inlined in
+    WorkflowBridge.run_real's astream loop (behavior preserved bit-for-bit,
+    including the duplicate OTEL hil.pause event emitted both here and in
+    _handle_hil).
+    """
+
+    def __init__(self, bridge):
+        self._bridge = bridge
+
+    async def on_custom(self, payload):
+        await self._bridge._emit_custom_event(payload)
+
+    async def on_values(self, chunk, phase):
+        await self._bridge._on_values_chunk(chunk, phase)
+
+    async def on_interrupt(self, pause):
+        b = self._bridge
+        b._capture_bridge_interrupt(pause)
+        print(f"  → HIL pause for: {pause.phase}", flush=True)
+        # OTEL: record HIL pause (guard against None which crashes OTEL)
+        if _OTEL_BRIDGE and b._root_span:
+            b._root_span.add_event(
+                "hil.pause", {"phase": pause.phase, "type": pause.hil_type or "unknown"}
+            )
+
+    async def on_resumed(self, pause, resume_data, update_data):
+        b = self._bridge
+        print(f"  → Resuming {pause.phase} with HIL response", flush=True)
+        b.status = "running"
+        b.waiting_for = None
+
+    async def on_complete(self, final_state):
+        await self._bridge._on_workflow_complete(final_state)
+
+    async def on_error(self, error):
+        # Re-raise so run_real's except-Exception handler performs the legacy
+        # side effects (status=error, SYSTEM error event, OTEL) and then
+        # propagates exactly like the old loop did.
+        raise error
+
+    async def on_stale_nodes(self, pending):
+        print(
+            f"[Bridge] Stream ended but {len(pending)} node(s) pending: {pending} — continuing",
+            flush=True,
+        )
+
+    async def on_aborted(self):
+        pass
 
 
 class WorkflowBridge:
@@ -912,8 +965,6 @@ class WorkflowBridge:
         import uuid as _uuid
 
         from graph.executor import _get_checkpointer
-        from langgraph.errors import GraphInterrupt
-        from langgraph.types import Command
 
         checkpointer = _get_checkpointer()
         if not self._thread_id:
@@ -952,273 +1003,40 @@ class WorkflowBridge:
 
             graph = build_graph(checkpointer=checkpointer, auto_approve=False)
 
-            # ── astream([values, custom]) loop — EYW-234: values snapshots
-            # + node writer() progress events (previously dropped in Web mode) ──
-            # With a list stream mode, LangGraph yields (mode, payload) tuples.
-            current_input = None if is_recovery else state
-            chunk = None  # last yielded state snapshot
-
-            while not self._aborted:
-                # Race: drain stream vs abort signal
-                abort_task = asyncio.ensure_future(abort_mgr.wait(999))
-
-                try:
-                    async for item in graph.astream(
-                        current_input, stream_mode=["values", "custom"], config=config
+            # ── EYW-236: shared HIL/resume runner (graph/runner.py) ──
+            # The stream → interrupt → resume cycle now lives in run_workflow,
+            # shared with the CLI (graph/executor.py). The bridge supplies its
+            # event sink (_BridgeEvents) and the HIL input handler; values
+            # snapshot handling, __interrupt__ detection, stale-node
+            # continuation and resume payload construction all come from the
+            # shared runner.
+            async def _hil_input(pause):
+                data = await self._handle_hil(pause.phase, pause.hil_type, pause.state)
+                # Legacy bridge fallback: DISCOVER setup fields fall back to
+                # the start-request data when the user left them blank.
+                if pause.phase == "DISCOVER" and isinstance(data, dict):
+                    data = dict(data)
+                    for key in (
+                        "project_name",
+                        "project_description",
+                        "context_folder",
                     ):
-                        if self._aborted:
-                            break
+                        if not data.get(key):
+                            fallback = getattr(self, "_" + key, "") or ""
+                            if fallback:
+                                data[key] = fallback
+                return data
 
-                        # Race check: if abort fired, stop processing
-                        if abort_task.done() and abort_mgr.is_aborted:
-                            break
-
-                        # Normalize chunk shape: list stream mode → (mode, payload).
-                        # Defensive fallback: a bare dict is treated as a values
-                        # snapshot (legacy single-mode shape).
-                        if (
-                            isinstance(item, tuple)
-                            and len(item) == 2
-                            and item[0] in ("values", "custom")
-                        ):
-                            mode, payload = item
-                        else:
-                            mode, payload = "values", item
-
-                        if mode == "custom":
-                            # Node writer() progress event — normalize to the
-                            # standard bridge event shape on the same channels.
-                            await self._emit_custom_event(payload)
-                            continue
-
-                        chunk = payload
-                        # Full merged state — phase is always present
-                        phase = chunk.get("phase", "UNKNOWN")
-                        artifacts = chunk.get("artifacts", {})
-                        # ── LangGraph 1.x: interrupt() no longer raises; it
-                        # yields __interrupt__ in the stream chunk and completes.
-                        # Capture interrupt data, then re-raise so the pause handler runs. ──
-                        if chunk.get("__interrupt__"):
-                            interrupt_data = chunk["__interrupt__"]
-                            # Extract type from Interrupt(value={'type': 'project_setup', ...})
-                            if interrupt_data and len(interrupt_data) > 0:
-                                iv = interrupt_data[0]
-                                if hasattr(iv, "value") and isinstance(iv.value, dict):
-                                    self._interrupt_type = iv.value.get("type")
-                                    # Store full interrupt value for question extraction
-                                    self._interrupt_value = iv.value
-                                else:
-                                    self._interrupt_type = str(iv)
-                                    self._interrupt_value = None
-                            else:
-                                self._interrupt_type = None
-                                self._interrupt_value = None
-                            from langgraph.errors import GraphInterrupt
-
-                            raise GraphInterrupt("Interrupted for HIL input")
-
-                        # Capture artifacts
-                        if artifacts and phase in self.phase_states:
-                            self.phase_states[phase]["artifacts"].update(artifacts)
-
-                        # Deduplicate artifact events
-                        for artifact_name, artifact_value in artifacts.items():
-                            artifact_key = f"{phase}:{artifact_name}"
-                            if (
-                                artifact_key not in self._seen_artifacts
-                                or self._seen_artifacts[artifact_key] != artifact_value
-                            ):
-                                self._seen_artifacts[artifact_key] = artifact_value
-                                ev = self.add_event(
-                                    phase,
-                                    "artifact",
-                                    f"{artifact_name}: {str(artifact_value)[:200]}",
-                                    {
-                                        "artifact_name": artifact_name,
-                                        "artifact_value": artifact_value,
-                                    },
-                                )
-                                await self.broadcast(ev)
-
-                        # Detect phase transitions
-                        if phase != self._last_phase:
-                            if self._last_phase is not None:
-                                ev = self.add_event(
-                                    self._last_phase,
-                                    "completed",
-                                    f"{self._last_phase} completed",
-                                )
-                                await self.broadcast(ev)
-                                # OTEL: record completed phase
-                                if _OTEL_BRIDGE and self._root_span:
-                                    self._root_span.add_event(
-                                        "phase.completed", {"phase": self._last_phase}
-                                    )
-                            self.current_phase = phase
-                            ev = self.add_event(
-                                phase, "started", f"Entering {phase} phase"
-                            )
-                            await self.broadcast(ev)
-                            # OTEL: record phase start
-                            if _OTEL_BRIDGE and self._root_span:
-                                self._root_span.add_event(
-                                    "phase.started", {"phase": phase}
-                                )
-                            self._last_phase = phase
-                        else:
-                            ev = self.add_event(
-                                phase, "progress", f"{phase} processing..."
-                            )
-                            await self.broadcast(ev)
-
-                except GraphInterrupt:
-                    # Cancel abort waiter
-                    if not abort_task.done():
-                        abort_task.cancel()
-                        try:
-                            await abort_task
-                        except BaseException:
-                            pass
-                    if self._aborted:
-                        break
-
-                    # Get the suspended graph state for HIL
-                    graph_state = await graph.aget_state(config)
-                    if not graph_state.next and not graph_state.interrupts:
-                        # Normal end disguised as interrupt
-                        break
-                    # Nodes not in interrupt_after can have empty graph_state.next
-                    # while still having pending interrupts. Check both before breaking.
-
-                    current_chunk = graph_state.values or {}
-                    # Determine interrupted phase — prefer the interrupting node's name
-                    # over the stale phase in current_chunk (which reflects the previous phase).
-                    if graph_state.next and len(graph_state.next) > 0:
-                        node_name = graph_state.next[0]
-                        # Map node names to phase names (node names are typically snake_case of phase)
-                        if "discover" in node_name:
-                            interrupted_phase = "DISCOVER"
-                        elif "define" in node_name:
-                            interrupted_phase = "DEFINE"
-                        elif "plan" in node_name:
-                            interrupted_phase = "PLAN"
-                        elif "review" in node_name or "arch" in node_name:
-                            interrupted_phase = "ARCH_REVIEW"
-                        elif "build" in node_name:
-                            interrupted_phase = "BUILD"
-                        elif "seed" in node_name:
-                            interrupted_phase = "SEED_DATA"
-                        elif "verify" in node_name:
-                            interrupted_phase = "VERIFY"
-                        elif "ship" in node_name:
-                            interrupted_phase = "SHIP"
-                        elif "reflect" in node_name:
-                            interrupted_phase = "REFLECT"
-                        else:
-                            interrupted_phase = node_name
-                    else:
-                        interrupted_phase = (
-                            current_chunk.get("phase")
-                            or current_chunk.get("next_phase")
-                            or self._last_phase
-                            or "UNKNOWN"
-                        )
-                    interrupted_type = getattr(self, "_interrupt_type", None)
-                    if not interrupted_type:
-                        # Fallback: try graph_state.interrupts
-                        if graph_state.interrupts and len(graph_state.interrupts) > 0:
-                            first = graph_state.interrupts[0]
-                            if hasattr(first, "value"):
-                                # Extract type key from interrupt value dict
-                                if isinstance(first.value, dict):
-                                    interrupted_type = first.value.get("type")
-                                else:
-                                    interrupted_type = str(first.value)
-                            else:
-                                interrupted_type = str(first)
-                    print(
-                        f"  → HIL pause for: {interrupted_phase}, type={interrupted_type}"
-                    )
-                    # OTEL: record HIL pause (guard against None which crashes OTEL)
-                    if _OTEL_BRIDGE and self._root_span:
-                        otel_type = interrupted_type or "unknown"
-                        self._root_span.add_event(
-                            "hil.pause", {"phase": interrupted_phase, "type": otel_type}
-                        )
-
-                    user_input = await self._handle_hil(
-                        interrupted_phase, interrupted_type, current_chunk
-                    )
-                    if self._aborted:
-                        break
-
-                    resume_result = self._build_resume_data(
-                        interrupted_phase, user_input
-                    )
-                    resume_data, update_data = (
-                        resume_result
-                        if isinstance(resume_result, tuple)
-                        else (resume_result, None)
-                    )
-                    print(
-                        f"  → Resuming {interrupted_phase} with Command(resume=..., update=...)"
-                    )
-                    self.status = "running"
-                    self.waiting_for = None
-                    # EYW-233: no skill_callback re-injection — skill events
-                    # travel via the node writer() "custom" stream, which is
-                    # active for every (re)streamed cycle.
-                    current_input = Command(resume=[resume_data], update=update_data)
-                    continue
-
-                # Cancel abort waiter (normal completion path)
-                if not abort_task.done():
-                    abort_task.cancel()
-                    try:
-                        await abort_task
-                    except BaseException:
-                        pass
-
-                if self._aborted:
-                    break
-
-                # Normal completion — check if graph still has pending nodes.
-                # interrupt_after can cause the stream to exit after a node
-                # completes even though downstream edges remain (e.g. DISCOVER
-                # → DEFINE). If next is non-empty, continue streaming.
-                graph_state = await graph.aget_state(config)
-                if graph_state.next:
-                    print(
-                        f"[Bridge] Stream ended but {len(graph_state.next)} node(s) pending: {graph_state.next} — continuing",
-                        flush=True,
-                    )
-                    current_input = None
-                    continue
-
-                if self._last_phase:
-                    ev = self.add_event(
-                        self._last_phase, "completed", f"{self._last_phase} completed"
-                    )
-                    await self.broadcast(ev)
-
-                self.status = "complete"
-                self.current_phase = ""
-                self.waiting_for = None
-                last_keys = list(chunk.keys()) if chunk else []
-                print(
-                    f"[Bridge] Workflow complete, final state keys: {last_keys}",
-                    flush=True,
-                )
-                ev = self.add_event(
-                    "SYSTEM",
-                    "completed",
-                    f"Cycle {self.cycle} complete — all phases done",
-                )
-                await self.broadcast(ev)
-                if _OTEL_BRIDGE and self._root_span:
-                    self._root_span.set_status(_trace.Status(_trace.StatusCode.OK))
-                    self._root_span.end()
-                break
+            async for _chunk in run_workflow(
+                graph,
+                config=config,
+                input_state=state,
+                input_handler=_hil_input,
+                events=_BridgeEvents(self),
+                auto_approve=self._auto_approve,
+                abort_check=lambda: self._aborted,
+            ):
+                pass
 
         except asyncio.CancelledError:
             if self.status != "complete":
@@ -1258,6 +1076,101 @@ class WorkflowBridge:
                 await checkpointer.close()
             except Exception:
                 pass
+
+    async def _on_values_chunk(self, chunk, phase):
+        """Bridge sink for values snapshots (extracted from the old loop, EYW-236)."""
+        artifacts = chunk.get("artifacts", {})
+
+        # Capture artifacts
+        if artifacts and phase in self.phase_states:
+            self.phase_states[phase]["artifacts"].update(artifacts)
+
+        # Deduplicate artifact events
+        for artifact_name, artifact_value in artifacts.items():
+            artifact_key = f"{phase}:{artifact_name}"
+            if (
+                artifact_key not in self._seen_artifacts
+                or self._seen_artifacts[artifact_key] != artifact_value
+            ):
+                self._seen_artifacts[artifact_key] = artifact_value
+                ev = self.add_event(
+                    phase,
+                    "artifact",
+                    f"{artifact_name}: {str(artifact_value)[:200]}",
+                    {
+                        "artifact_name": artifact_name,
+                        "artifact_value": artifact_value,
+                    },
+                )
+                await self.broadcast(ev)
+
+        # Detect phase transitions
+        if phase != self._last_phase:
+            if self._last_phase is not None:
+                ev = self.add_event(
+                    self._last_phase, "completed", f"{self._last_phase} completed"
+                )
+                await self.broadcast(ev)
+                # OTEL: record completed phase
+                if _OTEL_BRIDGE and self._root_span:
+                    self._root_span.add_event(
+                        "phase.completed", {"phase": self._last_phase}
+                    )
+            self.current_phase = phase
+            ev = self.add_event(phase, "started", f"Entering {phase} phase")
+            await self.broadcast(ev)
+            # OTEL: record phase start
+            if _OTEL_BRIDGE and self._root_span:
+                self._root_span.add_event("phase.started", {"phase": phase})
+            self._last_phase = phase
+        else:
+            ev = self.add_event(phase, "progress", f"{phase} processing...")
+            await self.broadcast(ev)
+
+    async def _on_workflow_complete(self, final_state):
+        """Normal completion tail (extracted from the old loop, EYW-236)."""
+        if self._last_phase:
+            ev = self.add_event(
+                self._last_phase, "completed", f"{self._last_phase} completed"
+            )
+            await self.broadcast(ev)
+
+        self.status = "complete"
+        self.current_phase = ""
+        self.waiting_for = None
+        last_keys = list(final_state.keys()) if final_state else []
+        print(
+            f"[Bridge] Workflow complete, final state keys: {last_keys}",
+            flush=True,
+        )
+        ev = self.add_event(
+            "SYSTEM",
+            "completed",
+            f"Cycle {self.cycle} complete — all phases done",
+        )
+        await self.broadcast(ev)
+        if _OTEL_BRIDGE and self._root_span:
+            self._root_span.set_status(_trace.Status(_trace.StatusCode.OK))
+            self._root_span.end()
+
+    def _capture_bridge_interrupt(self, pause):
+        """Keep _interrupt_type/_interrupt_value for form prefill (EYW-236).
+
+        Same extraction rules as the old loop: the first interrupt value's
+        'type' key, else str(iv); both None when no interrupts present.
+        """
+        interrupts = getattr(pause, "interrupts", None) or []
+        if interrupts:
+            iv = interrupts[0]
+            if hasattr(iv, "value") and isinstance(iv.value, dict):
+                self._interrupt_type = iv.value.get("type")
+                self._interrupt_value = iv.value
+            else:
+                self._interrupt_type = str(iv)
+                self._interrupt_value = None
+        else:
+            self._interrupt_type = None
+            self._interrupt_value = None
 
     def _classify_hil_type(self, interrupted_phase, interrupted_type):
         """Classify HIL interaction type."""
@@ -1462,127 +1375,6 @@ class WorkflowBridge:
                 flush=True,
             )
             return {"pending_achgs": [], "rejected_achgs": [], "note": ""}
-
-    def _parse_formatted_input(self, text: str) -> dict[str, str] | None:
-        """Parse formatted input strings from the JS frontend.
-
-        The frontend sends formatted text like:
-          "[Project Name] ContactHub\n\n[Description] App for contacts and calendar\n\n[Context Folder] /path"
-
-        Maps known label keywords to their canonical keys so the backend
-        can reconstruct the resume dict regardless of whether the frontend
-        sent a dict or a formatted string.
-        """
-        label_to_key = {
-            "project name": "project_name",
-            "description": "project_description",
-            "context folder": "context_folder",
-            "core behavior": "core_behavior",
-            "data model": "data_model",
-            "api surface": "api_surface",
-            "validation": "validation",
-            "deployment": "deployment",
-            "user experience": "user_experience",
-            "error handling": "error_handling",
-            "authentication": "authentication",
-            "testing": "testing",
-        }
-
-        parsed = {}
-        for line in text.split("\n"):
-            line = line.strip()
-            match = re.match(r"^\[([^\]]+)\]\s*(.*)", line)
-            if match:
-                label = match.group(1).lower()
-                value = match.group(2).strip()
-                if not value:
-                    continue
-                key = label_to_key.get(label, label.replace(" ", "_"))
-                parsed[key] = value
-
-        return parsed if parsed else None
-
-    def _build_resume_data(self, phase, user_input):
-        """Build resume payload for Command(resume=...).
-
-        Returns (resume_data, update_data) tuple.
-        update_data is passed to Command(update=...) to pre-seed the
-        checkpoint so guards see fresh state on node re-run.
-        """
-        if user_input is None:
-            user_input = {"approved": True, "interview_notes": ""}
-        self.waiting_for = None
-
-        if phase == "DISCOVER":
-            if isinstance(user_input, dict):
-                resume = user_input
-            elif isinstance(user_input, str):
-                # Parse formatted strings like "[Project Name] X\n[Description] Y"
-                parsed = self._parse_formatted_input(user_input)
-                if parsed:
-                    resume = parsed
-                else:
-                    resume = {"interview_notes": user_input}
-            else:
-                resume = {"interview_notes": str(user_input)}
-
-            itype = getattr(self, "_interrupt_type", None)
-            # Build interview_notes from whatever form the user input took
-            if itype == "interview":
-                # User may have sent individual answer keys or a pre-formed interview_notes
-                if resume.get("interview_notes"):
-                    interview_notes = resume["interview_notes"]
-                elif isinstance(resume, dict) and any(
-                    k in resume for k in ("core_behavior", "data_model", "api_surface")
-                ):
-                    # Convert answer dict to structured notes string
-                    parts = []
-                    for k, v in resume.items():
-                        if k not in ("approved",) and v:
-                            parts.append(f"{k}: {v}")
-                    interview_notes = "\n".join(parts)
-                    resume["interview_notes"] = interview_notes
-                elif isinstance(resume, dict) and resume:
-                    # Generic key-value answers (from dynamic questions)
-                    parts = []
-                    for k, v in resume.items():
-                        if k not in ("approved", "input_type") and v:
-                            label = k.replace("_", " ").title()
-                            parts.append(f"[{label}] {v}")
-                    interview_notes = "\n\n".join(parts)
-                    if not interview_notes:
-                        interview_notes = str(resume.get("interview_notes", ""))
-                    resume["interview_notes"] = interview_notes
-                else:
-                    interview_notes = str(resume.get("interview_notes", ""))
-                update = {
-                    "interview_notes": interview_notes,
-                    "discover_interview_done": True,
-                }
-            elif itype == "project_setup":
-                interview_notes = ""
-                # Persist project name/description into state so the node
-                # can read them on re-run (they were only in resume dict).
-                update = {
-                    "project_name": resume.get("project_name", ""),
-                    "project_description": resume.get("project_description", ""),
-                    "discover_setup_done": True,
-                }
-                if resume.get("context_folder"):
-                    update["context_folder"] = resume["context_folder"]
-            else:
-                interview_notes = resume.get("interview_notes", "")
-                update = None
-            return resume, update
-        elif phase == "ARCH_REVIEW":
-            return {
-                "approved": bool(user_input.get("approved", True)),
-                "feedback": user_input.get(
-                    "feedback", user_input.get("user_review_comments", "")
-                ),
-            }, None
-        else:
-            return {"human_approval_required": False}, None
 
     def _build_executor_state(self, cycle_id, project_name, spec_text, context_folder):
         """Build state via shared executor — identical to what CLI uses.

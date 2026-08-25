@@ -214,6 +214,14 @@ def _parse_approval(user_input: Any) -> tuple[bool, str]:
     return str(user_input).strip().lower() in ("y", "yes", "true"), ""
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    """Best-effort int coercion for artifact counters (corrupt values → default)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def build_resume_payload(
     phase: str,
     hil_type: str | None,
@@ -243,17 +251,19 @@ def build_resume_payload(
     if user_input is None:
         user_input = {"approved": True, "interview_notes": ""}
     if isinstance(user_input, str):
-        parsed = parse_formatted_input(user_input)
-        user_input = parsed if parsed else {"interview_notes": user_input}
-    if not isinstance(user_input, dict):
-        user_input = {"interview_notes": str(user_input)}
+        # '[Label] value' format → dict; otherwise keep the raw string so
+        # generic-phase y/n answers still parse (interview_notes coercion
+        # happens per-phase below, not up front).
+        user_input = parse_formatted_input(user_input) or user_input
 
     def _artifacts() -> dict[str, Any]:
         arts = dict(state.get("artifacts") or {})
-        arts["discover_hil_count"] = int(arts.get("discover_hil_count", 0) or 0) + 1
+        arts["discover_hil_count"] = _as_int(arts.get("discover_hil_count", 0), 0) + 1
         return arts
 
     if phase == "DISCOVER":
+        if not isinstance(user_input, dict):
+            user_input = {"interview_notes": str(user_input)}
         if hil_type == "interview":
             notes = _interview_notes_from(user_input)
             arts = _artifacts()
@@ -283,8 +293,8 @@ def build_resume_payload(
             return resume, update
 
         # Unknown DISCOVER type — fall back on hil count (legacy CLI heuristic)
-        hil_count = int(
-            (state.get("artifacts") or {}).get("discover_hil_count", 0) or 0
+        hil_count = _as_int(
+            (state.get("artifacts") or {}).get("discover_hil_count", 0), 0
         )
         if hil_count == 0:
             return build_resume_payload(
@@ -304,6 +314,13 @@ def build_resume_payload(
 
     # Generic HIL phase (e.g. REFLECT)
     if isinstance(user_input, dict) and "approved" in user_input:
+        approved, feedback = _parse_approval(user_input)
+        return {
+            "human_approval_required": False,
+            "approved": approved,
+            "feedback": feedback,
+        }, None
+    if isinstance(user_input, str):
         approved, feedback = _parse_approval(user_input)
         return {
             "human_approval_required": False,
@@ -369,6 +386,13 @@ async def run_workflow(
             await events.on_aborted()
             return
 
+        # Set when an interrupt was handled this cycle: the pending resume
+        # Command is the next input. The stale-node check below MUST NOT
+        # run in that case — a suspended task also shows up in
+        # graph_state.next, and re-streaming with input=None would drop
+        # the resume (infinite HIL loop).
+        resumed = False
+
         try:
             async for item in graph.astream(
                 current_input, stream_mode=["values", "custom"], config=config
@@ -418,7 +442,8 @@ async def run_workflow(
                     )
                     await events.on_resumed(pause, resume_data, update_data)
                     current_input = Command(resume=[resume_data], update=update_data)
-                    continue
+                    resumed = True
+                    break
 
                 phase = chunk.get("phase", "UNKNOWN")
                 if phase != last_phase:
@@ -426,7 +451,7 @@ async def run_workflow(
                 await events.on_values(chunk, phase)
                 yield chunk
 
-        except GraphInterrupt:
+        except (GraphInterrupt):  # class-based clause; parenthesized per lint rule
             # Legacy LangGraph (<1.x) raised the interrupt instead of
             # yielding __interrupt__. Same suspension path.
             graph_state = await graph.aget_state(config)
@@ -454,7 +479,7 @@ async def run_workflow(
             )
             await events.on_resumed(pause, resume_data, update_data)
             current_input = Command(resume=[resume_data], update=update_data)
-            continue
+            resumed = True
 
         except Exception as e:  # noqa: BLE001 — signal, never crash the adapter
             await events.on_error(e)
@@ -463,6 +488,13 @@ async def run_workflow(
         if abort_check and abort_check():
             await events.on_aborted()
             return
+
+        if resumed:
+            # Interrupt path: re-stream the pending resume Command. (The
+            # async-for above has ended — Pregel completes the step when a
+            # node interrupts — so control lands here on both interrupt
+            # branches.)
+            continue
 
         # Normal stream end — interrupt_after can leave pending nodes behind
         # (e.g. DISCOVER → DEFINE). If next is non-empty, re-stream with
