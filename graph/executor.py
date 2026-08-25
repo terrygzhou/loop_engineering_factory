@@ -458,11 +458,31 @@ class WorkflowRunner:
         """CLI handler for HIL — collects user input via stdin/stdout."""
         # Auto-approve: skip input() entirely — return generated defaults
         if self.auto_approve:
-            return self._hil_auto_approve(phase, state)
+            # EYW-184 interlock (EYW-171 §7.4): never auto-approve ARCH_REVIEW
+            # while a pending ACHG is in flight — require an explicit human
+            # call instead. (Headless without a TTY will halt on the prompt —
+            # deliberately fail-safe: a regulated change is not auto-approved.)
+            if phase == "ARCH_REVIEW" and self._archg_pending_blocks(state):
+                w = get_stream_writer() or (lambda **kw: None)
+                w({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": "  → Auto-approve BLOCKED — pending ACHG in flight (EYW-184 interlock). Manual decision required.", "ts": time.time()})
+            else:
+                return self._hil_auto_approve(phase, state)
 
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, self._hil_cli_sync, phase, state)
         return result
+
+    def _archg_pending_blocks(self, state) -> bool:
+        """EYW-184: True while any ACHG has PENDING board status (blocks ARCH_REVIEW auto-approve)."""
+        try:
+            from graph.achg_scanner import scan_achg_context, has_pending_achg
+            arts = (state or {}).get("artifacts") or {}
+            ctx = arts.get("achg_context")
+            if not (isinstance(ctx, dict) and (ctx.get("pending_achgs") or ctx.get("rejected_achgs"))):
+                ctx = scan_achg_context((state or {}).get("context_folder") or "")
+            return has_pending_achg(ctx)
+        except Exception:
+            return False
 
     def _hil_auto_approve(self, phase: str, state: WorkflowState) -> dict:
         """Generate automatic responses when auto_approve=True."""

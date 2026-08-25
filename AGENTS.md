@@ -13,14 +13,14 @@ DISCOVER → DEFINE → PLAN → ARCH_REVIEW → BUILD → SEED_DATA → VERIFY 
 
 Two entry points share `graph/executor.py`:
 - **CLI** (`main.py`): auto-approve mode
-- **Web UI** (`frontend/backend/app.py`): FastAPI :8011, auto-approve on timeout
+- **Web UI** (`frontend/backend/app.py`): FastAPI :48011, auto-approve on timeout
 
 ## Key Constraints
 
 | Item | Detail |
 |------|--------|
 | **Build command** | `docker compose up -d --build loop` |
-| **Ports** | nginx :80, FastAPI :8011, health :8081, builder :8200, OpenHands Gateway :3005 |
+| **Ports** | nginx :4080, FastAPI :48011, health :48081, OpenHands Gateway :43005, Phoenix :46006 |
 | **LLM** | `LLM_BASE_URL=http://pop-os:8080/v1` (local SGLang Qwen3.6-27B-NVFP4) |
 | **No PostgreSQL** | Pattern storage via ChromaDB (internal, no host port) |
 | **HIL gates** | DISCOVER (2 pauses), ARCH_REVIEW (1 pause); node-level `interrupt()` from `langgraph.types` |
@@ -43,7 +43,7 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 |-----------|---------|-----------|
 | `graph/` | LangGraph workflow | `main.py` (graph), `state.py` (TypedDict), `edges.py` (routing), `executor.py` (shared logic) |
 | `graph/nodes/` | Phase nodes | `discover.py`, `define.py`, `plan.py`, `openhands_build.py` (active BUILD), `build_subgraph_legacy.py` (fallback) |
-| `frontend/` | Web UI backend | `backend/app.py` :8011, `backend/workflow_bridge.py` |
+| `frontend/` | Web UI backend | `backend/app.py` :48011, `backend/workflow_bridge.py` |
 | `builder/` | Remote build service (DELETED — OpenHands Gateway handles BUILD) |
 | `tools/` | Shared utilities | `llm.py` (invoke_skill + invoke_skill_async), `loader.py` (skills), `context_manager.py` |
 | `frontend/` | Web UI backend | `backend/workflow_bridge.py` (1141 lines — largest file) |
@@ -77,16 +77,15 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 
 ## Observability
 
-- OTel traces → Phoenix :6006
+- OTel traces → Phoenix :46006
 - Prometheus :9091 (loop orchestrator target needs `/metrics` endpoint — P2)
 - Loki via Grafana stack (external network)
 - Audit logs → `build/audit_logs/`
 
 ## Docker Compose
 
-- `loop` — orchestrator + nginx (:80/:8011/:8081), CPU limit 2, memory 1G
-- `builder` — remote build service (:8200), CPU limit 4, memory 6G
-- `openhands` — agent server (:3005), CPU limit 4, memory 4G
+- `loop` — orchestrator + nginx (:4080/:48011/:48081), CPU limit 2, memory 1G
+- `openhands` — agent server (:43005), CPU limit 4, memory 4G
 - `chromadb`, `otel-collector`, `phoenix`, `promtail` — supporting services
 - Resource limits set on all services
 

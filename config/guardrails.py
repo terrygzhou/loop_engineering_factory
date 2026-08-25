@@ -91,3 +91,24 @@ def get_threshold(name: str, default=None) -> Any:
     if default is None:
         raise KeyError(f"Unknown threshold: {name!r}")
     return _get_cache()["quality_thresholds"].get(name, default)
+
+
+# ── ARCH_REVIEW safety interlock config (EYW-184 / EYW-178 P2-4) ──
+_ARCH_REVIEW_GATE_DEFAULTS: Dict[str, Any] = {
+    "enabled": False,
+    "min_spec_quality": 0.8,
+    "min_plan_score": 0.8,
+    "fail_closed": True,
+}
+
+
+def get_arch_review_gate() -> Dict[str, Any]:
+    """ARCH_REVIEW px-gate + ACHG interlock settings (config-flagged).
+
+    See `arch_review_gate` in config/guardrails.yaml (EYW-184).
+    """
+    merged = dict(_ARCH_REVIEW_GATE_DEFAULTS)
+    raw = _get_cache().get("arch_review_gate")
+    if isinstance(raw, dict):
+        merged.update(raw)
+    return merged

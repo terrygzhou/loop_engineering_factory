@@ -106,8 +106,8 @@ graph LR
     subgraph LoopFactory["Loop Factory"]
         subgraph Entry["Entry Points"]
             CLI["CLI<br/>(main.py)"]
-            WebUI["Web UI<br/>(FastAPI :8011)"]
-            Nginx["nginx<br/>(:80)"]
+            WebUI["Web UI<br/>(FastAPI :48011)"]
+            Nginx["nginx<br/>(:4080)"]
         end
 
         subgraph Engine["LangGraph Engine"]
@@ -129,7 +129,7 @@ graph LR
         LLM_Srv["LLM Server<br/>(SGLang :8080)"]
         Docker["Docker Engine"]
         Chroma["ChromaDB :8000<br/>(internal)"]
-        OpenHands["OpenHands<br/>(:3005)<br/>Agent Server"]
+        OpenHands["OpenHands<br/>(:43005)<br/>Agent Server"]
         Builder["DELETED<br/>OpenHands Gateway replaces remote builder"]
     end
 
@@ -173,24 +173,24 @@ graph TB
         LLM_C[("LLM Server<br/>SGLang :8080")]
 
         subgraph DockerStack["Docker Compose Stack"]
-            LC[("Loop Container<br/>:80 / :8011 / :8081")]
+            LC[("Loop Container<br/>:4080 / :48011 / :48081")]
             BLD["DELETED<br/>OpenHands Gateway replaces remote builder"]
             CC[("ChromaDB<br/>:8000 internal")]
             OC[("OTel Collector<br/>:4318")]
-            PH[("Phoenix<br/>:6006")]
-            OH[("OpenHands<br/>:3005")]
+            PH[("Phoenix<br/>:46006")]
+            OH[("OpenHands<br/>:43005")]
             PT[("Promtail")]
         end
     end
 
-    U -->|"HTTP :80 / :8011"| LC
+    U -->|"HTTP :4080 / :48011"| LC
     LC -->|"gRPC :8000"| CC
     LC -->|"OTLP :4318"| OC
     LC -->|"HTTP :8080"| LLM_C
     LC -->|"Gateway"| OH
     LC -->|"build"| BLD
     OH -->|"HTTP :8080"| LLM_C
-    OC -->|"HTTP :6006"| PH
+    OC -->|"HTTP :46006"| PH
     PT -->|"logs"| PH
 ```
 
@@ -199,7 +199,7 @@ graph TB
 | Component | Responsibility | Config Key |
 |-----------|---------------|------------|
 | `main.py` | CLI entry — headless auto-approve | `workflow.auto_approve` |
-| `frontend/backend/app.py` | FastAPI backend — workflow API :8011 | `services.loop_api.*` |
+| `frontend/backend/app.py` | FastAPI backend — workflow API :48011 | `services.loop_api.*` |
 | `frontend/backend/workflow_bridge.py` | SSE event bridge + HIL interrupt handling | `services.product.*` |
 | `graph/main.py` | LangGraph StateGraph definition | `workflow.hil_mode` |
 | `graph/edges.py` | Conditional routing via `route_phase()` — quality gates, loop limits, forward paths | N/A |
@@ -324,7 +324,7 @@ docker compose up -d --build loop
 docker compose logs -f loop
 
 # Access the health endpoint
-curl http://localhost:8081/health
+curl http://localhost:48081/health
 ```
 
 ### Option B: Web UI (Human-in-the-Loop)
@@ -336,23 +336,24 @@ Interactive mode with SSE event streaming, quality gates dashboard, and diagram 
 docker compose up -d --build loop
 
 # Open the UI
-# Frontend: http://localhost (nginx :80)
-# API: http://localhost:8011
-# Health: http://localhost:8081
+# Frontend: http://localhost:4080 (nginx :4080)
+# API: http://localhost:48011
+# Health: http://localhost:48081
 ```
 
 ### Docker Stack Services
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| `loop` | :80 | nginx — static frontend |
-| `loop` | :8011 | FastAPI backend — workflow API |
-| `loop` | :8081 | Health check server |
+| `loop` | :4080 | nginx — static frontend (Web UI) |
+| `loop` | :4080 | nginx — static frontend (Web UI) |
+| `loop` | :48011 | FastAPI backend — workflow API |
+| `loop` | :48081 | Health check server |
 | `chromadb` | :8000 (internal) | Pattern storage |
 | `otel-collector` | :4318 | OpenTelemetry trace collection |
-| `phoenix` | :6006 | Trace visualization + LLM evaluation UI (Arize Phoenix) |
+| `phoenix` | :46006 | Trace visualization + LLM evaluation UI (Arize Phoenix) |
 | `promtail` | _(internal)_ | Log aggregation |
-| `openhands` | :3005 | OpenHands Agent Server — BUILD delegation |
+| `openhands` | :43005 | OpenHands Agent Server — BUILD delegation |
 
 > **Note**: Prometheus and Grafana run as a separate Grafana stack on the host (`~/.hermes/grafana-stack/`), not in this Docker Compose file.
 
@@ -378,7 +379,7 @@ docker compose up -d --build
 
 ## Key Components
 
-- **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:8011`) for HIL workflow
+- **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:48011`) for HIL workflow
 - **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via `route_phase()` in `edges.py`, in-node `interrupt()` for HIL pauses
 - **State Management**: `WorkflowState` (37 fields) + `CycleMetrics` (11 fields) — pruned for token efficiency. All keys initialized in `graph/executor.py`
 - **Skills System**: 35 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
@@ -410,7 +411,7 @@ services:
   chroma:
     url: http://chromadb:8000
   loop_api:
-    url: http://localhost:8011
+    url: http://localhost:48011
   product:
     url: http://localhost:8010
 
@@ -445,7 +446,7 @@ Install: baked into Docker image via `docker compose up -d --build`.
 
 ## Evaluation
 
-At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. Each evaluation is context-aware — the LLM first extracts the project's domain from the spec, then scores against criteria tailored to that context. Results stream to the Phoenix UI at `localhost:6006` via OTel span attributes.
+At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. Each evaluation is context-aware — the LLM first extracts the project's domain from the spec, then scores against criteria tailored to that context. Results stream to the Phoenix UI at `localhost:46006` via OTel span attributes.
 
 ### Evaluators
 
@@ -464,7 +465,7 @@ At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. 
 1. Phase completes → `_run_phase_eval()` called in `graph/executor.py`
 2. Evaluator sends context + output to LLM (`Qwen3.6-27B`)
 3. LLM returns scores (0.0–1.0) with rationale
-4. Results attached as OTel span attributes → Phoenix UI at `:6006`
+4. Results attached as OTel span attributes → Phoenix UI at `:46006`
 
 Evaluations are **non-blocking** — if the LLM is unreachable or the eval times out, the workflow continues. Each eval adds ~3s per phase.
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ─── Loop Engineering unified entrypoint ─────────────────────
-# Starts: nginx (static UI :80), uvicorn (FastAPI :8011), health server (:8081)
+# Starts: nginx (static UI :4080 host → :80 container), uvicorn (FastAPI :48011 host → :8011), health server (:48081 host → :8081)
 
 set -e
 
@@ -18,7 +18,7 @@ export PYTHONPATH="/app:${PYTHONPATH:-}"
 # ── Health server (port 8081) — background process ───────────
 # Runs as a separate Python process so it stays alive and responds to healthchecks.
 python3 /app/service/health.py &
-echo "[Entrypoint] Health server started on :8081"
+echo "[Entrypoint] Health server started on :8081 (published as :48081)"
 
 # ── Nginx (static frontend, port 80) ─────────────────────────
 # Run as daemon so uvicorn stays in foreground (PID 1)

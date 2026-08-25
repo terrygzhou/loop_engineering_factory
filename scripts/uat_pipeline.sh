@@ -6,7 +6,7 @@
 #   --description TEXT   Project description
 #   --project-dir PATH   Output directory (default: ./mvp_output)
 #   --container NAME     Docker container name (default: loop)
-#   --webapp-url URL     Web app URL (default: http://localhost:8011)
+#   --webapp-url URL     Web app URL (default: http://localhost:48011)
 #   --max-wait SECONDS   Max wait for workflow (default: 1200)
 set -euo pipefail
 
@@ -15,7 +15,7 @@ PROJECT="${PROJECT:-My_test_CRM}"
 PROJECT_DESC="${PROJECT_DESC:-App for managing contacts/customers — contact details, emails, and meeting appointments synced with Google Calendar}"
 PROJECT_DIR="${PROJECT_DIR:-./mvp_output}"
 CONTAINER="${CONTAINER:-loop}"
-WEBAPP_URL="${WEBAPP_URL:-http://localhost:8011}"
+WEBAPP_URL="${WEBAPP_URL:-http://localhost:48011}"
 MAX_WAIT="${MAX_WAIT:-1200}"
 UAT_PASS_RATE_THRESHOLD="${UAT_PASS_RATE_THRESHOLD:-0.95}"
 

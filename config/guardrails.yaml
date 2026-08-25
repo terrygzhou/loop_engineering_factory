@@ -54,3 +54,22 @@ code_review:
 spec_generation:
   temperature: 0.2
   pre_validation_dry_run: true
+
+# ── ARCH_REVIEW safety interlocks (EYW-184 / EYW-178 P2-4) ──
+# 1) ACHG interlock: the ARCH_REVIEW node scans the ArcKit tree for ACHGs and
+#    injects `achg_context` into the HIL interrupt payload. While any ACHG has
+#    PENDING board status, auto-approval of ARCH_REVIEW is BLOCKED — an
+#    explicit human decision is required (EYW-171 §7.4: no auto-approve while
+#    pending). The ACHG panel is advisory for the decision itself; it never
+#    auto-rejects the PLAN (EYW-171 §7.3).
+# 2) px gate: gate ARCH_REVIEW approval on px_evaluator quality thresholds for
+#    regulated workloads. When the gate fails, plain "approve" is converted to
+#    reject with findings fed back to PLAN; approval requires an explicit
+#    `override: true` in the HIL resume payload. fail_closed=true means an
+#    unavailable/errored evaluator also blocks approval (no free pass when
+#    scoring is down).
+arch_review_gate:
+  enabled: false           # config flag — set true for regulated engagements
+  min_spec_quality: 0.8    # px eval_spec threshold (0.0–1.0)
+  min_plan_score: 0.8      # px eval_plan threshold (0.0–1.0)
+  fail_closed: true        # evaluator unavailable → block approval unless overridden

@@ -127,8 +127,8 @@ class Config:
             port: int = int(_resolve(None, _config, "services.grafana.port", "3000"))
 
         class LoopAPI:
-            url: str = _resolve("LOOP_API_URL", _config, "services.loop_api.url", "http://localhost:8011")
-            port: int = int(_resolve(None, _config, "services.loop_api.port", "8011"))
+            url: str = _resolve("LOOP_API_URL", _config, "services.loop_api.url", "http://localhost:48011")
+            port: int = int(_resolve(None, _config, "services.loop_api.port", "48011"))
 
         class Product:
             url: str = _resolve("PRODUCT_URL", _config, "services.product.url", "http://localhost:8010")

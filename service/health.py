@@ -2,7 +2,7 @@
 Health check and metrics endpoint for the orchestrator.
 
 Provides HTTP endpoints for Docker health checks and Prometheus scraping.
-Runs on port 8081 (configurable via OBSERVABILITY_PORT).
+Runs on port 8081 inside the container (published as :48081 on the host; configurable via OBSERVABILITY_PORT env).
 """
 import atexit
 import json

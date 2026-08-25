@@ -49,7 +49,7 @@ No skills — human decision point only. Payload enriched with:
 | Skill | Status | Purpose |
 |-------|--------|---------|
 | `incremental-implementation` | ✅ | Build vertical slices |
-| `frontend-ui-engineering` | 📦 | Frontend implementation guidance |
+| `frontend-ui-engineering` | ✅ | Frontend implementation guidance (injected into UI items in legacy fallback; OpenHands prompt carries UI guardrails) |
 | `context-engineering` | 📦 | Maintain build context |
 
 ## SEED_DATA (test data)
@@ -100,8 +100,8 @@ No skills — human decision point only. Payload enriched with:
 
 - **Total agent-skills**: 24
 - **Downloaded to project**: 23/24 (all except `using-agent-skills` — meta-reference only)
-- **Active in graph**: 11
-- **Ready to wire**: 12
+- **Active in graph**: 12
+- **Ready to wire**: 11
 - **Local custom**: 7
 
 ## Wiring Priority

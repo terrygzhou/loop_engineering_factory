@@ -3,9 +3,9 @@ services:
   loop:
     build: .
     ports:
-      - "80:80"       # nginx — static frontend
-      - "8011:8011"   # uvicorn — FastAPI backend
-      - "8081:8081"   # health server — external health checks
+      - "4080:80"       # nginx — static frontend
+      - "48011:8011"   # uvicorn — FastAPI backend
+      - "48081:8081"   # health server — external health checks
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -88,7 +88,7 @@ services:
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:
-      - "6006:6006"
+      - "46006:6006"
     environment:
       - PHOENIX_DATABASE_URI=/var/lib/phoenix/phoenix.db
       - PHOENIX_HOST=0.0.0.0
@@ -120,7 +120,7 @@ services:
     container_name: openhands-server
     restart: "no"
     ports:
-      - "3005:8000"
+      - "43005:8000"
     volumes:
       - ~/.openhands:/.openhands
       # Docker socket removed — OpenHands sandbox uses its own network isolation
