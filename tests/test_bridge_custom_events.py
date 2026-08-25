@@ -124,8 +124,8 @@ def test_emit_custom_event_never_uses_reserved_actions(bridge):
 
 def test_run_real_streams_values_and_custom(bridge, tmp_path, monkeypatch):
     monkeypatch.setattr(bridge, "_build_executor_state", lambda **kw: {})
-    # Use the production checkpointer (SqliteSaver strips callables like
-    # skill_callback before serde — MemorySaver would crash on them).
+    # Use the production checkpointer (official AsyncSqliteSaver via
+    # CHECKPOINT_DB — exercises the real SQLite persistence path, EYW-235).
     monkeypatch.setenv("CHECKPOINT_DB", str(tmp_path / "checkpoints.db"))
     with patch("graph.main.build_graph", side_effect=_build_tiny_graph):
         asyncio.run(bridge.run_real())

@@ -11,7 +11,10 @@ aioitertools==0.13.0
 aiosignal==1.4.0
     # via aiohttp
 aiosqlite==0.22.1
-    # via arize-phoenix
+    # via
+    #   -r requirements.txt
+    #   arize-phoenix
+    #   langgraph-checkpoint-sqlite
 alembic==1.19.1
     # via arize-phoenix
 annotated-doc==0.0.5
@@ -222,8 +225,6 @@ idna==3.18
     #   yarl
 importlib-resources==7.1.0
     # via chromadb
-iniconfig==2.3.0
-    # via pytest
 jaraco-classes==3.4.0
     # via keyring
 jaraco-context==6.1.2
@@ -295,7 +296,10 @@ langgraph-checkpoint==4.2.0
     # via
     #   -r requirements.txt
     #   langgraph
+    #   langgraph-checkpoint-sqlite
     #   langgraph-prebuilt
+langgraph-checkpoint-sqlite==3.1.1
+    # via -r requirements.txt
 langgraph-prebuilt==1.1.0
     # via langgraph
 langgraph-sdk==0.4.2
@@ -454,7 +458,6 @@ packaging==26.3
     #   langsmith
     #   onnxruntime
     #   opentelemetry-instrumentation
-    #   pytest
     #   strawberry-graphql
 pandas==3.0.5
     # via
@@ -466,8 +469,6 @@ platformdirs==4.11.2
     # via fastmcp-slim
 playwright==1.62.0
     # via -r requirements.txt
-pluggy==1.6.0
-    # via pytest
 prometheus-client==0.26.0
     # via
     #   -r requirements.txt
@@ -536,7 +537,6 @@ pyee==13.0.1
     # via playwright
 pygments==2.20.0
     # via
-    #   pytest
     #   rich
     #   rich-rst
 pyjwt==2.13.0
@@ -551,8 +551,6 @@ pystache==0.6.8
     # via
     #   arize-phoenix
     #   arize-phoenix-evals
-pytest==9.1.1
-    # via -r requirements.txt
 python-dateutil==2.9.0.post0
     # via
     #   arize-phoenix
@@ -616,8 +614,6 @@ rpds-py==2026.6.3
     # via
     #   jsonschema
     #   referencing
-ruff==0.16.2
-    # via -r requirements.txt
 s3transfer==0.19.2
     # via boto3
 scikit-learn==1.9.0
@@ -644,6 +640,8 @@ sqlalchemy==2.0.52
     # via
     #   alembic
     #   arize-phoenix
+sqlite-vec==0.1.9
+    # via langgraph-checkpoint-sqlite
 sse-starlette==3.4.8
     # via mcp
 starlette==1.6.0
@@ -685,10 +683,6 @@ typer==0.27.1
     # via
     #   -r requirements.txt
     #   chromadb
-types-pyyaml==6.0.12.20260724
-    # via -r requirements.txt
-types-requests==2.33.0.20260712
-    # via -r requirements.txt
 typing-extensions==4.16.0
     # via
     #   aiohttp
@@ -745,7 +739,6 @@ urllib3==2.7.0
     #   botocore
     #   kubernetes
     #   requests
-    #   types-requests
 uuid-utils==0.17.0
     # via
     #   langchain-core

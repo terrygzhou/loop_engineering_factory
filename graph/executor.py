@@ -35,7 +35,7 @@ if str(_project_root) not in sys.path:
 from config.loader import config  # noqa: E402
 from graph.main import build_graph  # noqa: E402
 from graph.state import CycleMetrics, WorkflowState  # noqa: E402
-from graph.sqlite_saver import SqliteSaver  # noqa: E402
+from graph.checkpointer import LazyAsyncSqliteSaver  # noqa: E402
 from tools.loader import build_skill_registry  # noqa: E402
 
 # ── Observability ──
@@ -201,14 +201,18 @@ def get_graph(checkpointer=None, auto_approve=False):
 
 
 def _get_checkpointer():
-    """Create a SQLiteSaver checkpointer with configurable DB path."""
+    """Create the official AsyncSqliteSaver checkpointer (EYW-235).
+
+    DB file location is unchanged: CHECKPOINT_DB env, default
+    <build_dir>/checkpoints.db.
+    """
     from config.loader import config as _cfg
     build_dir = _cfg.paths.build_dir
     db_path = os.environ.get("CHECKPOINT_DB", os.path.join(build_dir, "checkpoints.db"))
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    return SqliteSaver.from_conn_string(db_path)
+    return LazyAsyncSqliteSaver.from_conn_string(db_path)
 
 
 class WorkflowRunner:
@@ -227,7 +231,7 @@ class WorkflowRunner:
         self.auto_approve = auto_approve
 
     def _get_fresh_checkpointer(self):
-        """Return a new SqliteSaver for a fresh workflow run."""
+        """Return a fresh checkpointer (official AsyncSqliteSaver) for a new run."""
         return _get_checkpointer()
 
     def run_interactive(

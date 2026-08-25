@@ -535,7 +535,7 @@ class WorkflowBridge:
         # Delete the LangGraph checkpoint thread (prevents stale state)
         if self._thread_id and self._checkpointer:
             try:
-                self._checkpointer.delete_thread(self._thread_id)
+                await self._checkpointer.adelete_thread(self._thread_id)
             except Exception:
                 pass
 
@@ -868,7 +868,7 @@ class WorkflowBridge:
 
                 checkpointer = _get_checkpointer()
                 test_config = {"configurable": {"thread_id": self._thread_id}}
-                cp_list = list(checkpointer.list(test_config))
+                cp_list = [cp async for cp in checkpointer.alist(test_config)]
                 if not cp_list:
                     print(
                         f"[Bridge] Stale thread_id {self._thread_id} — no checkpoint, treating as fresh",
