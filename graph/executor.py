@@ -16,9 +16,9 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict
 
 from langgraph.config import get_stream_writer as _raw_get_stream_writer
+
 
 def get_stream_writer():
     """Safe wrapper: returns a no-op lambda when called outside a runnable context."""
@@ -33,21 +33,20 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from config.loader import config  # noqa: E402
+from graph.checkpointer import LazyAsyncSqliteSaver  # noqa: E402
 from graph.main import build_graph  # noqa: E402
 from graph.state import CycleMetrics, WorkflowState  # noqa: E402
-from graph.checkpointer import LazyAsyncSqliteSaver  # noqa: E402
-from tools.loader import build_skill_registry  # noqa: E402
+from log.logging import log_event, setup_logger  # noqa: E402
+from service import health as health_module  # noqa: E402
+from service.evaluator import evaluator as px_evaluator  # noqa: E402
 
 # ── Observability ──
 from service.otel_instrumentor import tracer  # noqa: E402
-from service.evaluator import evaluator as px_evaluator  # noqa: E402
-from service import health as health_module  # noqa: E402
-from log.logging import setup_logger, log_event  # noqa: E402
 
 logger = setup_logger("executor")
 
 
-def _run_phase_eval(phase: str, chunk: Dict) -> None:
+def _run_phase_eval(phase: str, chunk: dict) -> None:
     """Run Phoenix eval on phase output if evaluator is available.
 
     Graceful: no-op when evaluator is None or LLM unreachable.
@@ -277,184 +276,133 @@ class WorkflowRunner:
         return asyncio.run(_run())
 
     async def _astream_with_hil(self, state: WorkflowState, auto_approve: bool, on_hil, config=None):
-        """OTB streaming with Command(resume=...) pattern.
+        """Thin CLI adapter over the shared HIL/resume loop (EYW-236).
 
-        OOTB flow:
-        1. graph.stream(input_state, config) — streams chunks until interrupt() or completion
-        2. On GraphInterrupt: get state, call on_hil(), resume with Command(resume=...)
-        3. Repeat until graph completes
+        The stream → interrupt → resume cycle now lives in
+        ``graph.runner.run_workflow`` (shared with the Web bridge). This
+        method supplies the CLI input handler and the CLI event sink
+        (tracer / health / Phoenix eval / writer progress events).
 
-        This replaces the old _astream_with_hil + aupdate_state pattern with
-        LangGraph's native interrupt/resume lifecycle.
+        On LangGraph ≥1.x, interrupt() no longer raises GraphInterrupt —
+        it yields ``__interrupt__`` in the values chunk — so the shared
+        loop's detection actually fires for interactive CLI pauses (the
+        legacy ``except GraphInterrupt`` was a dead path on 1.x).
         """
-        import time as _time
         import uuid as _uuid
-        from langgraph.errors import GraphInterrupt
-        from langgraph.types import Command
+
+        from graph.runner import WorkflowEvents, run_workflow
 
         if config is None:
             config = {"configurable": {"thread_id": str(_uuid.uuid4())}}
 
-        current_phase = None
-        phase_start: Dict[str, float] = {}
-        input_state = state
+        project_name = state.get("project_name")
 
-        while True:
-            try:
-                # Stream execution until interrupt or completion
-                async for chunk in self.graph.astream(
-                    input_state, stream_mode="values", config=config
-                ):
-                    phase = chunk.get("phase", "UNKNOWN")
+        class _CliEvents(WorkflowEvents):
+            """CLI observability sink (bit-for-bit with the pre-EYW-236 loop)."""
 
-                    if phase != current_phase:
-                        # Phase transition — record previous phase timing
-                        if current_phase and current_phase in phase_start:
-                            duration = round(_time.time() - phase_start[current_phase], 3)
-                            success = chunk.get("error") is None
-                            tracer.record_phase(current_phase, duration, success, project=state.get("project_name"))
-                            health_module.track_phase(current_phase, duration, success)
-                            _run_phase_eval(current_phase, chunk)
-                            w = get_stream_writer() or (lambda **kw: None)
-                            w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": _time.time()})
+            def __init__(self):
+                self._phase_start: dict[str, float] = {}
+                self._prev = None
 
-                        current_phase = phase
-                        phase_start[phase] = _time.time()
-                        w = get_stream_writer() or (lambda **kw: None)
-                        w({"type": "progress", "phase": phase, "step": "status", "detail": "Started...", "ts": _time.time()})
-                        health_module.set_current_phase(state.get("project_name"), phase)
+            def _w(self):
+                return get_stream_writer() or (lambda **kw: None)
 
-                    yield chunk
+            async def on_values(self, chunk, phase):
+                # Phase transition bookkeeping — mirrors the old inline block:
+                # emit "Completed (Xs)" for the previous phase on every new phase.
+                if phase in self._phase_start:
+                    return
+                prev = self._prev
+                if prev and prev != phase and prev in self._phase_start:
+                    duration = round(time.time() - self._phase_start[prev], 3)
+                    success = chunk.get("error") is None
+                    tracer.record_phase(prev, duration, success, project=project_name)
+                    health_module.track_phase(prev, duration, success)
+                    _run_phase_eval(prev, chunk)
+                    self._w()({
+                        "type": "progress",
+                        "phase": prev,
+                        "step": "status",
+                        "detail": f"Completed ({duration}s)",
+                        "ts": time.time(),
+                    })
+                self._phase_start[phase] = time.time()
+                self._prev = phase
+                self._w()({
+                    "type": "progress",
+                    "phase": phase,
+                    "step": "status",
+                    "detail": "Started...",
+                    "ts": time.time(),
+                })
+                health_module.set_current_phase(project_name, phase)
 
-                # Normal completion (stream ended without exception)
-                if current_phase:
-                    duration = round(_time.time() - phase_start.get(current_phase, _time.time()), 3)
-                    w = get_stream_writer() or (lambda **kw: None)
-                    w({"type": "progress", "phase": current_phase, "step": "status", "detail": f"Completed ({duration}s)", "ts": _time.time()})
-                break
+            async def on_interrupt(self, pause):
+                self._w()({
+                    "type": "progress",
+                    "phase": pause.phase or "UNKNOWN",
+                    "step": "interrupt",
+                    "detail": "GraphInterrupt caught",
+                    "ts": time.time(),
+                })
 
-            except GraphInterrupt as e:
-                log_event(logger, "graph.interrupted", phase=current_phase, detail=str(e))
-                w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": current_phase or "UNKNOWN", "step": "interrupt", "detail": "GraphInterrupt caught", "ts": _time.time()})
+            async def on_resumed(self, pause, resume_data, update_data):
+                detail = "Resuming with Command(resume=...)"
+                if pause.phase == "ARCH_REVIEW" and isinstance(resume_data, dict):
+                    detail = f"approved={resume_data.get('approved')}"
+                self._w()({
+                    "type": "progress",
+                    "phase": pause.phase,
+                    "step": "resume",
+                    "detail": detail,
+                    "ts": time.time(),
+                })
 
-                # Get the suspended state
-                graph_state = await self.graph.aget_state(config)
+            async def on_complete(self, final_state):
+                # Old CLI: final-phase writer event only (no tracer/health/eval).
+                if self._prev and self._prev in self._phase_start:
+                    duration = round(time.time() - self._phase_start[self._prev], 3)
+                    self._w()({
+                        "type": "progress",
+                        "phase": self._prev,
+                        "step": "status",
+                        "detail": f"Completed ({duration}s)",
+                        "ts": time.time(),
+                    })
 
-                # Check if this is a true suspension or normal end
-                if not graph_state.next:
-                    if current_phase:
-                        w = get_stream_writer() or (lambda **kw: None)
-                        w({"type": "progress", "phase": current_phase, "step": "status", "detail": "Completed", "ts": _time.time()})
-                    break
+            async def on_error(self, error):
+                log_event(logger, "stream.error", error=str(error))
+                self._w()({
+                    "type": "progress",
+                    "phase": "STREAM",
+                    "step": "error",
+                    "detail": str(error),
+                    "ts": time.time(),
+                })
 
-                # Determine the interrupted phase
-                current_chunk = graph_state.values or {}
-                interrupted_phase = (
-                    current_chunk.get("phase")
-                    or current_chunk.get("next_phase")
-                    or current_phase
-                    or "UNKNOWN"
-                )
+        events = _CliEvents()
 
-                # Collect HIL input
-                input_data = await on_hil(interrupted_phase, current_chunk)
+        async def _input_handler(pause):
+            return await on_hil(pause.phase, pause.state)
 
-                # Build resume payload based on phase
-                resume_data = None  # safety default
-                if interrupted_phase == "DISCOVER":
-                    # Determine which pause fired: project_setup (Pause 1) or interview (Pause 2)
-                    # Check the _pause marker from the CLI handler, or fall back to
-                    # checking if interview_keys are present in the data.
-                    if isinstance(input_data, dict):
-                        pause_type = input_data.get("_pause", "")
-                    else:
-                        pause_type = ""
+        async for chunk in run_workflow(
+            self.graph,
+            config=config,
+            input_state=state,
+            input_handler=_input_handler,
+            events=events,
+            auto_approve=auto_approve,
+        ):
+            yield chunk
 
-                    is_interview_pause = pause_type == "interview"
-                    is_setup_pause = pause_type == "project_setup" or not is_interview_pause
-
-                    if is_setup_pause:
-                        # Pause 1 resolved: project_name, project_description, context_folder
-                        existing = (current_chunk.get("artifacts") or {}).copy()
-                        existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
-
-                        resume_data = {
-                            "human_approval_required": False,
-                            "artifacts": existing,
-                        }
-                        if isinstance(input_data, dict):
-                            if input_data.get("project_name"):
-                                resume_data["project_name"] = input_data["project_name"]
-                            if input_data.get("project_description"):
-                                resume_data["project_description"] = input_data["project_description"]
-                            if "context_folder" in input_data:
-                                resume_data["context_folder"] = input_data["context_folder"]
-                        # Do NOT set discover_interview_done — Pause 2 still needs to fire
-
-                    elif is_interview_pause:
-                        # Pause 2 resolved: actual interview answers
-                        notes = input_data.get("interview_notes", "") if isinstance(input_data, dict) else ""
-
-                        existing = (current_chunk.get("artifacts") or {}).copy()
-                        existing["interview_notes"] = notes
-                        existing["discover_interview_done"] = True
-                        existing["discover_hil_count"] = existing.get("discover_hil_count", 0) + 1
-
-                        resume_data = {
-                            "human_approval_required": False,
-                            "interview_notes": notes,
-                            "discover_interview_done": True,
-                            "artifacts": existing,
-                        }
-
-                elif interrupted_phase == "ARCH_REVIEW":
-                    # ARCH_REVIEW: approve → BUILD, reject with comments → back to PLAN
-                    if isinstance(input_data, str):
-                        answer = input_data.strip().lower()
-                    elif isinstance(input_data, dict):
-                        answer = input_data.get("approved", True)
-                        if isinstance(answer, bool):
-                            resume_data = {
-                                "approved": answer,
-                                "feedback": input_data.get("feedback", input_data.get("user_review_comments", "")),
-                            }
-                            w = get_stream_writer() or (lambda **kw: None)
-                            w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={answer}", "ts": _time.time()})
-                            input_state = Command(resume=resume_data)
-                            continue
-                        answer = str(answer).lower()
-                    else:
-                        answer = str(input_data).lower()
-
-                    approved = answer in ("y", "yes", True)
-                    resume_data = {
-                        "approved": approved,
-                        "feedback": input_data.get("feedback", "") if isinstance(input_data, dict) else "",
-                    }
-                    w = get_stream_writer() or (lambda **kw: None)
-                    w({"type": "progress", "phase": "ARCH_REVIEW", "step": "resume", "detail": f"approved={approved}", "ts": _time.time()})
-                    input_state = Command(resume=resume_data)
-                    continue
-
-                else:
-                    # Generic HIL phase
-                    if auto_approve:
-                        resume_data = {"human_approval_required": False, "approved": True}
-                    else:
-                        resume_data = {"human_approval_required": False}
-
-                # OOTB resume: use Command(resume=...) to continue from interrupt()
-                w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": interrupted_phase, "step": "resume", "detail": "Resuming with Command(resume=...)", "ts": _time.time()})
-                input_state = Command(resume=resume_data)
-                continue
-
-            except Exception as e:
-                log_event(logger, "stream.error", error=str(e))
-                w = get_stream_writer() or (lambda **kw: None)
-                w({"type": "progress", "phase": "STREAM", "step": "error", "detail": str(e), "ts": _time.time()})
-                break
+        # EYW-235: release this run's aiosqlite worker thread. aiosqlite's
+        # Connection thread is non-daemon — an unclosed connection blocks
+        # CLI process shutdown. close() is idempotent; each run gets a
+        # fresh checkpointer instance, so closing here is always safe.
+        try:
+            await self.checkpointer.close()
+        except Exception as exc:
+            log_event(logger, "checkpointer.close", level="warning", error=str(exc))
 
     # ── CLI HIL handlers ──
 
@@ -479,7 +427,7 @@ class WorkflowRunner:
     def _archg_pending_blocks(self, state) -> bool:
         """EYW-184: True while any ACHG has PENDING board status (blocks ARCH_REVIEW auto-approve)."""
         try:
-            from graph.achg_scanner import scan_achg_context, has_pending_achg
+            from graph.achg_scanner import has_pending_achg, scan_achg_context
             arts = (state or {}).get("artifacts") or {}
             ctx = arts.get("achg_context")
             if not (isinstance(ctx, dict) and (ctx.get("pending_achgs") or ctx.get("rejected_achgs"))):
@@ -494,7 +442,7 @@ class WorkflowRunner:
         w({"type": "progress", "phase": phase, "step": "auto_approve", "detail": "Auto-approving HIL gate", "ts": time.time()})
 
         if phase == "DISCOVER":
-            hil_count = (state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0
+            hil_count = int((state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0)
             if hil_count == 0:
                 # Setup pause — extract from state
                 return {
@@ -552,7 +500,7 @@ class WorkflowRunner:
             return {"approved": False, "feedback": feedback}
         return {"approved": True}
 
-    def _cli_project_setup(self, state=None) -> Dict[str, str]:
+    def _cli_project_setup(self, state=None) -> dict[str, str]:
         """Pause 1: collect project name, description, context folder."""
         answers = {}
 
@@ -577,7 +525,7 @@ class WorkflowRunner:
         answers["_pause"] = "project_setup"
         return answers
 
-    def _cli_interview(self, state=None) -> Dict[str, str]:
+    def _cli_interview(self, state=None) -> dict[str, str]:
         """Pause 2: collect detailed interview answers."""
         answers = {}
 

@@ -538,6 +538,13 @@ class WorkflowBridge:
                 await self._checkpointer.adelete_thread(self._thread_id)
             except Exception:
                 pass
+            # EYW-235: release the (possibly re-materialized) aiosqlite worker
+            # thread spawned by the delete above — the wrapper re-creates the
+            # connection after close(), so without this it would linger.
+            try:
+                await self._checkpointer.close()
+            except Exception:
+                pass
 
         # Clear abort signal for fresh start
         abort_mgr.clear()
@@ -863,10 +870,12 @@ class WorkflowBridge:
         has_stale_thread_id = bool(self._thread_id)
         is_recovery = has_stale_thread_id
         if has_stale_thread_id:
+            _probe_cp = None
             try:
                 from graph.executor import _get_checkpointer
 
                 checkpointer = _get_checkpointer()
+                _probe_cp = checkpointer
                 test_config = {"configurable": {"thread_id": self._thread_id}}
                 cp_list = [cp async for cp in checkpointer.alist(test_config)]
                 if not cp_list:
@@ -878,6 +887,14 @@ class WorkflowBridge:
                     is_recovery = False
             except Exception:
                 is_recovery = False
+            finally:
+                # EYW-235: release the probe checkpointer's aiosqlite worker
+                # thread (non-daemon — leaks would accumulate per recovery).
+                if _probe_cp is not None:
+                    try:
+                        await _probe_cp.close()
+                    except Exception:
+                        pass
 
         if not is_recovery:
             self.cycle += 1
@@ -1232,6 +1249,15 @@ class WorkflowBridge:
                 )
                 self._root_span.end()
             raise
+        finally:
+            # EYW-235: release this run's aiosqlite worker thread (non-daemon;
+            # unclosed connections block process shutdown / leak threads per
+            # Web run). close() is idempotent; later uses (abort cleanup)
+            # re-materialize a fresh connection via the lazy wrapper.
+            try:
+                await checkpointer.close()
+            except Exception:
+                pass
 
     def _classify_hil_type(self, interrupted_phase, interrupted_type):
         """Classify HIL interaction type."""
