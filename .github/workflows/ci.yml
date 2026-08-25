@@ -143,9 +143,10 @@ jobs:
         run: |
           echo "::error::Quality gate failed - one or more required jobs did not pass"
           echo "Results:"
-          for job in lint typecheck test docker-build; do
-            echo "  $job: ${{ needs.$job.result }}"
-          done
+          echo "  lint: ${{ needs.lint.result }}"
+          echo "  typecheck: ${{ needs.typecheck.result }}"
+          echo "  test: ${{ needs.test.result }}"
+          echo "  docker-build: ${{ needs.docker-build.result }}"
           exit 1
 
       - name: Quality gate passed
