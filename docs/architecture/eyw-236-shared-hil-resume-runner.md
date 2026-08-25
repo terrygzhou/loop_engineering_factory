@@ -66,9 +66,35 @@ The legacy helpers `WorkflowBridge._parse_formatted_input` /
 
 ## Notes
 
-- LangGraph 1.x `interrupt()` semantics: no `GraphInterrupt` raise;
-  resume value is returned on node re-run via
-  `Command(resume=[...], update=...)`.
+### Resume-Command drop bug (found & fixed post-unification)
+
+The shared loop initially **never resumed on LangGraph 1.x**: after an
+`__interrupt__` values chunk the async-for simply ended, control fell
+through to the stale-node check (`graph_state.next` is non-empty for a
+suspended task), and the loop re-streamed `input=None` instead of the
+pending `Command(resume=..., update=...)` — an infinite HIL loop
+(reproduced empirically: input handler re-invoked on the same gate
+forever). The pre-refactor CLI/Web loops had the same latent defect —
+the unification had no E2E coverage, which is how it shipped.
+
+Fix: a `resumed` flag is set in both interrupt branches (values
+`__interrupt__` and legacy raise path); when set, the stale-node check
+is skipped and the pending resume Command is re-streamed on its own
+iteration (`graph/runner.py`, L~394/445/482/492). Regression-pinned by
+`tests/test_runner_hil_loop.py::test_interrupt_resume_cycle` and
+`tests/test_runner.py::TestRunWorkflowLoop::test_resume_value_reaches_rerun_node`.
+
+Side observation (pre-existing, documented in tests): re-streaming with
+`input=None` echoes the last persisted state snapshot as the first
+values chunk of that iteration — both old loops observed this; the
+runner tests pin it.
+
+### LangGraph 1.x `interrupt()` semantics
+
+- no `GraphInterrupt` raise;
+- resume value is returned on node re-run via
+  `Command(resume=[...], update=...)` — **list-wrapped**; nodes unwrap
+  per the existing `graph/nodes/review.py` pattern.
 - pi-lens (system Python, no `langgraph`) flags on this diff are
   environmental false positives; the venv suite is the authoritative
   check.
