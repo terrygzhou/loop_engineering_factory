@@ -3,20 +3,22 @@ Custom SQLite checkpoint saver for LangGraph.
 
 Replaces langgraph.checkpoint.sqlite which was removed in langgraph >= 1.0.
 """
+
 import asyncio
 import json
 import sqlite3
 import threading
 import uuid
-from typing import Any, AsyncIterator, Iterator, Optional, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
+from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import (
     BaseCheckpointSaver,
     Checkpoint,
     CheckpointMetadata,
     CheckpointTuple,
 )
-from langchain_core.runnables import RunnableConfig
 
 _INIT_SQL = """
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS writes (
     PRIMARY KEY (thread_id, checkpoint_id, task_id, channel)
 );
 """
+
 
 class SqliteSaver(BaseCheckpointSaver[int]):
     """Thread-safe SQLite checkpoint saver.
@@ -73,7 +76,7 @@ class SqliteSaver(BaseCheckpointSaver[int]):
 
     # ── Sync methods ──
 
-    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+    def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         cfg = config.get("configurable", {})
         thread_id = cfg.get("thread_id")
         if not thread_id:
@@ -97,17 +100,18 @@ class SqliteSaver(BaseCheckpointSaver[int]):
             metadata=metadata,
             parent_config=(
                 {"configurable": {"thread_id": thread_id, "checkpoint_id": parent_id}}
-                if parent_id else None
+                if parent_id
+                else None
             ),
         )
 
     def list(
         self,
-        config: Optional[RunnableConfig],
+        config: RunnableConfig | None,
         *,
-        filter: Optional[dict[str, Any]] = None,
-        before: Optional[RunnableConfig] = None,
-        limit: Optional[int] = None,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
         if config is None:
             config = {}
@@ -128,12 +132,20 @@ class SqliteSaver(BaseCheckpointSaver[int]):
             checkpoint = self._deserialize(blob)
             metadata = json.loads(meta_str) if meta_str else {}
             yield CheckpointTuple(
-                config={"configurable": {"thread_id": thread_id, "checkpoint_id": cp_id}},
+                config={
+                    "configurable": {"thread_id": thread_id, "checkpoint_id": cp_id}
+                },
                 checkpoint=checkpoint,
                 metadata=metadata,
                 parent_config=(
-                    {"configurable": {"thread_id": thread_id, "checkpoint_id": parent_id}}
-                    if parent_id else None
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_id": parent_id,
+                        }
+                    }
+                    if parent_id
+                    else None
                 ),
             )
 
@@ -192,28 +204,12 @@ class SqliteSaver(BaseCheckpointSaver[int]):
     def _serialize(self, obj: Any) -> bytes:
         """Serialize using the base serde (msgpack via dumps_typed).
 
-        Strips non-serializable keys (e.g. Python functions like skill_callback)
-        from checkpoint state to prevent msgpack TypeError.
+        EYW-233: WorkflowState is fully serializable (no Python callables in
+        state — skill progress moved to the node writer() custom stream),
+        so no unserializable-value stripping is needed anymore.
         """
-        obj = self._strip_unserializable(obj)
         _, blob = self.serde.dumps_typed(obj)
         return blob
-
-    @staticmethod
-    def _strip_unserializable(obj: Any) -> Any:
-        """Recursively remove non-serializable values (functions, callables)."""
-        if callable(obj):
-            return None  # top-level callable (e.g. skill_callback in writes)
-        if isinstance(obj, dict):
-            result = {}
-            for k, v in obj.items():
-                if callable(v):
-                    continue  # skip functions
-                result[k] = SqliteSaver._strip_unserializable(v)
-            return result
-        elif isinstance(obj, (list, tuple)):
-            return type(obj)(SqliteSaver._strip_unserializable(item) for item in obj)
-        return obj
 
     def _deserialize(self, blob: bytes) -> Any:
         """Deserialize using the base serde (msgpack via loads_typed)."""
@@ -221,16 +217,16 @@ class SqliteSaver(BaseCheckpointSaver[int]):
 
     # ── Async wrappers (run in executor thread to avoid blocking) ──
 
-    async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+    async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
         return await asyncio.to_thread(self.get_tuple, config)
 
     async def alist(
         self,
-        config: Optional[RunnableConfig],
+        config: RunnableConfig | None,
         *,
-        filter: Optional[dict[str, Any]] = None,
-        before: Optional[RunnableConfig] = None,
-        limit: Optional[int] = None,
+        filter: dict[str, Any] | None = None,
+        before: RunnableConfig | None = None,
+        limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
         # Collect in thread, then yield to avoid blocking the event loop
         results = await asyncio.to_thread(
@@ -257,9 +253,7 @@ class SqliteSaver(BaseCheckpointSaver[int]):
         task_id: str,
         task_path: str = "",
     ) -> None:
-        await asyncio.to_thread(
-            self.put_writes, config, writes, task_id, task_path
-        )
+        await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
 
     async def adelete_thread(self, thread_id: str) -> None:
         await asyncio.to_thread(self.delete_thread, thread_id)
