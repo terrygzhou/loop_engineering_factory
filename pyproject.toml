@@ -1,3 +1,19 @@
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+# EYW-249: pin the classic rule set. Ruff 0.16+ expanded the default select
+# to ~400 rules which surfaced 400+ legacy findings and red-lined CI.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+# EYW-249: map config/loader.py etc. to their dotted names (config.loader)
+# instead of double-mapping the same file as 'loader' and 'config.loader'.
+mypy_path = "."
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

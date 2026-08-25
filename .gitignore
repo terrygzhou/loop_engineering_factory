@@ -88,3 +88,6 @@ review/
 poll_workflow.sh
 requirement.md
 langgraph-state-machine.md
+
+# pytest-cov
+.coverage
