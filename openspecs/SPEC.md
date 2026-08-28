@@ -269,16 +269,18 @@ Naming: `snake_case` modules, `PascalCase` classes, `SCREAMING_SNAKE` constants.
 
 ---
 
-## 9. Open Questions
+## 9. Open Questions — Resolved (2026-07-07)
 
-- **SEED_DATA placeholder:** currently a pass-through. Does the factory need real seeding (SQL inserts, fixture loads) in this cycle, or is the placeholder acceptable?
-- **OpenHands agent version:** pinned to `1.30.0`. Should the spec pin the version, or allow minor upgrades?
-- **`build_report.json` schema versioning:** should the manifest carry a `schema_version` field so future readers can distinguish generations?
-- **Prometheus external scrape:** W3 decision says in-process metrics only. Is an external Prometheus scraper in scope now, or deferred?
-- **Phoenix `database_uri` default:** is `/var/lib/phoenix/phoenix.db` the canonical path, or should it be configurable?
-- **ArcKit ingestion:** `arckit_loader.py` parses ADMP/REQ/STKE/OAAL/PRIN. Are there other ArcKit artefact types (e.g., new `TYPE` codes) expected in v2?
-- **Auto-approve + ACHG interlock:** when `auto_approve=true` *and* a PENDING ACHG exists, is the interlock enforced (forcing HIL) or does `auto_approve` win? Current `review.py` code path needs clarification.
-- **`spec_confidence` scoring:** `define.py` uses a keyword-based heuristic. Is a more deterministic scorer (e.g., LLM-judged) required before this ships?
+| # | Question | Decision | Rationale |
+|---|---|---|---|
+| 1 | SEED_DATA placeholder | **Keep pass-through** | Greenfield projects have no production data; project-specific seeding belongs in the per-project spec, not the pipeline. Revisit only when seeding becomes a repeatable first-class requirement. |
+| 2 | OpenHands agent version pin | **Pin `1.30.0`** | The BUILD contract (build_report.json manifest prompt) depends on agent behaviour; unpinned upgrades are silent contract changes. Bump as an explicit, tested change. |
+| 3 | `build_report.json` `schema_version` | **Skip for now (YAGNI)** | Exactly one reader (`_parse_build_report`). Add a version field when a second reader or second writer generation appears. |
+| 4 | External Prometheus scrape | **Deferred** | Decision 5 explicitly stages W3; in-process metrics on :8081 cover current needs. Pull forward when the loop-orchestrator scrape target actually exists. |
+| 5 | Phoenix `database_uri` default | **Keep compose default** | The `phoenix_data` volume at `/var/lib/phoenix` makes the path canonical and persistent; override by editing the compose env if a different path is ever needed — no config key. |
+| 6 | ArcKit new TYPE codes in v2 | **No new types planned** | `arckit_loader.py` already tolerates unknowns (status `UNKNOWN`, per-artifact error lists). Extend the parser when new artefact types actually ship, not speculatively. |
+| 7 | Auto-approve + PENDING ACHG interlock | **Interlock wins** | `review.py` blocks auto-approve while any ACHG is PENDING and forces an explicit human decision — matches §8.10. Preserved behaviour, no code change. |
+| 8 | `spec_confidence` keyword heuristic | **Keep heuristic** | An LLM-judged scorer would re-introduce the nondeterminism Decision 2 removed from gates. Heuristic with a documented ceiling is sufficient until mis-scoring shows up in evidence. |
 
 ---
 
