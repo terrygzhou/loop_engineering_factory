@@ -396,7 +396,9 @@ from uuid import uuid4, UUID  # class import — use UUID(...)
 
 # Double conversion — WRONG
 rid = uuid.UUID(resource_id)
-resource = await db.get(Resource, uuid.UUID(rid))  # second UUID() on already-converted UUID
+resource = await db.get(
+    Resource, uuid.UUID(rid)
+)  # second UUID() on already-converted UUID
 
 # Double conversion — CORRECT
 resource = await db.get(Resource, UUID(resource_id))  # single conversion
@@ -486,7 +488,7 @@ delegate_task(
     File: [path to failing code]
     Test command: [exact command]
     """,
-    toolsets=['terminal', 'file']
+    toolsets=["terminal", "file"],
 )
 ```
 

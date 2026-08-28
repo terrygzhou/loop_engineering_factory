@@ -10,6 +10,7 @@ Proves the pre-interrupt auto-population path end-to-end:
 - artifacts carry discover_artifact_audit (§6.4) and oaal_sprint_map (§7),
 - no artefacts → node still completes via the suppressed-interrupt path.
 """
+
 import asyncio
 import json
 import sys
@@ -31,13 +32,15 @@ from tests.test_arckit_loader import build_tree_a  # noqa: E402
 
 def _run(tmp_path, state):
     from graph.nodes.discover import discover_node
+
     state.setdefault("cycle_id", "0")
     state.setdefault("trace_id", "test")
     # safe_stream_writer() falls back to no-op outside a graph context; patch
     # the source binding so the node's writer is a known no-op callable that
     # swallows the single dict arg the node passes positionally.
-    with patch("tools.stream_writer.get_stream_writer",
-               return_value=lambda *a, **k: None):
+    with patch(
+        "tools.stream_writer.get_stream_writer", return_value=lambda *a, **k: None
+    ):
         return asyncio.run(discover_node(state))
 
 
@@ -83,8 +86,10 @@ class TestDiscoverArcKit:
             "auto_approve_override": False,
             "force_hil": False,
         }
-        with patch("graph.nodes.discover.interrupt",
-                   return_value={"interview_notes": "Human interview notes"}) as mock_i:
+        with patch(
+            "graph.nodes.discover.interrupt",
+            return_value={"interview_notes": "Human interview notes"},
+        ) as mock_i:
             result = _run(tmp_path, state)
         # Fallback path: the generic interview interrupt DID fire (§6.2),
         # resume payload is used, and the audit records NO_ARTIFACTS.

@@ -73,6 +73,7 @@ import cProfile
 import pstats
 from io import StringIO
 
+
 @app.middleware("http")
 async def profile_request(request: Request, call_next):
     if request.query_params.get("profile"):
@@ -81,7 +82,7 @@ async def profile_request(request: Request, call_next):
         response = await call_next(request)
         pr.disable()
         s = StringIO()
-        ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
+        ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
         ps.print_stats(20)
         print(s.getvalue())
         return response
@@ -117,10 +118,10 @@ Common bottleneck locations in FastAPI + Docker stacks:
 
      FastAPICache.init(InMemoryBackend(), prefix="redis")
 
+
      @router.get("/items", response_model=list[ItemResponse])
      @cache(expire=60)  # Cache for 60 seconds
-     async def list_items():
-         ...
+     async def list_items(): ...
      ```
    - For Docker deployments, consider Redis as external cache
 
@@ -133,6 +134,7 @@ Common bottleneck locations in FastAPI + Docker stacks:
    - Enable gzip/brotli compression:
      ```python
      from starlette.middleware.gzip import GZipMiddleware
+
      app.add_middleware(GZipMiddleware, minimum_size=1000)
      ```
    - Reduce middleware chain (each adds overhead)

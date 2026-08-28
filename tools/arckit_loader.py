@@ -16,6 +16,7 @@ Implements the DISCOVER-side ingestion layer specified in
 The loader is a pure filesystem + parse module (no LLM calls, no graph state),
 so it is trivially unit-testable and reusable by other nodes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -40,7 +41,9 @@ ARTIFACT_FILENAME_RE = re.compile(
 )
 
 VALID_STATUS = {"DRAFT", "APPROVED", "SUPERSEDED"}
-PLACEHOLDER_RE = re.compile(r"^\[.*\]$")  # unfilled template placeholders, e.g. [PROJECT_NAME]
+PLACEHOLDER_RE = re.compile(
+    r"^\[.*\]$"
+)  # unfilled template placeholders, e.g. [PROJECT_NAME]
 
 #: Status values DISCOVER will consume; SUPERSEDED is skipped (§3.3).
 CONSUMABLE_STATUS = {"DRAFT", "APPROVED"}
@@ -59,7 +62,9 @@ ARTIFACT_CONFLICT = "ARTIFACT_CONFLICT"
 
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 #: **Label**: value — with optional leading bullet/number and optional continuation.
-LABEL_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+\*\*(?P<label>[^*]+?)\*\*\s*:\s*(?P<value>.*)$")
+LABEL_RE = re.compile(
+    r"^\s*(?:[-*]|\d+\.)\s+\*\*(?P<label>[^*]+?)\*\*\s*:\s*(?P<value>.*)$"
+)
 TOPLEVEL_LABEL_RE = re.compile(r"^\*\*(?P<label>[^*]+?)\*\*\s*:\s*(?P<value>.*)$")
 
 
@@ -82,11 +87,12 @@ def _is_placeholder(text: str) -> bool:
 
 # ── Markdown structure helpers ────────────────────────────────────────────────
 
+
 def _norm_heading(text: str) -> str:
     """Normalize a heading for matching: strip numbering ('2.', '2.1'), lowercase, squash space."""
     t = text.strip()
-    t = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", t)          # '2.', '2.1', '2.1.'
-    t = re.sub(r"^[IVXLC]+\.?\s+", "", t)               # 'II.', 'I'
+    t = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", t)  # '2.', '2.1', '2.1.'
+    t = re.sub(r"^[IVXLC]+\.?\s+", "", t)  # 'II.', 'I'
     return " ".join(t.lower().split())
 
 
@@ -106,11 +112,11 @@ def split_sections(md: str) -> list[tuple[int, str, str]]:
     sections: list[tuple[int, str, str]] = []
     for n, (idx, level, text) in enumerate(heads):
         end = len(lines)
-        for idx2, level2, _t2 in heads[n + 1:]:
+        for idx2, level2, _t2 in heads[n + 1 :]:
             if level2 <= level:
                 end = idx2
                 break
-        sections.append((level, text, "\n".join(lines[idx + 1:end])))
+        sections.append((level, text, "\n".join(lines[idx + 1 : end])))
     return sections
 
 
@@ -122,8 +128,8 @@ def find_section(sections: list[tuple[int, str, str]], *patterns: str) -> str | 
     An exact H1 match (the document title, e.g. ADMP's '# Architecture Vision'
     vs its '## 1. Architecture Vision' section) loses to any exact H2+ match.
     """
-    exact: str | None = None      # first exact match at level >= 2
-    exact_l1: str | None = None   # exact match at H1 — last resort
+    exact: str | None = None  # first exact match at level >= 2
+    exact_l1: str | None = None  # exact match at H1 — last resort
     prefix_hit: str | None = None
     for level, text, body in sections:
         norm = _norm_heading(text)
@@ -160,7 +166,7 @@ def split_blocks(body: str, min_level: int = 3) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for n, (idx, text, _lvl) in enumerate(heads):
         end = heads[n + 1][0] if n + 1 < len(heads) else len(lines)
-        out.append((text, "\n".join(lines[idx + 1:end])))
+        out.append((text, "\n".join(lines[idx + 1 : end])))
     return out
 
 
@@ -168,7 +174,11 @@ def _first_table_body(text: str) -> str | None:
     """Return the raw lines of the first markdown table in text, or None."""
     lines = [line for line in text.splitlines() if line.strip()]
     for i, line in enumerate(lines):
-        if line.strip().startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|[\s:\-|]+\|\s*$", lines[i + 1]):
+        if (
+            line.strip().startswith("|")
+            and i + 1 < len(lines)
+            and re.match(r"^\s*\|[\s:\-|]+\|\s*$", lines[i + 1])
+        ):
             j = i + 2
             rows = [line, lines[i + 1]]
             while j < len(lines) and lines[j].strip().startswith("|"):
@@ -180,19 +190,29 @@ def _first_table_body(text: str) -> str | None:
 
 def parse_md_table(table_text: str) -> list[dict[str, str]]:
     """Parse one markdown table into [{header: cell}] row dicts (first table in text)."""
-    raw = _first_table_body(table_text) if not table_text.lstrip().startswith("|") else table_text
+    raw = (
+        _first_table_body(table_text)
+        if not table_text.lstrip().startswith("|")
+        else table_text
+    )
     if not raw:
         return []
     lines = [line for line in raw.splitlines() if line.strip()]
-    header = [c.strip().strip("*").strip() for c in lines[0].strip().strip("|").split("|")]
+    header = [
+        c.strip().strip("*").strip() for c in lines[0].strip().strip("|").split("|")
+    ]
     rows: list[dict[str, str]] = []
     for line in lines[2:]:
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        rows.append({h: (cells[k] if k < len(cells) else "") for k, h in enumerate(header)})
+        rows.append(
+            {h: (cells[k] if k < len(cells) else "") for k, h in enumerate(header)}
+        )
     return rows
 
 
-def table_to_rows(section_body: str, key_aliases: dict[str, str] | None = None) -> list[dict[str, str]]:
+def table_to_rows(
+    section_body: str, key_aliases: dict[str, str] | None = None
+) -> list[dict[str, str]]:
     """Parse the first table in a section body, mapping headers via key_aliases (lowercase keys)."""
     rows = parse_md_table(section_body)
     if not rows:
@@ -202,8 +222,10 @@ def table_to_rows(section_body: str, key_aliases: dict[str, str] | None = None) 
         nr: dict[str, str] = {}
         for k, v in r.items():
             # stable lowercase keys, word separators kept as underscores
-            nk = (key_aliases or {}).get(k.lower().replace(" ", "_"),
-                 re.sub(r"[^a-z0-9]+", "_", k.lower()).strip("_"))
+            nk = (key_aliases or {}).get(
+                k.lower().replace(" ", "_"),
+                re.sub(r"[^a-z0-9]+", "_", k.lower()).strip("_"),
+            )
             nv = _clean_value(v)
             if nv is not None:
                 nr[nk] = nv
@@ -256,7 +278,9 @@ def labeled_fields(block_body: str) -> dict[str, Any]:
             return
         all_bullets = all(re.match(r"^\s*(?:[-*]|\d+\.)\s+", line) for line in stripped)
         if all_bullets:
-            fields[key] = [re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line).strip() for line in stripped]
+            fields[key] = [
+                re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line).strip() for line in stripped
+            ]
         else:
             fields[key] = " ".join(" ".join(line.split()) for line in stripped)
 
@@ -332,14 +356,16 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any] | None, str]:
         meta = {}
     if not isinstance(meta, dict):
         return None, text
-    return meta, text[m.end():]
+    return meta, text[m.end() :]
 
 
 # ── Data model (§6.4 audit record, §4.2 synthesis inputs) ──────────────────
 
+
 @dataclass
 class ArtifactRecord:
     """One consumed (or skipped) artefact — mirrors the §6.4 audit entry."""
+
     type: str
     path: str
     version: str
@@ -366,6 +392,7 @@ class ArtifactRecord:
 @dataclass
 class ArcKitContext:
     """Result of scanning an ArcKit project tree for DISCOVER (§1–§4, §6.4)."""
+
     scanned_root: str
     project_id: str
     project_name: str = ""
@@ -431,7 +458,11 @@ def discover_artifact_files(root: Path, project_id: str = "") -> dict[str, list[
                         continue
                     # PRIN is org-global (projects/000-global/), not scoped to a
                     # project ID (§2.5) — never filter it by pid.
-                    if project_id and type_code != "PRIN" and m.group("pid") != str(project_id).zfill(3):
+                    if (
+                        project_id
+                        and type_code != "PRIN"
+                        and m.group("pid") != str(project_id).zfill(3)
+                    ):
                         continue
                     found.append(p)
         out[type_code] = found
@@ -454,6 +485,7 @@ def _pick_highest(paths: list[Path]) -> Path | None:
 
 # ── Per-artefact extraction (§3.4) ─────────────────────────────────────────
 
+
 def _doc_control(sections: list[tuple[int, str, str]]) -> dict[str, str]:
     """Parse the Document Control table into {label: value} (lowercased keys)."""
     body = find_section(sections, "document control") or ""
@@ -472,7 +504,9 @@ def _doc_control(sections: list[tuple[int, str, str]]) -> dict[str, str]:
 
 def _h1_project_name(text: str, prefix: str) -> str | None:
     """Extract the project name from an H1 of the form '# {prefix} {NAME}'."""
-    m = re.search(r"^#\s+" + re.escape(prefix) + r"\s+(?P<name>.+)$", text, re.MULTILINE)
+    m = re.search(
+        r"^#\s+" + re.escape(prefix) + r"\s+(?P<name>.+)$", text, re.MULTILINE
+    )
     if m:
         name = _clean_value(m.group("name"))
         if name and not _is_placeholder(name):
@@ -494,8 +528,14 @@ def _extract_admp(body: str) -> dict[str, Any]:
     vision_paras = paragraphs(vision_body)
 
     scope = find_section(sections, "scope") or ""
-    in_scope = bullets(find_section(split_sections(scope), "in scope") or "") if scope else []
-    out_scope = bullets(find_section(split_sections(scope), "out of scope") or "") if scope else []
+    in_scope = (
+        bullets(find_section(split_sections(scope), "in scope") or "") if scope else []
+    )
+    out_scope = (
+        bullets(find_section(split_sections(scope), "out of scope") or "")
+        if scope
+        else []
+    )
 
     success_rows = table_to_rows(find_section(sections, "success criteria") or "")
     stakeholder_rows = table_to_rows(find_section(sections, "stakeholder map") or "")
@@ -513,11 +553,17 @@ def _extract_admp(body: str) -> dict[str, Any]:
         "project": dc.get("project", ""),
         "status": dc.get("status", ""),
         "owner": dc.get("owner", ""),
-        "architecture_vision": vision_paras[0][:MAX_DESCRIPTION_CHARS] if vision_paras else "",
+        "architecture_vision": vision_paras[0][:MAX_DESCRIPTION_CHARS]
+        if vision_paras
+        else "",
         "scope_in": in_scope,
         "scope_out": out_scope,
-        "drivers": _sub_bullets("drivers", "strategic", "operational", "compliance", "technology"),
-        "constraints": _sub_bullets("constraints", "budget", "timeline", "regulatory", "technical"),
+        "drivers": _sub_bullets(
+            "drivers", "strategic", "operational", "compliance", "technology"
+        ),
+        "constraints": _sub_bullets(
+            "constraints", "budget", "timeline", "regulatory", "technical"
+        ),
         "resources": _sub_bullets("resources", "team", "budget", "tools"),
         "success_criteria": success_rows,
         "stakeholders": stakeholder_rows,
@@ -525,7 +571,9 @@ def _extract_admp(body: str) -> dict[str, Any]:
     }
 
 
-def _blocks_by_heading(body: str, pattern: str, min_level: int = 3) -> list[dict[str, Any]]:
+def _blocks_by_heading(
+    body: str, pattern: str, min_level: int = 3
+) -> list[dict[str, Any]]:
     """Extract `### {pattern}` blocks and parse their **Label**: value fields.
 
     Blocks without any parseable fields are dropped so a near-empty parent
@@ -569,7 +617,9 @@ def _extract_req(body: str) -> dict[str, Any]:
     scope_out = bullets(find_section(split_sections(scope_body), "out of scope") or "")
 
     stakeholders = table_to_rows(find_section(sections, "stakeholders") or "")
-    brs = _blocks_by_heading(find_section(sections, "business requirements") or "", r"BR-\d+")
+    brs = _blocks_by_heading(
+        find_section(sections, "business requirements") or "", r"BR-\d+"
+    )
     fr_section = find_section(sections, "functional requirements") or ""
     personas = _blocks_by_heading(fr_section, r"persona")
     use_cases = _blocks_by_heading(fr_section, r"UC-\d+")
@@ -582,19 +632,36 @@ def _extract_req(body: str) -> dict[str, Any]:
         if items:
             nfrs[heading] = items
 
-    integrations = _blocks_by_heading(find_section(sections, "integration requirements") or "", r"INT-\d+")
+    integrations = _blocks_by_heading(
+        find_section(sections, "integration requirements") or "", r"INT-\d+"
+    )
     data_section = find_section(sections, "data requirements") or ""
-    entities = _blocks_by_heading(data_section, r"data entities?") \
-        or _blocks_by_heading(data_section, r"entity")
+    entities = _blocks_by_heading(
+        data_section, r"data entities?"
+    ) or _blocks_by_heading(data_section, r"entity")
 
-    constraint_body = find_section(sections, "constraints and assumptions") or find_section(sections, "constraints") or ""
+    constraint_body = (
+        find_section(sections, "constraints and assumptions")
+        or find_section(sections, "constraints")
+        or ""
+    )
     constraints = bullets(constraint_body)
-    assumptions = bullets(find_section(split_sections(constraint_body), "assumptions") or "")
+    assumptions = bullets(
+        find_section(split_sections(constraint_body), "assumptions") or ""
+    )
 
-    kpi_body = find_section(sections, "success criteria and kpis") or find_section(sections, "success criteria") or ""
+    kpi_body = (
+        find_section(sections, "success criteria and kpis")
+        or find_section(sections, "success criteria")
+        or ""
+    )
     kpis = bullets(kpi_body)
 
-    risks = bullets(find_section(sections, "dependencies and risks") or find_section(sections, "risks") or "")
+    risks = bullets(
+        find_section(sections, "dependencies and risks")
+        or find_section(sections, "risks")
+        or ""
+    )
 
     return {
         "document_id": dc.get("document id", ""),
@@ -627,12 +694,31 @@ def _extract_stke(body: str) -> dict[str, Any]:
     dc = _doc_control(sections)
 
     idn_body = find_section(sections, "stakeholder identification") or ""
-    internal = table_to_rows(find_section(split_sections(idn_body), "internal stakeholders") or "")
-    external = table_to_rows(find_section(split_sections(idn_body), "external stakeholders") or "")
+    internal = table_to_rows(
+        find_section(split_sections(idn_body), "internal stakeholders") or ""
+    )
+    external = table_to_rows(
+        find_section(split_sections(idn_body), "external stakeholders") or ""
+    )
 
-    drivers = _blocks_by_heading(find_section(sections, "stakeholder drivers analysis") or find_section(sections, "stakeholder drivers") or "", r"SD-\d+")
-    goals = _blocks_by_heading(find_section(sections, "driver-to-goal mapping") or find_section(sections, "driver to goal mapping") or "", r"Goal\s*G-?\d*")
-    outcomes = _blocks_by_heading(find_section(sections, "goal-to-outcome mapping") or find_section(sections, "goal to outcome mapping") or "", r"Outcome\s*O-?\d*")
+    drivers = _blocks_by_heading(
+        find_section(sections, "stakeholder drivers analysis")
+        or find_section(sections, "stakeholder drivers")
+        or "",
+        r"SD-\d+",
+    )
+    goals = _blocks_by_heading(
+        find_section(sections, "driver-to-goal mapping")
+        or find_section(sections, "driver to goal mapping")
+        or "",
+        r"Goal\s*G-?\d*",
+    )
+    outcomes = _blocks_by_heading(
+        find_section(sections, "goal-to-outcome mapping")
+        or find_section(sections, "goal to outcome mapping")
+        or "",
+        r"Outcome\s*O-?\d*",
+    )
     conflicts = bullets(find_section(sections, "conflict analysis") or "")
 
     return {
@@ -674,9 +760,16 @@ def _extract_prin(body: str) -> dict[str, Any]:
     org = _clean_value(h1.group(1)) if h1 else ""
 
     _SKIP = {
-        "executive summary", "document control", "references", "appendix",
-        "strategic principles", "tactical principles", "operational principles",
-        "complete traceability matrix", "communication plan", "governance",
+        "executive summary",
+        "document control",
+        "references",
+        "appendix",
+        "strategic principles",
+        "tactical principles",
+        "operational principles",
+        "complete traceability matrix",
+        "communication plan",
+        "governance",
     }
     principles: list[str] = []
     for _lvl, text, _body_ in sections:
@@ -691,7 +784,12 @@ def _extract_prin(body: str) -> dict[str, Any]:
         if len(name) >= 120 or name.lower() in _SKIP:
             continue
         principles.append(name)
-    return {"document_id": dc.get("document id", ""), "status": dc.get("status", ""), "organization": org or "", "principles": principles}
+    return {
+        "document_id": dc.get("document id", ""),
+        "status": dc.get("status", ""),
+        "organization": org or "",
+        "principles": principles,
+    }
 
 
 _EXTRACTORS = {
@@ -705,14 +803,19 @@ _EXTRACTORS = {
 
 # ── Validation (§5 required-field subset, §6.3 pipeline) ───────────────────
 
-def _validate_parsed(type_code: str, parsed: dict[str, Any], record: ArtifactRecord, filename_doc_id: str) -> None:
+
+def _validate_parsed(
+    type_code: str, parsed: dict[str, Any], record: ArtifactRecord, filename_doc_id: str
+) -> None:
     """Check the §5 required-field subset for one artefact; append errors."""
     problems: list[str] = []
 
     # Document ID cross-check (§6.3 step 4)
     doc_id = parsed.get("document_id", "")
     if doc_id and doc_id != filename_doc_id:
-        problems.append(f"Document ID '{doc_id}' does not match filename '{filename_doc_id}'")
+        problems.append(
+            f"Document ID '{doc_id}' does not match filename '{filename_doc_id}'"
+        )
 
     if type_code in ("ADMP", "REQ", "STKE", "PRIN"):
         status = (parsed.get("status") or "").upper()
@@ -732,7 +835,9 @@ def _validate_parsed(type_code: str, parsed: dict[str, Any], record: ArtifactRec
         if not (parsed.get("brs") or parsed.get("frs")):
             problems.append("no Business or Functional Requirements found")
     elif type_code == "STKE":
-        if not (parsed.get("internal_stakeholders") or parsed.get("external_stakeholders")):
+        if not (
+            parsed.get("internal_stakeholders") or parsed.get("external_stakeholders")
+        ):
             problems.append("no stakeholder tables found")
         if not parsed.get("drivers"):
             problems.append("no stakeholder drivers (SD-N) found")
@@ -750,7 +855,9 @@ def _validate_parsed(type_code: str, parsed: dict[str, Any], record: ArtifactRec
     record.schema_valid = not problems
 
 
-def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> ArtifactRecord | None:
+def _process_artifact(
+    ctx: ArcKitContext, type_code: str, path: Path
+) -> ArtifactRecord | None:
     """§6.3 validation pipeline for one artefact file."""
     m = ARTIFACT_FILENAME_RE.match(path.name)
     if m is None:
@@ -758,8 +865,12 @@ def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> Artifac
     filename_doc_id = path.name[:-3]
     version = f"v{m.group('major')}.{m.group('minor') or '0'}"
     record = ArtifactRecord(
-        type=type_code, path=str(path), version=version,
-        status="", frontmatter=False, schema_valid=False,
+        type=type_code,
+        path=str(path),
+        version=version,
+        status="",
+        frontmatter=False,
+        schema_valid=False,
     )
 
     try:
@@ -782,7 +893,9 @@ def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> Artifac
     if meta:
         fm_type = str(meta.get("docType", "")).upper()
         if fm_type and fm_type != type_code:
-            record.errors.append(f"MALFORMED_ARTIFACT: frontmatter docType '{fm_type}' ≠ filename '{type_code}'")
+            record.errors.append(
+                f"MALFORMED_ARTIFACT: frontmatter docType '{fm_type}' ≠ filename '{type_code}'"
+            )
             ctx.records.append(record)
             _err(ctx, MALFORMED_ARTIFACT, f"{path.name}: frontmatter docType mismatch")
             return record
@@ -809,7 +922,9 @@ def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> Artifac
     _validate_parsed(type_code, parsed, record, filename_doc_id)
     record.parsed = parsed
     if record.schema_valid:
-        record.fields_extracted = sorted(k for k, v in parsed.items() if v not in ("", [], {}, None))
+        record.fields_extracted = sorted(
+            k for k, v in parsed.items() if v not in ("", [], {}, None)
+        )
     ctx.records.append(record)
     if record.errors:
         for err in record.errors:
@@ -818,6 +933,7 @@ def _process_artifact(ctx: ArcKitContext, type_code: str, path: Path) -> Artifac
 
 
 # ── Public API (§1, §4, §6.4) ──────────────────────────────────────────────
+
 
 def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
     """Scan `root` (ArcKit project tree, or a project directory) and build the
@@ -856,11 +972,16 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
 
     chosen: dict[str, Path | None] = {}
     for type_code in DISCOVER_TYPES:
-        candidates = [p for p in files.get(type_code, [])
-                      if type_code == "PRIN"
-                      or not (ctx.project_id
-                              and (m := ARTIFACT_FILENAME_RE.match(p.name))
-                              and m.group("pid") != ctx.project_id)]
+        candidates = [
+            p
+            for p in files.get(type_code, [])
+            if type_code == "PRIN"
+            or not (
+                ctx.project_id
+                and (m := ARTIFACT_FILENAME_RE.match(p.name))
+                and m.group("pid") != ctx.project_id
+            )
+        ]
         chosen[type_code] = _pick_highest(candidates)
 
     # Conflict detection: two different files for the same (type, version)
@@ -872,11 +993,17 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
                 m = ARTIFACT_FILENAME_RE.match(p.name)
                 if m is None:
                     continue
-                by_version.setdefault((int(m.group("major")), int(m.group("minor") or 0)), []).append(p)
+                by_version.setdefault(
+                    (int(m.group("major")), int(m.group("minor") or 0)), []
+                ).append(p)
             for _v, group in by_version.items():
                 if len(group) > 1:
                     newest = max(group, key=lambda p: p.stat().st_mtime)
-                    _err(ctx, ARTIFACT_CONFLICT, f"{type_code}: {len(group)} files at same version — using {newest.name} (mtime)")
+                    _err(
+                        ctx,
+                        ARTIFACT_CONFLICT,
+                        f"{type_code}: {len(group)} files at same version — using {newest.name} (mtime)",
+                    )
 
     for type_code in DISCOVER_TYPES:
         path = chosen.get(type_code)
@@ -910,19 +1037,27 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
                     break
 
     # project_description: ADMP §1 (≤500 chars) → REQ Business Context
-    ctx.project_description = admp.get("architecture_vision") or req.get("business_context") or ""
+    ctx.project_description = (
+        admp.get("architecture_vision") or req.get("business_context") or ""
+    )
     ctx.project_description = ctx.project_description[:MAX_DESCRIPTION_CHARS]
 
     # context_folder hint: OAAL Prerequisites referencing an existing repo/path
     prereq = oaal.get("header", {}).get("prerequisites", "")
-    if re.match(r"^(~?/|\./|\.\./|[A-Za-z]:\\|[a-z][a-z0-9+.-]*://)", prereq) or prereq.startswith("projects/"):
+    if re.match(
+        r"^(~?/|\./|\.\./|[A-Za-z]:\\|[a-z][a-z0-9+.-]*://)", prereq
+    ) or prereq.startswith("projects/"):
         ctx.context_folder_hint = prereq
 
     # Stakeholders: merge ADMP + REQ + STKE, de-duped by name (case-insensitive)
     seen: set = set()
     stakeholders: list[dict[str, str]] = []
-    for row in list(admp.get("stakeholders", [])) + list(req.get("stakeholders", [])) \
-            + list(stke.get("internal_stakeholders", [])) + list(stke.get("external_stakeholders", [])):
+    for row in (
+        list(admp.get("stakeholders", []))
+        + list(req.get("stakeholders", []))
+        + list(stke.get("internal_stakeholders", []))
+        + list(stke.get("external_stakeholders", []))
+    ):
         name = (row.get("name") or row.get("stakeholder") or "").lower().strip()
         if not name or name in seen:
             continue
@@ -972,10 +1107,14 @@ def _build_audit(ctx: ArcKitContext) -> dict[str, Any]:
     summary = {
         "discovered": len(records),
         "valid": valid,
-        "malformed": sum(1 for r in ctx.records if r.errors and r.status != "SUPERSEDED"),
+        "malformed": sum(
+            1 for r in ctx.records if r.errors and r.status != "SUPERSEDED"
+        ),
         "superseded": superseded,
         "autoPopulated": bool(ctx.has_valid_artifacts and ctx.project_description),
-        "fallbackToInterview": not (ctx.has_valid_artifacts and ctx.project_description),
+        "fallbackToInterview": not (
+            ctx.has_valid_artifacts and ctx.project_description
+        ),
     }
     return {
         "scanned_root": ctx.scanned_root,
@@ -995,7 +1134,11 @@ def synthesize_interview_notes(ctx: ArcKitContext) -> str:
     """
     s = ctx.seeds
     name = ctx.project_name or "Untitled"
-    lines: list[str] = [f"# Auto-Interview: {name}", "", "_Synthesised from ArcKit artefacts (EYW-171 data contract)._"]
+    lines: list[str] = [
+        f"# Auto-Interview: {name}",
+        "",
+        "_Synthesised from ArcKit artefacts (EYW-171 data contract)._",
+    ]
 
     def section(title: str, body: str):
         lines.append(f"\n## {title}\n")
@@ -1032,16 +1175,51 @@ def synthesize_interview_notes(ctx: ArcKitContext) -> str:
 
     core = []
     if s["use_cases"]:
-        core.append("**Use cases:**\n" + bullets_block([f"{uc.get('name', uc.get('id', '?'))}: {uc.get('description', '')}" for uc in s["use_cases"]]))
+        core.append(
+            "**Use cases:**\n"
+            + bullets_block(
+                [
+                    f"{uc.get('name', uc.get('id', '?'))}: {uc.get('description', '')}"
+                    for uc in s["use_cases"]
+                ]
+            )
+        )
     if s["frs"]:
-        core.append("**Functional requirements:**\n" + bullets_block([f"{fr.get('id', fr.get('name', '?'))}: {fr.get('description', '')}" for fr in s["frs"]]))
+        core.append(
+            "**Functional requirements:**\n"
+            + bullets_block(
+                [
+                    f"{fr.get('id', fr.get('name', '?'))}: {fr.get('description', '')}"
+                    for fr in s["frs"]
+                ]
+            )
+        )
     if s["brs"]:
-        core.append("**Business requirements:**\n" + bullets_block([f"{br.get('id', '?')} [{br.get('priority', '?')}]: {br.get('description', br.get('name', ''))}" for br in s["brs"]]))
+        core.append(
+            "**Business requirements:**\n"
+            + bullets_block(
+                [
+                    f"{br.get('id', '?')} [{br.get('priority', '?')}]: {br.get('description', br.get('name', ''))}"
+                    for br in s["brs"]
+                ]
+            )
+        )
     section("Core Behavior", "\n".join(core))
 
-    section("Data Model", rows_block(s["data_entities"]) or bullets_block(s["data_entities"] if isinstance(s["data_entities"], list) else []))
+    section(
+        "Data Model",
+        rows_block(s["data_entities"])
+        or bullets_block(
+            s["data_entities"] if isinstance(s["data_entities"], list) else []
+        ),
+    )
 
-    api = bullets_block([f"{i.get('id', i.get('name', '?'))}: {i.get('purpose', i.get('description', ''))}" for i in s["integrations"]])
+    api = bullets_block(
+        [
+            f"{i.get('id', i.get('name', '?'))}: {i.get('purpose', i.get('description', ''))}"
+            for i in s["integrations"]
+        ]
+    )
     section("API Surface", api)
 
     section("Stakeholders", rows_block(s["stakeholders"]))
@@ -1055,7 +1233,11 @@ def synthesize_interview_notes(ctx: ArcKitContext) -> str:
     constr = bullets_block(s["constraints"])
     if s["assumptions"]:
         a = bullets_block(s["assumptions"])
-        constr = (constr + "\n\n**Assumptions:**\n" + a).strip() if constr else "**Assumptions:**\n" + a
+        constr = (
+            (constr + "\n\n**Assumptions:**\n" + a).strip()
+            if constr
+            else "**Assumptions:**\n" + a
+        )
     section("Constraints", constr)
 
     nfr_lines = []

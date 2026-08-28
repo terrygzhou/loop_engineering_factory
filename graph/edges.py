@@ -2,6 +2,7 @@
 Conditional edge routing for the LangGraph workflow.
 Thresholds loaded from guardrails.yaml at runtime so REFLECT can update them.
 """
+
 from langgraph.graph import END
 from graph.state import WorkflowState
 from config.guardrails import get_threshold
@@ -10,8 +11,18 @@ from config.guardrails import get_threshold
 END_MARKER = END
 
 # Valid phase targets for routing safety (S-005)
-VALID_PHASES = {"DISCOVER", "DEFINE", "PLAN",
-                "ARCH_REVIEW", "BUILD", "SEED_DATA", "VERIFY", "SHIP", "REFLECT", "ERROR"}
+VALID_PHASES = {
+    "DISCOVER",
+    "DEFINE",
+    "PLAN",
+    "ARCH_REVIEW",
+    "BUILD",
+    "SEED_DATA",
+    "VERIFY",
+    "SHIP",
+    "REFLECT",
+    "ERROR",
+}
 
 # Error node for unhandled exceptions — terminal state
 ERROR_NODE = "ERROR"
@@ -25,7 +36,11 @@ _forward_paths = {
     "ARCH_REVIEW": "BUILD",
     "BUILD": "SEED_DATA",
     "SEED_DATA": "VERIFY",
-    "VERIFY": "SHIP",
+    # Decision 2: an exhausted VERIFY loop must HALT (ERROR), never SHIP.
+    # This is the source of truth for the generic livelock guard at the top
+    # of route_phase; the per-phase VERIFY branch below is unreachable when
+    # the counter is exhausted because the guard fires first.
+    "VERIFY": "ERROR",
 }
 
 
@@ -69,17 +84,10 @@ def route_phase(state: WorkflowState) -> str:
     min_uat_pass = get_threshold("uat_pass_rate")
 
     # Loop counters are INCREMENTED BY NODES, not edges.
-    # Nodes persist via model_copy(update={}) which survives LangGraph state updates.
-    # Edges only READ the counter to decide where to route.
-    # However, BUILD self-loops need edge-side increment because the BUILD node
-    # doesn't always persist loop_counts before hitting the edge router.
-    if phase == "BUILD":
-        # Increment counter on self-loop (edges don't persist normally,
-        # but for BUILD we track in state so route_phase can see it)
-        new_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
-        new_counts["BUILD"] = new_counts.get("BUILD", 0) + 1
-        state["artifacts"] = {**state.get("artifacts", {}), "loop_counts": new_counts}
-
+    # Nodes persist via artifacts.loop_counts which the _dict_merge
+    # reducer writes into state. Edges only READ the counter to decide
+    # where to route. (Decision 5: the BUILD node now persists its retry
+    # counter in artifacts.loop_counts, so no edge-side mutation remains.)
     loop_count = _get_loop_count(state, phase)
     max_loops = 2
     if loop_count >= max_loops:
@@ -129,8 +137,35 @@ def route_phase(state: WorkflowState) -> str:
     if phase == "SEED_DATA":
         return "VERIFY"
 
-    # VERIFY -> placeholder, always forward to SHIP
+    # VERIFY -> real gate (Decision 2). A failing VERIFY must loop back to
+    # BUILD or halt — it can never reach SHIP. The deterministic signal is
+    # test_errors (real pytest failures) OR critical review findings; LLM
+    # review text alone is advisory and never the gate.
+    #
+    # `verify_status` (not the LLM text) is the source of truth, so the
+    # `error` + next_phase==ERROR escape hatch still routes to ERROR terminal.
     if phase == "VERIFY":
+        verify_status = state.get("artifacts", {}).get("verify_status")
+        test_errors = 0
+        test_summary = state.get("artifacts", {}).get("test_results")
+        if isinstance(test_summary, str) and test_summary:
+            try:
+                import json as _json
+
+                test_errors = _json.loads(test_summary).get("pytest_fail", 0) or 0
+            except (ValueError, TypeError):
+                test_errors = 0
+        has_failures = bool(state.get("error")) and state.get("next_phase") is None
+        failed = verify_status == "fail" or test_errors > 0 or has_failures
+        if failed:
+            if loop_count >= max_loops:
+                # Exceeded the retry budget — force forward (livelock guard).
+                # NOTE: the generic branch above sends a plain terminal error
+                # to the ERROR sink; a failed-VERIFY that exhausted its retry
+                # budget is the one case where halting beats the ERROR sink,
+                # so it returns "ERROR" here explicitly.
+                return "ERROR"
+            return "BUILD"
         return "SHIP"
 
     # SHIP -> always reflect
@@ -143,6 +178,7 @@ def route_phase(state: WorkflowState) -> str:
 
     # Safety fallback: unknown phase -> END with warning (S-005)
     import logging
+
     _log = logging.getLogger(__name__)
     _log.warning(f"Unknown phase '{phase}' in route_phase, falling back to END")
     return END

@@ -18,6 +18,7 @@ Contract:
 The scanner is a pure filesystem + parse module (no LLM, no graph state),
 so it is trivially unit-testable.
 """
+
 from __future__ import annotations
 
 import re
@@ -57,7 +58,9 @@ BOARD_STATUSES = ("APPROVED", "PENDING", "REJECTED", "CONDITIONAL")
 # ── Parsing helpers ─────────────────────────────────────────────────────────
 
 
-def _find_section(sections: List[Tuple[int, str, str]], *patterns: str) -> Optional[str]:
+def _find_section(
+    sections: List[Tuple[int, str, str]], *patterns: str
+) -> Optional[str]:
     """find_section with tolerance for dotted numbering without trailing dot.
 
     `find_section` only strips '2.'/'2.1.' style numbering; ACHG templates use
@@ -137,16 +140,14 @@ def parse_achg(path: Path) -> Optional[Dict[str, Any]]:
     change_req = _field_table(find_section(sections, "change request") or "")
     doc_control = _field_table(find_section(sections, "document control") or "")
 
-    change_type = (
-        change_req.get("change type") or doc_control.get("change type") or ""
-    )
-    priority = (
-        change_req.get("priority") or doc_control.get("priority") or ""
-    )
+    change_type = change_req.get("change type") or doc_control.get("change type") or ""
+    priority = change_req.get("priority") or doc_control.get("priority") or ""
     cid = change_req.get("change id") or doc_control.get("change id") or change_id
 
     # ── §2 Rationale → 2.4 Change Description → summary ──
-    desc_body = _find_section(sections, "change description") or _find_section(sections, "problem statement")
+    desc_body = _find_section(sections, "change description") or _find_section(
+        sections, "problem statement"
+    )
     summary_source = desc_body or find_section(sections, "rationale")
     summary = ""
     if summary_source:
@@ -237,7 +238,11 @@ def scan_achg_context(root: str, project_id: str = "") -> Dict[str, Any]:
     Each entry: change_id, doc_id, change_type, priority, board_status,
     board_date, summary, affected_artifacts, adm_reentry (spec §4.2).
     """
-    empty: Dict[str, Any] = {"pending_achgs": [], "rejected_achgs": [], "note": ACHG_NOTE}
+    empty: Dict[str, Any] = {
+        "pending_achgs": [],
+        "rejected_achgs": [],
+        "note": ACHG_NOTE,
+    }
     if not root:
         return empty
     root_p = Path(root).expanduser()

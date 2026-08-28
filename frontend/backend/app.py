@@ -2,6 +2,7 @@
 Loop Engineering UI Backend — FastAPI + WebSocket + SSE
 Uses WorkflowBridge to run the actual LangGraph workflow or a simulated one.
 """
+
 import asyncio
 import os
 import sys
@@ -20,6 +21,7 @@ try:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
     _OTEL_AVAILABLE = True
 except ImportError:
     _OTEL_AVAILABLE = False
@@ -37,6 +39,7 @@ except ImportError:
 
 # ─── Models ────────────────────────────────────────────────────────────────
 
+
 class UserInput(BaseModel):
     phase: str
     input_type: str
@@ -45,9 +48,12 @@ class UserInput(BaseModel):
 
 class StartRequest(BaseModel):
     """User provides project name, requirements, and optional context folder."""
+
     project_name: str = ""
     spec: str = ""
-    context_folder: str = ""  # Path to existing codebase/docs folder; empty = skip DISCOVER
+    context_folder: str = (
+        ""  # Path to existing codebase/docs folder; empty = skip DISCOVER
+    )
     auto_approve: Optional[bool] = None  # None = use config.yaml default
 
 
@@ -140,7 +146,9 @@ async def get_status():
         return WorkflowResponse(
             status=orch["status"],
             phase=orch["phase"],
-            cycle=int(orch["cycle"]) if isinstance(orch["cycle"], str) else orch["cycle"],
+            cycle=int(orch["cycle"])
+            if isinstance(orch["cycle"], str)
+            else orch["cycle"],
             phases=orch["phases"],
             waiting_for=orch.get("waiting_for"),
             messages=orch.get("messages", []),
@@ -161,6 +169,7 @@ async def get_status():
 async def get_metrics():
     """Get current cycle metrics and thresholds."""
     from config.guardrails import _DEFAULTS
+
     # Gather metrics from the current workflow state via the runner
     metrics = {}
     if bridge._use_real_workflow and bridge._last_phase:
@@ -203,6 +212,7 @@ async def start_workflow(req: StartRequest):
     if req.auto_approve is not None:
         bridge._auto_approve = req.auto_approve
     bridge._run_task = asyncio.create_task(bridge.run_real())
+
     # Log exceptions from background task (previously silently swallowed)
     async def log_task_errors(task):
         try:
@@ -211,11 +221,16 @@ async def start_workflow(req: StartRequest):
             # Don't override status if workflow completed successfully
             if bridge.status != "complete":
                 import traceback
-                print(f"[APP] Workflow task exception: {type(e).__name__}: {e}", flush=True)
+
+                print(
+                    f"[APP] Workflow task exception: {type(e).__name__}: {e}",
+                    flush=True,
+                )
                 traceback.print_exc()
                 bridge.status = "idle"
                 bridge.waiting_for = None
                 bridge.current_phase = None
+
     asyncio.create_task(log_task_errors(bridge._run_task))
     return {"status": "started", "cycle": bridge.cycle}
 
@@ -259,4 +274,5 @@ if static_path.exists():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8011)

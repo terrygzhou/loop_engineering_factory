@@ -278,7 +278,9 @@ docker logs <name>
   # Model uses Column() to map Python name to DB column
   customer_id: Mapped[uuid.UUID] = mapped_column(
       Column("customer_id", UUID(as_uuid=True)),
-      ForeignKey("customers.id"), nullable=False, index=True
+      ForeignKey("customers.id"),
+      nullable=False,
+      index=True,
   )
   ```
   Alternatively, rename the Python attribute to `customer_id` everywhere (models, services, routers, seed scripts).
@@ -294,23 +296,28 @@ docker logs <name>
   from app.config import get_settings
   from sqlalchemy.ext.asyncio import create_async_engine
 
+
   async def create_tables():
       settings = get_settings()
       engine = create_async_engine(settings.database_url)
       async with engine.begin() as conn:
           # Create table
-          await conn.execute(text("""
+          await conn.execute(
+              text("""
               CREATE TABLE IF NOT EXISTS plans (
                   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                   ...
               );
-          """))
+          """)
+          )
           # Seed data with valid UUIDs
-          await conn.execute(text("""
+          await conn.execute(
+              text("""
               INSERT INTO plans (id, name, ...)
               VALUES ('a1000000-0000-0000-0000-000000000001', 'Plan Name', ...)
               ON CONFLICT (id) DO NOTHING;
-          """))
+          """)
+          )
   ```
   Deploy via `docker cp scripts/create_table.py <container>:/app/scripts/` + `docker exec <container> python3 /app/scripts/create_table.py`.
 - **PostgreSQL UUID format requirement:** Table `id` columns with UUID type reject non-UUID strings. Values like `'plan-trial'` cause `InvalidTextRepresentationError: invalid input syntax for type uuid`.
@@ -552,11 +559,13 @@ sleep 5 && curl -s http://localhost:8010/api/v1/items/
   - **Fix:** Use the project's `init_db()` from `app.database` which properly does `engine.begin() as conn: await conn.run_sync(Base.metadata.create_all)`:
     ```python
     from app.database import init_db
+
     await init_db()  # Creates all tables from SQLAlchemy models
     ```
   - **Alternative:** Use `engine.begin()` directly:
     ```python
     from sqlalchemy.ext.asyncio import create_async_engine
+
     engine = create_async_engine(url)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -579,16 +588,18 @@ sleep 5 && curl -s http://localhost:8010/api/v1/items/
   ```python
   async with async_session_factory() as session:
       for type_name, values in [
-          ('planstype', ['trial', 'short', 'medium', 'long']),
-          ('planstatus', ['pending', 'under_review', 'approved', ...]),
+          ("planstype", ["trial", "short", "medium", "long"]),
+          ("planstatus", ["pending", "under_review", "approved", ...]),
       ]:
-          await session.execute(text(f"""
+          await session.execute(
+              text(f"""
               DO $$ BEGIN
                   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{type_name}') THEN
-                      CREATE TYPE {type_name} AS ENUM ({','.join(f"'{v}'" for v in values)});
+                      CREATE TYPE {type_name} AS ENUM ({",".join(f"'{v}'" for v in values)});
                   END IF;
               END$$;
-          """))
+          """)
+          )
       await session.commit()
   ```
 - **Consolidation approach:**

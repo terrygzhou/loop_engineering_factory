@@ -10,6 +10,7 @@ the human reviewer to approve or reject with comments.
 
 Uses LangGraph OOTB interrupt() for the HIL pause.
 """
+
 from langgraph.config import get_stream_writer
 
 import time
@@ -97,17 +98,30 @@ def review_node(state: dict) -> dict:
     try:
         writer = get_stream_writer()
     except RuntimeError:
+
         def writer(*_args, **_kwargs):
             return None
-    writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "started", "detail": "\n=== ARCH_REVIEW PHASE ===", "ts": time.time()})
+
+    writer(
+        {
+            "type": "progress",
+            "phase": "ARCH_REVIEW",
+            "step": "started",
+            "detail": "\n=== ARCH_REVIEW PHASE ===",
+            "ts": time.time(),
+        }
+    )
 
     # ── Audit logging ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
-    audit.log_node_input("ARCH_REVIEW", {
-        "has_plan": bool(state.get("artifacts", {}).get("plan")),
-        "has_diagrams": bool(state.get("artifacts", {}).get("diagrams")),
-        "has_pngs": bool(state.get("artifacts", {}).get("diagram_pngs")),
-    })
+    audit.log_node_input(
+        "ARCH_REVIEW",
+        {
+            "has_plan": bool(state.get("artifacts", {}).get("plan")),
+            "has_diagrams": bool(state.get("artifacts", {}).get("diagrams")),
+            "has_pngs": bool(state.get("artifacts", {}).get("diagram_pngs")),
+        },
+    )
 
     # ── ACHG context + safety interlock inputs (EYW-171 §8 / EYW-184) ──
     achg_context = _resolve_achg_context(state)
@@ -119,12 +133,37 @@ def review_node(state: dict) -> dict:
     if auto_approve and pending_ids:
         # EYW-184 interlock (EYW-171 §7.4): never auto-approve while an ACHG
         # has PENDING board status — force an explicit human decision instead.
-        writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": f"  → Auto-approve BLOCKED — pending ACHG(s): {', '.join(pending_ids)}. Explicit human decision required (EYW-171 §7.4).", "ts": time.time()})
-        audit.log_node_output("ARCH_REVIEW", {"approved": None, "reason": "auto_approve_blocked_pending_achg", "pending_achgs": pending_ids})
+        writer(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "progress",
+                "detail": f"  → Auto-approve BLOCKED — pending ACHG(s): {', '.join(pending_ids)}. Explicit human decision required (EYW-171 §7.4).",
+                "ts": time.time(),
+            }
+        )
+        audit.log_node_output(
+            "ARCH_REVIEW",
+            {
+                "approved": None,
+                "reason": "auto_approve_blocked_pending_achg",
+                "pending_achgs": pending_ids,
+            },
+        )
         auto_approve = False
     if auto_approve:
-        writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": "  → Auto-approve mode — skipping review gate", "ts": time.time()})
-        audit.log_node_output("ARCH_REVIEW", {"approved": True, "reason": "auto_approve"})
+        writer(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "progress",
+                "detail": "  → Auto-approve mode — skipping review gate",
+                "ts": time.time(),
+            }
+        )
+        audit.log_node_output(
+            "ARCH_REVIEW", {"approved": True, "reason": "auto_approve"}
+        )
         return {
             "phase": "ARCH_REVIEW",
             "next_phase": "BUILD",
@@ -190,9 +229,8 @@ def review_node(state: dict) -> dict:
         "type": "review",
         "phase": "ARCH_REVIEW",
         "label": "Architecture & Plan Review",
-        "description": (
-            ("\n".join(warning_lines) + "\n\n") if warning_lines else ""
-        ) + (
+        "description": (("\n".join(warning_lines) + "\n\n") if warning_lines else "")
+        + (
             "Review the implementation plan, tasks, analysis, and architecture diagrams.\n"
             "Approve to proceed to BUILD, or reject with feedback to send back to PLAN."
         ),
@@ -223,8 +261,24 @@ def review_node(state: dict) -> dict:
         },
     }
 
-    writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": f"  → Review payload: {task_count} tasks, {diagram_count} diagrams, uncertainty={arch_uncertainty:.2f}", "ts": time.time()})
-    writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "progress", "detail": "  → Pausing for human review...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "ARCH_REVIEW",
+            "step": "progress",
+            "detail": f"  → Review payload: {task_count} tasks, {diagram_count} diagrams, uncertainty={arch_uncertainty:.2f}",
+            "ts": time.time(),
+        }
+    )
+    writer(
+        {
+            "type": "progress",
+            "phase": "ARCH_REVIEW",
+            "step": "progress",
+            "detail": "  → Pausing for human review...",
+            "ts": time.time(),
+        }
+    )
 
     # ── Interrupt for human review ──
     resume_data = interrupt(interrupt_payload)
@@ -238,7 +292,9 @@ def review_node(state: dict) -> dict:
 
     approved = resume_data.get("approved", True)
     override = bool(resume_data.get("override", False))
-    user_review_comments = resume_data.get("feedback", resume_data.get("user_review_comments", ""))
+    user_review_comments = resume_data.get(
+        "feedback", resume_data.get("user_review_comments", "")
+    )
 
     # ── EYW-184 px-gate interlock: plain approve below threshold → reject ──
     if approved and px_gate.enabled and not gate_result.passed and not override:
@@ -249,17 +305,45 @@ def review_node(state: dict) -> dict:
             + ". Address these findings in the regenerated PLAN, or re-submit "
             "with override=true and a documented rationale."
         )
-        writer({"type": "error", "phase": "ARCH_REVIEW", "step": "error", "detail": f"  ✗ px gate blocked approval ({'; '.join(gate_result.failures)}) — converting to reject", "ts": time.time()})
+        writer(
+            {
+                "type": "error",
+                "phase": "ARCH_REVIEW",
+                "step": "error",
+                "detail": f"  ✗ px gate blocked approval ({'; '.join(gate_result.failures)}) — converting to reject",
+                "ts": time.time(),
+            }
+        )
 
     if approved:
-        writer({"type": "progress", "phase": "ARCH_REVIEW", "step": "success", "detail": "  ✓ ARCH_REVIEW approved — proceeding to BUILD", "ts": time.time()})
-        audit.log_node_output("ARCH_REVIEW", {"approved": True, "comments": "", "px_gate_override": override, "pending_achgs_at_review": pending_ids})
+        writer(
+            {
+                "type": "progress",
+                "phase": "ARCH_REVIEW",
+                "step": "success",
+                "detail": "  ✓ ARCH_REVIEW approved — proceeding to BUILD",
+                "ts": time.time(),
+            }
+        )
+        audit.log_node_output(
+            "ARCH_REVIEW",
+            {
+                "approved": True,
+                "comments": "",
+                "px_gate_override": override,
+                "pending_achgs_at_review": pending_ids,
+            },
+        )
         audit.log_node_transition("ARCH_REVIEW", "BUILD", "plan approved")
         return {
             "phase": "ARCH_REVIEW",
             "next_phase": "BUILD",
             "diagram_status": "approved",
-            "artifacts": {"review_approved": True, "achg_context": achg_context, "px_gate_result": gate_result.to_artifact()},
+            "artifacts": {
+                "review_approved": True,
+                "achg_context": achg_context,
+                "px_gate_result": gate_result.to_artifact(),
+            },
         }
     else:
         # Persist the ARCH_REVIEW loop count so the route_phase livelock guard
@@ -267,8 +351,26 @@ def review_node(state: dict) -> dict:
         # LangGraph only persists node return values (EYW-184 reject-loop).
         loop_counts = dict(artifacts.get("loop_counts", {}))
         loop_counts["ARCH_REVIEW"] = int(loop_counts.get("ARCH_REVIEW", 0)) + 1
-        writer({"type": "error", "phase": "ARCH_REVIEW", "step": "error", "detail": f"  ✗ ARCH_REVIEW rejected (loop {loop_counts['ARCH_REVIEW']}/2) — sending back to PLAN with feedback ({len(user_review_comments)} chars)", "ts": time.time()})
-        audit.log_node_output("ARCH_REVIEW", {"approved": False, "comments": user_review_comments[:bounds.feedback.max_review_comments_chars], "px_gate_blocked": not gate_result.passed, "pending_achgs_at_review": pending_ids})
+        writer(
+            {
+                "type": "error",
+                "phase": "ARCH_REVIEW",
+                "step": "error",
+                "detail": f"  ✗ ARCH_REVIEW rejected (loop {loop_counts['ARCH_REVIEW']}/2) — sending back to PLAN with feedback ({len(user_review_comments)} chars)",
+                "ts": time.time(),
+            }
+        )
+        audit.log_node_output(
+            "ARCH_REVIEW",
+            {
+                "approved": False,
+                "comments": user_review_comments[
+                    : bounds.feedback.max_review_comments_chars
+                ],
+                "px_gate_blocked": not gate_result.passed,
+                "pending_achgs_at_review": pending_ids,
+            },
+        )
         audit.log_node_transition("ARCH_REVIEW", "PLAN", "plan rejected with feedback")
         return {
             "phase": "ARCH_REVIEW",
@@ -276,5 +378,10 @@ def review_node(state: dict) -> dict:
             "diagram_status": "rejected",
             "diagram_feedback": user_review_comments,
             "user_review_comments": user_review_comments,
-            "artifacts": {"review_approved": False, "loop_counts": loop_counts, "achg_context": achg_context, "px_gate_result": gate_result.to_artifact()},
+            "artifacts": {
+                "review_approved": False,
+                "loop_counts": loop_counts,
+                "achg_context": achg_context,
+                "px_gate_result": gate_result.to_artifact(),
+            },
         }

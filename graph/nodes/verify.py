@@ -199,7 +199,9 @@ def verify_node(state: dict) -> dict:
     )
 
     # ── Default findings (no project / skip) ──
+    # Must include "issues" — downstream code accesses it unconditionally.
     findings: dict[str, Any] = {
+        "issues": [],
         "critical": 0,
         "required": 0,
         "optional": 0,
@@ -304,6 +306,28 @@ def verify_node(state: dict) -> dict:
                 )
                 cr_timer.complete()
 
+                # Decision 3: a None result is a fatal LLM failure, not content.
+                # Route to the ERROR terminal instead of parsing a sentinel string.
+                if not review_text:
+                    audit.log_node_output(
+                        "VERIFY",
+                        {"status": "llm_error", "note": "code-review LLM call failed"},
+                    )
+                    writer(
+                        {
+                            "type": "progress",
+                            "phase": "VERIFY",
+                            "step": "error",
+                            "detail": "  ✗ Code-review LLM call failed — routing to ERROR terminal",
+                            "ts": time.time(),
+                        }
+                    )
+                    return {
+                        "phase": "VERIFY",
+                        "error": "VERIFY: code-review LLM call failed (fatal)",
+                        "next_phase": "ERROR",
+                    }
+
                 # ── Parse results ──
                 findings = _parse_review_result(review_text)
 
@@ -376,20 +400,10 @@ def verify_node(state: dict) -> dict:
         0.0 if findings["critical"] > 0 else (0.5 if findings["required"] > 0 else 1.0)
     )
 
-    # ── Loop counter: increment if verify failed (critical findings or test errors) ──
-    if findings["critical"] > 0 or test_errors > 0:
-        from graph.edges import _maybe_increment_loop
-
-        _maybe_increment_loop(state, "VERIFY")
-        writer(
-            {
-                "type": "progress",
-                "phase": "VERIFY",
-                "step": "warning",
-                "detail": f"  ⚠ Critical findings={findings['critical']} or test_errors={test_errors} — routing to ERROR terminal",
-                "ts": time.time(),
-            }
-        )
+    # NOTE: The VERIFY retry counter is incremented BELOW, in the partial-update
+    # construction block. The old _maybe_increment_loop call was removed because
+    # it mutated state["artifacts"] in-place (LangGraph doesn't persist that) and
+    # would double-increment alongside the new loop_counts logic.
 
     current_metrics = state.get("metrics")
     metrics_update = None
@@ -404,15 +418,24 @@ def verify_node(state: dict) -> dict:
             }
         )
 
+    # ── Increment the VERIFY retry counter (Decision 5: nodes persist,
+    # edges only read) — required so route_phase can see a fresh counter on
+    # the next pass through the graph after a BUILD->VERIFY loop.
+    loop_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
+    if has_failures := (findings["critical"] > 0 or test_errors > 0):
+        loop_counts["VERIFY"] = loop_counts.get("VERIFY", 0) + 1
+
     # ── Build partial update ──
-    has_failures = findings["critical"] > 0 or test_errors > 0
+    # Decision 2: verify_status is the deterministic gate signal consumed by
+    # route_phase. "fail" means loop back to BUILD or halt; "pass" means SHIP.
     update: dict = {
         "phase": "VERIFY",
         "next_phase": "SHIP" if not has_failures else None,
         "artifacts": {
-            "verify_status": "complete",
+            "verify_status": "fail" if has_failures else "pass",
             "code_review_report": report_path or "",
             "files_reviewed": files_reviewed,
+            "loop_counts": loop_counts,
         },
     }
     if findings["issues"]:
@@ -491,8 +514,12 @@ def _run_test_infrastructure(project_path: str, writer, audit) -> dict:
                 timeout=120,
             )
             results["pytest"] = {
-                "passed": len([line for line in proc.stdout.split("\n") if "passed" in line]),
-                "failed": len([line for line in proc.stdout.split("\n") if "failed" in line]),
+                "passed": len(
+                    [line for line in proc.stdout.split("\n") if "passed" in line]
+                ),
+                "failed": len(
+                    [line for line in proc.stdout.split("\n") if "failed" in line]
+                ),
                 "errors": proc.returncode,
                 "output": proc.stdout[-500:],
             }
@@ -571,7 +598,9 @@ def _run_test_infrastructure(project_path: str, writer, audit) -> dict:
                 text=True,
                 timeout=120,
             )
-            error_lines = [line for line in proc.stdout.split("\n") if ": error:" in line]
+            error_lines = [
+                line for line in proc.stdout.split("\n") if ": error:" in line
+            ]
             results["mypy"] = {"errors": len(error_lines), "output": proc.stdout[-500:]}
         except subprocess.TimeoutExpired:
             results["mypy"] = {"errors": 0, "output": "Timeout"}

@@ -134,20 +134,24 @@ Example for Slice 1 (Create Item):
 # models/item.py
 from pydantic import BaseModel, Field
 
+
 class CreateItemRequest(BaseModel):
     name: str = Field(..., min_length=1)
     quantity: int = Field(..., ge=0)
+
 
 class ItemResponse(BaseModel):
     id: int
     name: str
     quantity: int
 
+
 # routes/items.py
 from fastapi import APIRouter
 from .models.item import CreateItemRequest, ItemResponse
 
 router = APIRouter(prefix="/api/v1/items")
+
 
 @router.post("", response_model=ItemResponse, status_code=201)
 async def create_item(body: CreateItemRequest):

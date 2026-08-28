@@ -13,7 +13,6 @@ API endpoints used (agent-server v1.30.0):
 
 import json
 import logging
-import re
 import tempfile
 import time
 from pathlib import Path
@@ -32,17 +31,23 @@ from graph.nodes.build_subgraph_legacy import (
 logger = logging.getLogger(__name__)
 
 # -- Constants --------------------------------------------------------
-POLL_INTERVAL = 5         # seconds between status polls
-BUILD_TIMEOUT = 3600       # 1-hour hard limit (matches build_subgraph legacy)
-PROMPT_CHAR_LIMIT = 16_000 # Truncate spec/tasks to avoid context overflow
+POLL_INTERVAL = 5  # seconds between status polls
+BUILD_TIMEOUT = 3600  # 1-hour hard limit (matches build_subgraph legacy)
+PROMPT_CHAR_LIMIT = 16_000  # Truncate spec/tasks to avoid context overflow
 STATUS_FINISHED = "finished"
 _DEFAULT_WORKING_DIR = str(Path(tempfile.gettempdir()) / "oh_build")
 STATUS_ERROR = "error"
 STATUS_TIMEOUT = "timeout"
 
+
 # -- Conversation creation (agent-server v1.30.0) ---------------------
-def _create_conversation(client: httpx.Client, prompt: str, project_path: str,
-                         secret_key: str, max_iterations: int = 50) -> str | None:
+def _create_conversation(
+    client: httpx.Client,
+    prompt: str,
+    project_path: str,
+    secret_key: str,
+    max_iterations: int = 50,
+) -> str | None:
     """
     Create a conversation on agent-server v1.30.0.
 
@@ -126,6 +131,7 @@ def _build_prompt(state: dict) -> str:
     if not solution_md and artifacts.get("solution_path"):
         try:
             import pathlib
+
             solution_md = pathlib.Path(artifacts["solution_path"]).read_text()
         except Exception:
             logger.debug("solution_path read failed", exc_info=True)
@@ -134,6 +140,7 @@ def _build_prompt(state: dict) -> str:
 
 PROJECT: {project_name}
 WORKSPACE: {project_path}
+BUILD_REPORT_PATH: {project_path}/build_report.json
 
 INSTRUCTIONS:
 1. Generate the complete source code for the project
@@ -143,6 +150,20 @@ INSTRUCTIONS:
 5. Write a seed script for database initialization
 6. Perform a security review of the generated code
 7. For any user-facing UI (web pages, dashboards, forms, components), apply production-grade frontend engineering: accessible (WCAG 2.1 AA), responsive, semantic HTML, and visually polished — not a generic "AI-generated" look. Honor the spec's UI & User Experience section (screens, flows, design constraints) when present.
+
+MANDATORY MACHINE-READABLE RESULT:
+When you finish, you MUST write a file named build_report.json in the project
+root containing ONLY valid JSON with this exact shape:
+    {{
+      "status": "pass" | "fail" | "partial",
+      "test_results": "human-readable summary of test run",
+      "files": ["relative/path/to/file", ...],
+      "errors": ["first error if any", ...]
+    }}
+- "status" is "pass" only if tests run and all pass; "fail" if the build or
+  tests cannot complete; "partial" if code exists but some tests fail.
+- This file is parsed by the orchestrator and is the source of truth for
+  whether the build succeeded. Keep it valid JSON; do not add commentary.
 
 OUTPUT FORMAT:
 For each file, output in this format:
@@ -165,101 +186,65 @@ TASKS:
 
 
 # -- Result parsing ---------------------------------------------------
-def _parse_assistant_text(text: str) -> dict:
-    """
-    Parse the OpenHands assistant text response into structured artifacts.
+# Decision 1: build_report.json is the primary, machine-readable BUILD
+# result contract. The agent is instructed to write it; a missing/invalid
+# manifest is a hard failure (typed exception), not a silent downgrade.
+BUILD_REPORT_FILENAME = "build_report.json"
 
-    OpenHands returns assistant messages (text), not structured JSON.
-    We extract:
-    - File blocks: === FILE: path === ... ===
-    - Test results: explicit pass/fail mentions
-    - Error messages: error/failure/exception text
-    - Overall status: derived from content
 
-    This is the bridge between Gateway response and WorkflowState artifacts.
+class BuildReportMissingError(Exception):
+    """Raised when the OpenHands agent did not produce a valid
+    ``build_report.json``. Decision 1 makes the manifest the source of
+    truth; silently falling back to free-text parsing would violate
+    Decision 2 (VERIFY gate) and Decision 3 (typed errors)."""
+
+
+def _parse_build_report(project_path: str) -> dict | None:
+    """Read and validate build_report.json if the agent produced one.
+
+    Expected schema:
+        {
+          "status": "pass" | "fail" | "partial",
+          "test_results": "...",
+          "files": ["relative/path", ...],
+          "errors": ["..."]
+        }
+
+    Returns a normalized dict with keys build_status, test_results,
+    files_created, errors, build_log — or None when the manifest is
+    missing or invalid, signalling callers to fall back to text parsing.
     """
-    result: dict[str, Any] = {
-        "generated_code": [],     # list of {"path": str, "content": str}
-        "test_results": "",       # raw test output text
-        "build_log": "",         # file list / commands executed
-        "build_status": "pass",  # "pass", "fail", "partial"
-        "files_created": [],     # list of file paths
-        "errors": [],           # extracted error messages
+    report_path = Path(project_path) / BUILD_REPORT_FILENAME
+    if not report_path.exists():
+        return None
+    try:
+        raw = json.loads(report_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(
+            "  -> [OPENHANDS] build_report.json unreadable (%s); falling back", e
+        )
+        return None
+
+    if not isinstance(raw, dict) or "status" not in raw:
+        return None
+    status = str(raw.get("status", "partial")).lower()
+    if status not in ("pass", "fail", "partial"):
+        status = "partial"
+    files = [str(f) for f in (raw.get("files") or []) if isinstance(f, str)]
+    errors = [str(e) for e in (raw.get("errors") or []) if isinstance(e, str)]
+    raw_tests = raw.get("test_results")
+    test_results = "" if raw_tests is None else str(raw_tests)
+    build_log = (
+        f"BUILD manifest (status={status}): {len(files)} file(s), {len(errors)} error(s)\n"
+        + "\n".join(errors[:5])
+    )
+    return {
+        "build_status": status,
+        "test_results": test_results,
+        "files_created": files,
+        "errors": errors,
+        "build_log": build_log,
     }
-
-    if not text or not text.strip():
-        result["build_status"] = "partial"
-        result["errors"].append("Empty response from OpenHands agent")
-        return result
-
-    # -- Extract file blocks --
-    file_pattern = re.compile(
-        r"=== FILE: ([^\n=]+) ===\s*\n```(\w+)?\s*\n(.*?)```",
-        re.DOTALL,
-    )
-    for match in file_pattern.finditer(text):
-        file_path = match.group(1).strip()
-        content = match.group(3).strip()
-        result["generated_code"].append({"path": file_path, "content": content})
-        result["files_created"].append(file_path)
-
-    # -- Also extract unlabelled code blocks (no === FILE header) --
-    # For agents that produce markdown without the FILE marker
-    if not result["generated_code"]:
-        loose_code = re.compile(r"```(\w+)\s*\n(.*?)```", re.DOTALL)
-        for match in loose_code.finditer(text):
-            lang = match.group(1)
-            content = match.group(2).strip()
-            if lang in ("python", "bash", "yaml", "toml", "json", "html", "css"):
-                result["generated_code"].append({
-                    "path": f"generated_{len(result['generated_code']) + 1}.{lang}",
-                    "content": content,
-                })
-
-    # -- Extract test results --
-    test_section = re.search(
-        r"(TEST RESULTS|TEST OUTPUT|pytest|test result)[\s\S]{0,500}",
-        text, re.IGNORECASE,
-    )
-    if test_section:
-        result["test_results"] = test_section.group(0)
-
-    # -- Extract errors --
-    error_patterns = [
-        r"(?:error|failed|exception|fail)[^\n]{0,200}",
-        r"(?:\u26a0|\u2717|\u274c)\s*[^\n]{0,200}",
-    ]
-    for pattern in error_patterns:
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            err_text = match.group(0).strip()
-            # Avoid false positives from "no errors found"
-            if not re.search(r"no\s+(?:error|fail)", err_text, re.IGNORECASE):
-                result["errors"].append(err_text)
-
-    # -- Derive build status --
-    has_errors = bool(result["errors"])
-    has_code = bool(result["generated_code"])
-    has_pass = bool(re.search(r"(all passed|tests? passed|success)", text, re.IGNORECASE))
-
-    if has_errors and not has_code:
-        result["build_status"] = "fail"
-    elif has_errors and has_code:
-        result["build_status"] = "partial"
-    elif has_code and has_pass:
-        result["build_status"] = "pass"
-    elif has_code:
-        result["build_status"] = "pass"  # Code generated, no explicit failures
-    else:
-        result["build_status"] = "partial"
-
-    # -- Build log: summary of files + commands --
-    result["build_log"] = (
-        f"Files created: {len(result['files_created'])}\n"
-        f"Files: {', '.join(result['files_created'][:20])}\n"
-        f"Errors: {len(result['errors'])}\n"
-    )
-
-    return result
 
 
 # -- Conversation polling (agent-server v1.30.0) ---------------------
@@ -299,7 +284,9 @@ def _poll_conversation(
                     result = resp.json()
                     return result.get("response", "")
                 except (httpx.HTTPError, json.JSONDecodeError) as e:
-                    logger.warning("  -> [OPENHANDS] Failed to fetch final response: %s", e)
+                    logger.warning(
+                        "  -> [OPENHANDS] Failed to fetch final response: %s", e
+                    )
                 return None
 
         except (httpx.HTTPError, json.JSONDecodeError) as e:
@@ -338,16 +325,26 @@ def _write_generated_files(state: dict, files: list[dict]) -> list[str]:
     can access them. Returns list of written paths.
     """
     project_path = state.get("project_path", "")
+    root = Path(project_path)
     written = []
     for file_entry in files:
         rel_path = file_entry["path"]
         content = file_entry["content"]
-        full_path = f"{project_path}/{rel_path}"
+        # Decision 1 (safety): reject absolute paths and any path that escapes
+        # the project root (e.g. "../../etc/passwd") before writing.
+        rel = Path(rel_path)
+        if rel.is_absolute():
+            logger.warning("Rejected absolute generated path: %s", rel_path)
+            continue
+        target = (root / rel).resolve() if root.exists() else (root / rel)
         try:
-            import pathlib
-            p = pathlib.Path(full_path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
+            target.relative_to(root.resolve() if root.exists() else root)
+        except ValueError:
+            logger.warning("Rejected path-traversal generated file: %s", rel_path)
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
             written.append(rel_path)
         except Exception as e:
             logger.warning("Failed to write %s: %s", rel_path, e)
@@ -357,12 +354,22 @@ def _write_generated_files(state: dict, files: list[dict]) -> list[str]:
     return written
 
 
+# -- Retry guard constants --------------------------------------------
+BUILD_MAX_RETRIES = 2  # max BUILD->BUILD loops before halting (Decision 2/5)
+
+
 def _merge_results(state: dict, parsed: dict) -> dict:
     """
     Merge OpenHands parsed results into WorkflowState as a partial update.
 
     This is the bridge between OpenHands text response and
     executor.py / edges.py quality gates.
+
+    Retry counter (Decision 5): the BUILD retry count is persisted in
+    `artifacts.loop_counts["BUILD"]` so LangGraph persists it across
+    checkpoints. The edge router (route_phase) is a pure reader — it no
+    longer mutates state. The node owns the increment, matching the
+    pattern used by DEFINE/PLAN/VERIFY.
     """
     # -- Write files to disk immediately --
     _write_generated_files(state, parsed.get("generated_code", []))
@@ -379,59 +386,84 @@ def _merge_results(state: dict, parsed: dict) -> dict:
     # -- UAT proxy: derive pass_rate from build_status --
     status = parsed["build_status"]
     if status == "pass":
-        artifacts_delta["uat_report"] = f"OpenHands agent completed successfully.\n{parsed['build_log']}"
+        artifacts_delta["uat_report"] = (
+            f"OpenHands agent completed successfully.\n{parsed['build_log']}"
+        )
         uat_pass_rate = 1.0
     elif status == "partial":
-        artifacts_delta["uat_report"] = "OpenHands agent completed with issues.\nErrors:\n" + "\n".join(parsed["errors"][:5])
+        artifacts_delta["uat_report"] = (
+            "OpenHands agent completed with issues.\nErrors:\n"
+            + "\n".join(parsed["errors"][:5])
+        )
         uat_pass_rate = 0.5
     else:
-        artifacts_delta["uat_report"] = "OpenHands agent failed.\nErrors:\n" + "\n".join(parsed["errors"])
+        artifacts_delta["uat_report"] = (
+            "OpenHands agent failed.\nErrors:\n" + "\n".join(parsed["errors"])
+        )
         uat_pass_rate = 0.0
 
     # -- UAT pass rate via metrics update --
     current_metrics = state.get("metrics")
     metrics_update = None
     if current_metrics and hasattr(current_metrics, "model_copy"):
-        metrics_update = current_metrics.model_copy(update={"uat_pass_rate": uat_pass_rate})
+        metrics_update = current_metrics.model_copy(
+            update={"uat_pass_rate": uat_pass_rate}
+        )
 
-    # -- Retry guard --
-    fail_count = state.get("_build_fail_count", 0)
+    # -- Retry guard (Decision 5): single canonical counter in artifacts --
+    # The previous top-level `_build_fail_count` was not persisted by
+    # LangGraph and could reset on resume; this counter lives in
+    # artifacts.loop_counts which the _dict_merge reducer persists.
+    loop_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
+    fail_count = int(loop_counts.get("BUILD", 0))
     if status == "fail":
         fail_count += 1
-        if fail_count >= 3:
+        loop_counts["BUILD"] = fail_count
+        if fail_count > BUILD_MAX_RETRIES:
+            # Exceeded retry budget — halt the cycle (route to ERROR).
+            logger.error(
+                "  -> [OPENHANDS] Build failed %d times consecutively -- halting",
+                fail_count,
+            )
+            # Keep error/next_phase/verify_status consistent with the BUILD
+            # gate in edges.route_phase: a terminal BUILD failure halts the
+            # cycle (route -> ERROR) instead of silently shipping a broken
+            # project via the next_phase override.
             return {
                 "phase": "BUILD",
                 "error": (
                     f"Build failed {fail_count} times consecutively -- "
                     f"aborting. Errors: {parsed['errors'][:3]}"
                 ),
-                "next_phase": "REFLECT",
-                "artifacts": artifacts_delta,
-                "_build_fail_count": fail_count,
+                "next_phase": None,
+                "artifacts": {**artifacts_delta, "loop_counts": loop_counts},
+                "metrics": metrics_update,
             }
+
+    # Reset counter on success (pass / partial) so a later failure starts
+    # fresh; the BUILD->BUILD retry path will re-increment.
+    if status != "fail":
+        loop_counts["BUILD"] = 0
 
     # -- Next phase --
     next_phase = "SEED_DATA" if status == "pass" else None
 
     update: dict = {
         "phase": "BUILD",
-        "artifacts": artifacts_delta,
+        "artifacts": {**artifacts_delta, "loop_counts": loop_counts},
         "superweb_mode": "agent",
     }
     if next_phase:
         update["next_phase"] = next_phase
     if metrics_update:
         update["metrics"] = metrics_update
-    if status == "fail":
-        update["_build_fail_count"] = fail_count
-    else:
-        update["_build_fail_count"] = 0
 
     logger.info(
-        "  -> [OPENHANDS] BUILD complete: status=%s, files=%d, errors=%d",
+        "  -> [OPENHANDS] BUILD complete: status=%s, files=%d, errors=%d, retry=%d",
         status,
         len(parsed["generated_code"]),
         len(parsed["errors"]),
+        loop_counts.get("BUILD", 0),
     )
 
     return update
@@ -462,14 +494,33 @@ def _delegate_to_openhands(state: dict, oh_cfg) -> dict:
         logger.info("  -> [OPENHANDS] Conversation %s created", conv_id)
 
         # -- Poll for completion --
-        assistant_text = _poll_conversation(client, conv_id, secret_key, timeout=timeout)
+        assistant_text = _poll_conversation(
+            client, conv_id, secret_key, timeout=timeout
+        )
 
         if not assistant_text:
-            logger.warning("  -> [OPENHANDS] Conversation %s returned empty or timed out", conv_id)
+            logger.warning(
+                "  -> [OPENHANDS] Conversation %s returned empty or timed out", conv_id
+            )
             return _run_local_subgraph(state)
 
-    # -- Parse results --
-    parsed = _parse_assistant_text(assistant_text)
+    # -- Parse results (Decision 1) --
+    # The build_report.json manifest is the source of truth (Decision 1).
+    # Decision 3 (typed LLM errors) and Decision 2 (VERIFY gate) both
+    # require that a missing/invalid manifest is treated as a hard failure
+    # rather than silently downgraded to a weaker signal — so we raise
+    # instead of falling back to free-text parsing.
+    parsed = _parse_build_report(project_path)
+    if parsed is None:
+        logger.error(
+            "  -> [OPENHANDS] %s missing or invalid for %s — treating as build failure",
+            BUILD_REPORT_FILENAME,
+            project_path,
+        )
+        raise BuildReportMissingError(
+            f"{BUILD_REPORT_FILENAME} was not produced or could not be parsed at {project_path}"
+        )
+    parsed["_source"] = "manifest"
     return _merge_results(state, parsed)
 
 
@@ -538,5 +589,17 @@ def openhands_build_proxy_factory(
     Returns openhands_build_wrapper (aliased as openhands_build_node for
     backward compatibility) wrapped for use with the existing
     build_proxy_node interface.
+
+    Decision 5 (async BUILD): the wrapper is exposed to LangGraph as an
+    async node so the event loop is not blocked for the 1-hour OpenHands
+    poll window. The heavy lifting (HTTP polling, subprocess writes, local
+    subgraph) still runs in a worker thread via asyncio.to_thread so a
+    hung OpenHands can't freeze the UI.
     """
-    return openhands_build_wrapper
+
+    async def _async_build(state: dict) -> dict:
+        import asyncio
+
+        return await asyncio.to_thread(openhands_build_wrapper, state)
+
+    return _async_build

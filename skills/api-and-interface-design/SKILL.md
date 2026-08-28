@@ -63,15 +63,18 @@ Example structure:
 from pydantic import BaseModel, Field
 from enum import Enum
 
+
 class SortOrder(str, Enum):
     ASC = "asc"
     DESC = "desc"
+
 
 class CreateItemRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str = Field("", max_length=5000)
     quantity: int = Field(..., ge=0)
     sort_by: SortOrder = Field(default=SortOrder.ASC)
+
 
 class ItemResponse(BaseModel):
     id: int
@@ -98,10 +101,10 @@ Standardize error responses across all endpoints:
 
 ```python
 class ErrorResponse(BaseModel):
-    error_code: str        # e.g., "VALIDATION_ERROR", "NOT_FOUND"
-    message: str            # Human-readable
-    details: dict = {}      # Field-level validation errors, etc.
-    request_id: str         # Correlation ID for debugging
+    error_code: str  # e.g., "VALIDATION_ERROR", "NOT_FOUND"
+    message: str  # Human-readable
+    details: dict = {}  # Field-level validation errors, etc.
+    request_id: str  # Correlation ID for debugging
 ```
 
 Map HTTP status codes consistently:
@@ -152,6 +155,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
@@ -160,7 +164,7 @@ async def global_exception_handler(request: Request, exc: Exception):
             "error_code": "INTERNAL_ERROR",
             "message": "An unexpected error occurred",
             "request_id": str(request.headers.get("X-Request-ID", "")),
-        }
+        },
     )
 ```
 

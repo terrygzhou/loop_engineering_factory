@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Convert Mermaid .mmd files to PNG using Playwright."""
+
 import asyncio
 import re
 from pathlib import Path
@@ -7,30 +8,39 @@ from pathlib import Path
 from playwright.async_api import async_playwright
 
 # Local mermaid.min.js bundle — resolves relative to this file (works in Docker).
-_MERMAID_JS = Path(__file__).resolve().parent.parent / "frontend" / "static" / "js" / "mermaid.min.js"
+_MERMAID_JS = (
+    Path(__file__).resolve().parent.parent
+    / "frontend"
+    / "static"
+    / "js"
+    / "mermaid.min.js"
+)
 
 if not _MERMAID_JS.exists():
     import warnings
-    warnings.warn(f"Local mermaid bundle not found at {_MERMAID_JS} — diagram PNG conversion will fail")
+
+    warnings.warn(
+        f"Local mermaid bundle not found at {_MERMAID_JS} — diagram PNG conversion will fail"
+    )
 
 
 def extract_mermaids(text: str) -> list[str]:
     """Extract all mermaid blocks from a markdown file, returning a list of content strings."""
     blocks: list[str] = []
-    for match in re.finditer(r'```mermaid\n(.*?)```', text, re.DOTALL):
+    for match in re.finditer(r"```mermaid\n(.*?)```", text, re.DOTALL):
         content = match.group(1).strip()
         if content:
             blocks.append(content)
     if not blocks:
         # Fallback: grab everything after the first ```mermaid line
-        lines = text.split('\n')
+        lines = text.split("\n")
         start = 0
         for i, line in enumerate(lines):
-            if line.startswith('```mermaid'):
+            if line.startswith("```mermaid"):
                 start = i + 1
                 break
         if start > 0:
-            return ['\n'.join(lines[start:]).strip()]
+            return ["\n".join(lines[start:]).strip()]
     return blocks
 
 
@@ -44,7 +54,8 @@ def extract_mermaid(text: str) -> str:
 def make_html(mmd_content: str) -> str:
     """Create standalone HTML with local Mermaid JS bundle."""
     import tempfile
-    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False)
+
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False)
     tmp.write(f"""<!DOCTYPE html>
 <html>
 <head>
@@ -83,7 +94,9 @@ async def convert_mmd_to_png(mmd_path: Path, png_path: Path):
     return png_path
 
 
-async def convert_mmd_to_pngs(mmd_path: Path, output_dir: Path, prefix: str) -> list[str]:
+async def convert_mmd_to_pngs(
+    mmd_path: Path, output_dir: Path, prefix: str
+) -> list[str]:
     """Convert all mermaid blocks in a .mmd file to separate numbered PNGs."""
     content = mmd_path.read_text()
     blocks = extract_mermaids(content)
@@ -129,18 +142,22 @@ async def convert_all_diagrams(diagrams_dir: Path):
 
 if __name__ == "__main__":
     import sys
+
     diagrams_dir = Path(sys.argv[1])
 
     results: dict[str, list[str]] = {}
     for mmd_file in diagrams_dir.glob("*.mmd"):
         try:
-            pngs = asyncio.run(convert_mmd_to_pngs(mmd_file, diagrams_dir, mmd_file.stem))
+            pngs = asyncio.run(
+                convert_mmd_to_pngs(mmd_file, diagrams_dir, mmd_file.stem)
+            )
             results[mmd_file.stem] = pngs
             for png in pngs:
                 print(f"  ✓ {mmd_file.name} → {Path(png).name}")
         except PermissionError:
             # Root-owned dir — write to user temp instead
             import tempfile
+
             tmp_dir = Path(tempfile.mkdtemp())
             pngs = asyncio.run(convert_mmd_to_pngs(mmd_file, tmp_dir, mmd_file.stem))
             results[mmd_file.stem] = pngs

@@ -11,6 +11,7 @@ Internal routing:
   UAT fail → route back to BUILD parent (outer graph handles retry)
   SECURITY_GATE → runs security-and-hardening + requesting-code-review aggregate passes
 """
+
 import ast
 import json
 import re
@@ -41,46 +42,58 @@ from tools.stream_writer import safe_stream_writer
 
 # ── Sub-state ──────────────────────────────────────────────────────
 
+
 class BuildSubState(TypedDict):
     """Internal state for the BUILD subgraph."""
-    sub_phase: str                  # Current sub-phase name
-    project_path: str               # Resolved project path
-    docker_proj: str                # Docker project dir
-    spec_text: str                  # Refined spec
-    tasks_text: str                 # Task breakdown text
-    skills: dict                    # Skill registry
-    backlog: list[dict]            # Backlog items with status
-    backlog_idx: int               # Index of current item being worked on
-    impl_plan: str                 # Implementation plan
-    current_code: str              # Code generated for current item
-    test_code: str                 # Test code for current item
-    test_result: str               # "pass" / "fail" / "skip"
-    test_output: str               # Raw test output
-    retry_count: int               # Retries for current item
-    int_test_result: str           # "pass" / "fail"
-    int_test_output: str           # Raw integration test output
-    seed_result: str               # "pass" / "fail"
-    seed_output: str               # Raw seed output
-    uat_result: str                # "pass" / "fail"
-    uat_output: str                # Raw UAT output
-    uat_pass_rate: float           # Parsed UAT pass rate
+
+    sub_phase: str  # Current sub-phase name
+    project_path: str  # Resolved project path
+    docker_proj: str  # Docker project dir
+    spec_text: str  # Refined spec
+    tasks_text: str  # Task breakdown text
+    skills: dict  # Skill registry
+    backlog: list[dict]  # Backlog items with status
+    backlog_idx: int  # Index of current item being worked on
+    impl_plan: str  # Implementation plan
+    current_code: str  # Code generated for current item
+    test_code: str  # Test code for current item
+    test_result: str  # "pass" / "fail" / "skip"
+    test_output: str  # Raw test output
+    retry_count: int  # Retries for current item
+    int_test_result: str  # "pass" / "fail"
+    int_test_output: str  # Raw integration test output
+    seed_result: str  # "pass" / "fail"
+    seed_output: str  # Raw seed output
+    uat_result: str  # "pass" / "fail"
+    uat_output: str  # Raw UAT output
+    uat_pass_rate: float  # Parsed UAT pass rate
     all_generated_code: list[str]  # Accumulated code across items
-    errors: list[str]              # Accumulated error messages
-    build_status: str              # "pass" / "fail" / "partial"
-    parent_artifacts: dict         # Reference to parent artifacts dict (for writing back)
-    superweb_mode: str             # "agent" (default) | "scripted"
-    superweb_agent_report: dict    # Parsed agent_report.json from agent mode
-    security_review: str           # Security audit result (security-and-hardening skill)
-    code_review: str               # Code quality review result (requesting-code-review skill)
+    errors: list[str]  # Accumulated error messages
+    build_status: str  # "pass" / "fail" / "partial"
+    parent_artifacts: dict  # Reference to parent artifacts dict (for writing back)
+    superweb_mode: str  # "agent" (default) | "scripted"
+    superweb_agent_report: dict  # Parsed agent_report.json from agent mode
+    security_review: str  # Security audit result (security-and-hardening skill)
+    code_review: str  # Code quality review result (requesting-code-review skill)
+
 
 MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
 
 # ── Sub-node functions ─────────────────────────────────────────────
 
+
 def impl_plan_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Generate implementation plan from spec + tasks."""
-    writer({"type": "progress", "phase": "BUILD", "step": "IMPL_PLAN", "detail": "Generating implementation plan...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "IMPL_PLAN",
+            "detail": "Generating implementation plan...",
+            "ts": time.time(),
+        }
+    )
     skills = state["skills"]
     spec = state["spec_text"]
     tasks = state["tasks_text"]
@@ -91,21 +104,38 @@ def impl_plan_node(state: BuildSubState) -> BuildSubState:
             "Review the spec and tasks, then create an implementation plan.\n"
             "Outline the order of implementation, dependencies between components,\n"
             "and any architectural decisions. Be concise.\n\n"
-            f"Spec:\n{spec[:bounds.build.recent_code_chars]}\n\nTasks:\n{tasks[:bounds.build.recent_code_chars]}"
+            f"Spec:\n{spec[: bounds.build.recent_code_chars]}\n\nTasks:\n{tasks[: bounds.build.recent_code_chars]}"
         )
         plan = invoke_skill(impl_skill["content"], task, "", llm=None)
     else:
-        plan = f"Implement tasks in order: {tasks[:bounds.build.recent_code_chars]}"
+        plan = f"Implement tasks in order: {tasks[: bounds.build.recent_code_chars]}"
 
     state["impl_plan"] = plan
     state["sub_phase"] = "IMPL_PLAN"
-    writer({"type": "progress", "phase": "BUILD", "step": "IMPL_PLAN", "detail": f"Plan generated ({len(plan)} chars)", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "IMPL_PLAN",
+            "detail": f"Plan generated ({len(plan)} chars)",
+            "ts": time.time(),
+        }
+    )
     return state
+
 
 def create_backlog_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Parse tasks into backlog items, write backlog.md."""
-    writer({"type": "progress", "phase": "BUILD", "step": "CREATE_BACKLOG", "detail": "Creating backlog...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "CREATE_BACKLOG",
+            "detail": "Creating backlog...",
+            "ts": time.time(),
+        }
+    )
     tasks_text = state["tasks_text"]
     project_folder = state["project_path"]
 
@@ -119,8 +149,17 @@ def create_backlog_node(state: BuildSubState) -> BuildSubState:
     state["backlog"] = backlog_items
     state["backlog_idx"] = 0
     state["sub_phase"] = "CREATE_BACKLOG"
-    writer({"type": "progress", "phase": "BUILD", "step": "CREATE_BACKLOG", "detail": f"{len(backlog_items)} backlog items created", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "CREATE_BACKLOG",
+            "detail": f"{len(backlog_items)} backlog items created",
+            "ts": time.time(),
+        }
+    )
     return state
+
 
 def implement_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
@@ -136,8 +175,24 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         state["sub_phase"] = "IMPLEMENT"
         return implement_node(state)  # Skip to next
 
-    writer({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": f"Item {idx + 1}/{len(state['backlog'])}: {item['description'][:80]}", "ts": time.time()})
-    writer({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": f"Retry: {state['retry_count']}/{bounds.build.max_item_retries}", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "IMPLEMENT",
+            "detail": f"Item {idx + 1}/{len(state['backlog'])}: {item['description'][:80]}",
+            "ts": time.time(),
+        }
+    )
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "IMPLEMENT",
+            "detail": f"Retry: {state['retry_count']}/{bounds.build.max_item_retries}",
+            "ts": time.time(),
+        }
+    )
 
     skills = state["skills"]
     spec = state["spec_text"]
@@ -160,28 +215,65 @@ def implement_node(state: BuildSubState) -> BuildSubState:
     if impl_skill:
         impl_context = spec + "\n\n" + tasks
         if idx > 0:
-            impl_context += "\n\nPreviously generated code:\n" + "\n".join(state["all_generated_code"][-bounds.build.recent_code_snippets:])[:bounds.build.recent_code_chars]
+            impl_context += (
+                "\n\nPreviously generated code:\n"
+                + "\n".join(
+                    state["all_generated_code"][-bounds.build.recent_code_snippets :]
+                )[: bounds.build.recent_code_chars]
+            )
 
         # Inject UI implementation guidance for frontend items so the
         # generated interface is production-quality (accessible, responsive,
         # not "AI-look"). frontend-ui-engineering skill drives this.
         item_desc_lower = item["description"].lower()
-        ui_keywords = ("ui", "interface", "frontend", "front-end", "component", "page", "form", "dashboard", "view", "layout", "html", "css", "react", "vue", "svelte", "component")
+        ui_keywords = (
+            "ui",
+            "interface",
+            "frontend",
+            "front-end",
+            "component",
+            "page",
+            "form",
+            "dashboard",
+            "view",
+            "layout",
+            "html",
+            "css",
+            "react",
+            "vue",
+            "svelte",
+            "component",
+        )
         if any(k in item_desc_lower for k in ui_keywords):
             ui_skill = skills.get("frontend-ui-engineering", {})
             if ui_skill:
-                writer({"type": "progress", "phase": "BUILD", "step": "IMPLEMENT", "detail": "  → Applying frontend-ui-engineering skill (UI item)", "ts": time.time()})
-                impl_context += "\n\n=== FRONTEND UI GUIDANCE (frontend-ui-engineering) ===\n" + ui_skill["content"][:3000]
+                writer(
+                    {
+                        "type": "progress",
+                        "phase": "BUILD",
+                        "step": "IMPLEMENT",
+                        "detail": "  → Applying frontend-ui-engineering skill (UI item)",
+                        "ts": time.time(),
+                    }
+                )
+                impl_context += (
+                    "\n\n=== FRONTEND UI GUIDANCE (frontend-ui-engineering) ===\n"
+                    + ui_skill["content"][:3000]
+                )
 
         result = invoke_skill(
             impl_skill["content"],
-            item_task if state["retry_count"] == 0 else f"{item_task}\n\nPrevious attempt failed. Fix and retry.",
+            item_task
+            if state["retry_count"] == 0
+            else f"{item_task}\n\nPrevious attempt failed. Fix and retry.",
             impl_context,
             llm=None,
         )
         item_code = result
         # Cap to prevent unbounded memory growth
-        state["all_generated_code"] = state["all_generated_code"][-bounds.artifacts.max_generated_code_entries:] + [result]
+        state["all_generated_code"] = state["all_generated_code"][
+            -bounds.artifacts.max_generated_code_entries :
+        ] + [result]
 
     # Step 2: Generate tests
     tdd_skill = skills.get("test-driven-development", {})
@@ -203,7 +295,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
 
     if not item_code:
         state["errors"].append(f"Item {item['id']}: No code generated")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -211,6 +303,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         return state
 
     return state
+
 
 def unit_test_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
@@ -232,18 +325,34 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return unit_test_node(state)
 
     docker_proj = state["docker_proj"]
-    writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Building and testing item {item['id']}...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "UNIT_TEST",
+            "detail": f"Building and testing item {item['id']}...",
+            "ts": time.time(),
+        }
+    )
 
     # Write files
     combined = state["current_code"] + "\n" + state["test_code"]
     files, cmds, parse_info = parse_llm_output(combined)
-    writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Parsed {len(files)} files, {len(cmds)} commands", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "UNIT_TEST",
+            "detail": f"Parsed {len(files)} files, {len(cmds)} commands",
+            "ts": time.time(),
+        }
+    )
 
     if not files:
         state["test_result"] = "fail"
         state["test_output"] = "No files generated"
         state["errors"].append(f"Item {item['id']}: No files to test")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -252,26 +361,60 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return state
 
     written = write_files_to_project(files, docker_proj)
-    writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Wrote {len(written)} files", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "UNIT_TEST",
+            "detail": f"Wrote {len(written)} files",
+            "ts": time.time(),
+        }
+    )
 
     # Run pre-build commands
     for desc, cmd in cmds:
-        if 'build' in desc.lower() or 'test' in desc.lower():
+        if "build" in desc.lower() or "test" in desc.lower():
             continue
         rc, _, err = run_command(cmd, workdir=docker_proj)
         if rc != 0:
-            writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Command '{desc}' failed: {err[:100]}", "ts": time.time()})
+            writer(
+                {
+                    "type": "progress",
+                    "phase": "BUILD",
+                    "step": "UNIT_TEST",
+                    "detail": f"Command '{desc}' failed: {err[:100]}",
+                    "ts": time.time(),
+                }
+            )
 
     # Docker build
-    writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": "Docker compose build...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "UNIT_TEST",
+            "detail": "Docker compose build...",
+            "ts": time.time(),
+        }
+    )
     _svc = resolve_app_service(docker_proj)
-    rc, out, err = run_command(f"docker compose build --no-cache {_svc}", timeout=300, workdir=docker_proj)
+    rc, out, err = run_command(
+        f"docker compose build --no-cache {_svc}", timeout=300, workdir=docker_proj
+    )
     if rc != 0:
-        writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Docker build failed: {err[:200]}", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "UNIT_TEST",
+                "detail": f"Docker build failed: {err[:200]}",
+                "ts": time.time(),
+            }
+        )
         state["test_result"] = "fail"
-        state["test_output"] = err[:bounds.build.max_test_output_chars]
+        state["test_output"] = err[: bounds.build.max_test_output_chars]
         state["errors"].append(f"Item {item['id']}: Docker build failed")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -279,12 +422,22 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return state
 
     # Start container
-    rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
+    rc, _, err = run_command(
+        f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj
+    )
     if rc != 0:
-        writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Container start failed: {err[:200]}", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "UNIT_TEST",
+                "detail": f"Container start failed: {err[:200]}",
+                "ts": time.time(),
+            }
+        )
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Container start failed")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -293,15 +446,27 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
 
     # Health check
     import subprocess as sp
+
     sp.run(["sleep", "5"], timeout=10)
     from config.loader import config as _cfg
+
     _health_url = _cfg.services.product.url + "/"
-    rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=30)
-    if health_out.strip() not in ('200', '301', '302'):
-        writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"Health check failed: HTTP {health_out.strip()}", "ts": time.time()})
+    rc, health_out, _ = run_command(
+        f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=30
+    )
+    if health_out.strip() not in ("200", "301", "302"):
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "UNIT_TEST",
+                "detail": f"Health check failed: HTTP {health_out.strip()}",
+                "ts": time.time(),
+            }
+        )
         state["test_result"] = "fail"
         state["errors"].append(f"Item {item['id']}: Health check failed")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -309,27 +474,54 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
         return state
 
     # Run pytest
-    writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": "Running pytest...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "UNIT_TEST",
+            "detail": "Running pytest...",
+            "ts": time.time(),
+        }
+    )
     rc, test_out, test_err = run_command(
         f"docker compose exec {_svc} python -m pytest tests/ -v --tb=short 2>&1",
-        timeout=120, workdir=docker_proj,
+        timeout=120,
+        workdir=docker_proj,
     )
-    passed = len(re.findall(r'passed', test_out))
-    failed = len(re.findall(r'failed', test_out))
+    passed = len(re.findall(r"passed", test_out))
+    failed = len(re.findall(r"failed", test_out))
 
     if rc == 0 and failed == 0:
-        writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"pytest passed ({passed} tests) — item {item['id']} complete", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "UNIT_TEST",
+                "detail": f"pytest passed ({passed} tests) — item {item['id']} complete",
+                "ts": time.time(),
+            }
+        )
         state["test_result"] = "pass"
-        state["test_output"] = test_out[:bounds.build.max_test_output_chars]
+        state["test_output"] = test_out[: bounds.build.max_test_output_chars]
         state["backlog"][idx]["status"] = "completed"
         state["retry_count"] = 0
         state["backlog_idx"] = idx + 1
     else:
-        writer({"type": "progress", "phase": "BUILD", "step": "UNIT_TEST", "detail": f"pytest: {failed} failed, {passed} passed", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "UNIT_TEST",
+                "detail": f"pytest: {failed} failed, {passed} passed",
+                "ts": time.time(),
+            }
+        )
         state["test_result"] = "fail"
-        state["test_output"] = test_out[:bounds.build.max_test_output_chars]
-        state["errors"].append(f"Item {item['id']}: {failed} test failures (attempt {state['retry_count'] + 1})")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["test_output"] = test_out[: bounds.build.max_test_output_chars]
+        state["errors"].append(
+            f"Item {item['id']}: {failed} test failures (attempt {state['retry_count'] + 1})"
+        )
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["retry_count"] += 1
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
@@ -339,47 +531,91 @@ def unit_test_node(state: BuildSubState) -> BuildSubState:
     state["sub_phase"] = "UNIT_TEST"
     return state
 
+
 def int_test_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Integration test: verify Docker app is running, run aggregate checks."""
-    writer({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": "Running integration tests...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "INT_TEST",
+            "detail": "Running integration tests...",
+            "ts": time.time(),
+        }
+    )
     docker_proj = state["docker_proj"]
     from config.loader import config as _cfg
+
     _health_url = _cfg.services.product.url + "/"
 
     _svc = resolve_app_service(docker_proj)
 
     # Ensure container is running
-    rc, _, err = run_command(f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj)
+    rc, _, err = run_command(
+        f"docker compose up -d {_svc}", timeout=120, workdir=docker_proj
+    )
     if rc != 0:
         state["int_test_result"] = "fail"
-        state["int_test_output"] = err[:bounds.build.max_seed_output_chars]
+        state["int_test_output"] = err[: bounds.build.max_seed_output_chars]
         state["errors"].append(f"INT_TEST: Container start failed: {err[:200]}")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         return state
 
     import subprocess as _sp
+
     _sp.run(["sleep", "5"], timeout=10)
 
-    rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=30)
-    if health_out.strip() in ('200', '301', '302'):
+    rc, health_out, _ = run_command(
+        f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=30
+    )
+    if health_out.strip() in ("200", "301", "302"):
         state["int_test_result"] = "pass"
-        state["int_test_output"] = f"Health check: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
-        writer({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": f"Integration tests passed (health: HTTP {health_out.strip()})", "ts": time.time()})
+        state["int_test_output"] = f"Health check: HTTP {health_out.strip()}"[
+            : bounds.build.max_seed_output_chars
+        ]
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "INT_TEST",
+                "detail": f"Integration tests passed (health: HTTP {health_out.strip()})",
+                "ts": time.time(),
+            }
+        )
     else:
         state["int_test_result"] = "fail"
-        state["int_test_output"] = f"Health check failed: HTTP {health_out.strip()}"[:bounds.build.max_seed_output_chars]
+        state["int_test_output"] = f"Health check failed: HTTP {health_out.strip()}"[
+            : bounds.build.max_seed_output_chars
+        ]
         state["errors"].append("INT_TEST: Health check failed")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
-        writer({"type": "progress", "phase": "BUILD", "step": "INT_TEST", "detail": f"Integration test failed: HTTP {health_out.strip()}", "ts": time.time()})
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "INT_TEST",
+                "detail": f"Integration test failed: HTTP {health_out.strip()}",
+                "ts": time.time(),
+            }
+        )
 
     state["sub_phase"] = "INT_TEST"
     return state
 
+
 def seed_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Generate and execute seed data script."""
-    writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Generating and running seed data...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "SEED",
+            "detail": "Generating and running seed data...",
+            "ts": time.time(),
+        }
+    )
     skills = state["skills"]
     docker_proj = state["docker_proj"]
     project_folder = state["project_path"]
@@ -397,7 +633,7 @@ def seed_node(state: BuildSubState) -> BuildSubState:
     if not seed_skill:
         seed_skill = {
             "content": "Generate a seed script that populates the database with realistic data. "
-                       "Use SQLAlchemy 2.0 async insert(). Be idempotent. Output ONLY valid Python code."
+            "Use SQLAlchemy 2.0 async insert(). Be idempotent. Output ONLY valid Python code."
         }
 
     task = f"""Generate random test data seed script for project at {docker_proj}.
@@ -410,7 +646,10 @@ Requirements:
 - Make the script idempotent with INSERT OR IGNORE or check-first pattern
 """
 
-    context = spec_text + f"\n\nData models: {json.dumps(data_models, indent=2)}\nAPI specs: {json.dumps(api_specs, indent=2)}"
+    context = (
+        spec_text
+        + f"\n\nData models: {json.dumps(data_models, indent=2)}\nAPI specs: {json.dumps(api_specs, indent=2)}"
+    )
     seed_script = invoke_skill(seed_skill["content"], task, context, llm=None)
 
     # Clean markdown fences
@@ -427,11 +666,19 @@ Requirements:
     try:
         ast.parse(clean_script)
     except SyntaxError as e:
-        writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": f"Seed script syntax error: {e}", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "SEED",
+                "detail": f"Seed script syntax error: {e}",
+                "ts": time.time(),
+            }
+        )
         state["seed_result"] = "fail"
-        state["seed_output"] = str(e)[:bounds.build.max_seed_output_chars]
+        state["seed_output"] = str(e)[: bounds.build.max_seed_output_chars]
         state["errors"].append(f"SEED: SyntaxError: {e}")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         state["sub_phase"] = "SEED"
         return state
 
@@ -447,42 +694,84 @@ Requirements:
 
     try:
         import subprocess as _sp
+
         result = _sp.run(
             ["docker", "compose", "exec", "-T", _svc, "python", "-m", "app.seed"],
-            capture_output=True, text=True, timeout=60, cwd=docker_proj,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=docker_proj,
         )
         seed_output = result.stdout + result.stderr
         if result.returncode != 0:
-            writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": f"Seed script failed (exit {result.returncode})", "ts": time.time()})
+            writer(
+                {
+                    "type": "progress",
+                    "phase": "BUILD",
+                    "step": "SEED",
+                    "detail": f"Seed script failed (exit {result.returncode})",
+                    "ts": time.time(),
+                }
+            )
             state["seed_result"] = "fail"
-            state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
-            state["errors"].append(f"SEED: exit {result.returncode}: {seed_output[:200]}")
-            state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+            state["seed_output"] = seed_output[: bounds.build.max_seed_output_chars]
+            state["errors"].append(
+                f"SEED: exit {result.returncode}: {seed_output[:200]}"
+            )
+            state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
         else:
-            writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Seed data populated successfully", "ts": time.time()})
+            writer(
+                {
+                    "type": "progress",
+                    "phase": "BUILD",
+                    "step": "SEED",
+                    "detail": "Seed data populated successfully",
+                    "ts": time.time(),
+                }
+            )
             state["seed_result"] = "pass"
-            state["seed_output"] = seed_output[:bounds.build.max_seed_output_chars]
+            state["seed_output"] = seed_output[: bounds.build.max_seed_output_chars]
     except subprocess.TimeoutExpired:
-        writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": "Seed script timed out (>60s)", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "SEED",
+                "detail": "Seed script timed out (>60s)",
+                "ts": time.time(),
+            }
+        )
         state["seed_result"] = "fail"
         state["seed_output"] = "Timed out"
         state["errors"].append("SEED: timeout after 60s")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
     except Exception as e:
-        writer({"type": "progress", "phase": "BUILD", "step": "SEED", "detail": f"Seed execution failed: {e}", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "SEED",
+                "detail": f"Seed execution failed: {e}",
+                "ts": time.time(),
+            }
+        )
         state["seed_result"] = "fail"
-        state["seed_output"] = str(e)[:bounds.build.max_seed_output_chars]
+        state["seed_output"] = str(e)[: bounds.build.max_seed_output_chars]
         state["errors"].append(f"SEED: {e}")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
 
     state["sub_phase"] = "SEED"
     return state
 
+
 def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
     """Run SuperWeb in agent mode — OpenHands agent explores and tests."""
-    agent_timeout = getattr(getattr(bounds, "superweb", None), "agent_timeout_seconds", 3600)
+    agent_timeout = getattr(
+        getattr(bounds, "superweb", None), "agent_timeout_seconds", 3600
+    )
     # LLM config is in config.yaml, not bounds.yaml — use config loader
     from config.loader import config as _cfg
+
     llm_url = _cfg.services.llm.base_url
     llm_model = _cfg.services.llm.model
     # SuperWeb root from config (default: pip-installed CLI runs from project dir)
@@ -492,18 +781,29 @@ def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -
     else:
         superweb_root = state["project_path"]
     cmd = [
-        "superweb", "run",
-        "--target", base_url,
-        "--source", state["project_path"],
-        "--output", str(output_dir),
-        "--mode", "agent",
-        "--agent-timeout", str(agent_timeout),
-        "--llm-url", llm_url,
-        "--llm-model", llm_model,
+        "superweb",
+        "run",
+        "--target",
+        base_url,
+        "--source",
+        state["project_path"],
+        "--output",
+        str(output_dir),
+        "--mode",
+        "agent",
+        "--agent-timeout",
+        str(agent_timeout),
+        "--llm-url",
+        llm_url,
+        "--llm-model",
+        llm_model,
     ]
     try:
         subprocess.run(
-            cmd, capture_output=True, text=True, timeout=agent_timeout + 120,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=agent_timeout + 120,
             cwd=superweb_root,
         )
         # Parse agent_report.json (agent mode writes to report/)
@@ -521,29 +821,46 @@ def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -
         return {"status": "not_found", "verdict": "fail"}
 
 
-def _run_superweb_scripted(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
+def _run_superweb_scripted(
+    state: BuildSubState, base_url: str, output_dir: Path
+) -> dict:
     """Run SuperWeb in scripted mode — deterministic Playwright pipeline."""
     timeout = getattr(getattr(bounds, "superweb", None), "timeout_seconds", 600)
     variations = getattr(getattr(bounds, "superweb", None), "variations", 3)
     from config.loader import config as _cfg
+
     llm_url = _cfg.services.llm.base_url
     llm_model = _cfg.services.llm.model
     superweb_config = getattr(_cfg, "superweb", None)
-    superweb_root = (getattr(superweb_config, "root", state["project_path"])
-                     if superweb_config else state["project_path"])
+    superweb_root = (
+        getattr(superweb_config, "root", state["project_path"])
+        if superweb_config
+        else state["project_path"]
+    )
     cmd = [
-        "superweb", "run",
-        "--target", base_url,
-        "--source", state["project_path"],
-        "--output", str(output_dir),
-        "--mode", "scripted",
-        "--variations", str(variations),
-        "--llm-url", llm_url,
-        "--llm-model", llm_model,
+        "superweb",
+        "run",
+        "--target",
+        base_url,
+        "--source",
+        state["project_path"],
+        "--output",
+        str(output_dir),
+        "--mode",
+        "scripted",
+        "--variations",
+        str(variations),
+        "--llm-url",
+        llm_url,
+        "--llm-model",
+        llm_model,
     ]
     try:
         subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
             cwd=superweb_root,
         )
         results_path = output_dir / "data" / "test_results.json"
@@ -578,8 +895,13 @@ def _run_llm_uat_fallback(state: BuildSubState, base_url: str) -> tuple[str, flo
         "For each test case, output: [PASS] or [FAIL]: test description\n"
         "Final summary must include: Total tests run, Passed, Failed, Pass rate (0.0-1.0), Verdict: PASS or FAIL\n"
     )
-    result = invoke_skill(uat_skill["content"], task, f"Project: {state['project_path']}\nBase URL: {base_url}", llm=None)
-    state["uat_output"] = result[:bounds.build.max_seed_output_chars]
+    result = invoke_skill(
+        uat_skill["content"],
+        task,
+        f"Project: {state['project_path']}\nBase URL: {base_url}",
+        llm=None,
+    )
+    state["uat_output"] = result[: bounds.build.max_seed_output_chars]
     uat_metrics = parse_uat_metrics(result)
     return result, uat_metrics["uat_pass_rate"]
 
@@ -591,16 +913,35 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
     Gate: container running, HTTP health endpoint responds, seed data exists.
     If unhealthy, skip UAT — nothing to test.
     """
-    writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": "Validating deployment health...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "DEPLOY_GATE",
+            "detail": "Validating deployment health...",
+            "ts": time.time(),
+        }
+    )
     docker_proj = state["docker_proj"]
     from config.loader import config as _cfg
+
     _svc = resolve_app_service(docker_proj)
     _health_url = _cfg.services.product.url + "/"
 
     # Check 1: Container running
-    rc, out, err = run_command(f"docker compose ps {_svc} --format '{{{{.Status}}}}'", workdir=docker_proj)
+    rc, out, err = run_command(
+        f"docker compose ps {_svc} --format '{{{{.Status}}}}'", workdir=docker_proj
+    )
     if rc != 0 or "Up" not in out:
-        writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Container {_svc} not running — skipping UAT", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "DEPLOY_GATE",
+                "detail": f"Container {_svc} not running — skipping UAT",
+                "ts": time.time(),
+            }
+        )
         state["uat_result"] = "skip"
         state["uat_output"] = "DEPLOY_GATE failed: container not running"
         state["uat_pass_rate"] = 1.0  # skip counts as pass
@@ -608,9 +949,21 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
         return state
 
     # Check 2: Health endpoint
-    rc, health_out, _ = run_command(f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}", timeout=15, workdir=docker_proj)
-    if health_out.strip() not in ('200', '301', '302'):
-        writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Health check failed: HTTP {health_out.strip()} — skipping UAT", "ts": time.time()})
+    rc, health_out, _ = run_command(
+        f"curl -s -o /dev/null -w '%{{http_code}}' {_health_url}",
+        timeout=15,
+        workdir=docker_proj,
+    )
+    if health_out.strip() not in ("200", "301", "302"):
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "DEPLOY_GATE",
+                "detail": f"Health check failed: HTTP {health_out.strip()} — skipping UAT",
+                "ts": time.time(),
+            }
+        )
         state["uat_result"] = "skip"
         state["uat_output"] = f"DEPLOY_GATE failed: HTTP {health_out.strip()}"
         state["uat_pass_rate"] = 1.0
@@ -618,11 +971,29 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
         return state
 
     # Check 3: Logs for startup errors
-    rc, logs, _ = run_command(f"docker compose logs {_svc} --tail=20", timeout=10, workdir=docker_proj)
+    rc, logs, _ = run_command(
+        f"docker compose logs {_svc} --tail=20", timeout=10, workdir=docker_proj
+    )
     if any(kw in logs for kw in ["Traceback", "ImportError", "SyntaxError"]):
-        writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": "Container logs contain startup errors — proceeding with caution", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "DEPLOY_GATE",
+                "detail": "Container logs contain startup errors — proceeding with caution",
+                "ts": time.time(),
+            }
+        )
 
-    writer({"type": "progress", "phase": "BUILD", "step": "DEPLOY_GATE", "detail": f"Deploy gate passed: HTTP {health_out.strip()}", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "DEPLOY_GATE",
+            "detail": f"Deploy gate passed: HTTP {health_out.strip()}",
+            "ts": time.time(),
+        }
+    )
     state["sub_phase"] = "DEPLOY_GATE"
     return state
 
@@ -630,13 +1001,30 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
 def uat_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Run UAT tests — agent mode default, scripted fallback, LLM fallback."""
-    writer({"type": "progress", "phase": "BUILD", "step": "progress", "detail": "  → [UAT] Running UAT tests...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "progress",
+            "detail": "  → [UAT] Running UAT tests...",
+            "ts": time.time(),
+        }
+    )
     from config.loader import config as _cfg
+
     base_url = _cfg.services.product.url
 
     output_dir = Path(state["project_path"]) / "superweb_output"
     mode = state.get("superweb_mode", "agent")
-    writer({"type": "progress", "phase": "BUILD", "step": "progress", "detail": f"     Mode: {mode}", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "progress",
+            "detail": f"     Mode: {mode}",
+            "ts": time.time(),
+        }
+    )
 
     uat_pass_rate = 0.0
     uat_result = "fail"
@@ -648,7 +1036,9 @@ def uat_node(state: BuildSubState) -> BuildSubState:
         report = _run_superweb_agent(state, base_url, output_dir)
         if report.get("status") != "not_found":
             superweb_worked = True
-            uat_output = json.dumps(report, indent=2)[:bounds.build.max_seed_output_chars]
+            uat_output = json.dumps(report, indent=2)[
+                : bounds.build.max_seed_output_chars
+            ]
             # Parse verdict
             verdict = report.get("verdict", "unknown")
             # Try to extract pass rate from results
@@ -671,23 +1061,49 @@ def uat_node(state: BuildSubState) -> BuildSubState:
             superweb_worked = True
             passed = sum(1 for r in results if r.get("status") == "passed")
             uat_pass_rate = passed / len(results)
-            uat_output = json.dumps(results[:5], indent=2)[:bounds.build.max_seed_output_chars]
+            uat_output = json.dumps(results[:5], indent=2)[
+                : bounds.build.max_seed_output_chars
+            ]
 
     # ── Fallback chain ─────────────────────────────────────────────
     if not superweb_worked:
-        writer({"type": "progress", "phase": "BUILD", "step": "warning", "detail": "     ⚠ SuperWeb unavailable — falling back to LLM UAT", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "warning",
+                "detail": "     ⚠ SuperWeb unavailable — falling back to LLM UAT",
+                "ts": time.time(),
+            }
+        )
         result_text, uat_pass_rate = _run_llm_uat_fallback(state, base_url)
-        uat_output = result_text[:bounds.build.max_seed_output_chars]
+        uat_output = result_text[: bounds.build.max_seed_output_chars]
 
     # ── Verdict ────────────────────────────────────────────────────
     if uat_pass_rate >= 0.8:
         uat_result = "pass"
-        writer({"type": "progress", "phase": "BUILD", "step": "success", "detail": f"     ✓ UAT passed (rate={uat_pass_rate:.2f})", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "success",
+                "detail": f"     ✓ UAT passed (rate={uat_pass_rate:.2f})",
+                "ts": time.time(),
+            }
+        )
     else:
         uat_result = "fail"
-        writer({"type": "error", "phase": "BUILD", "step": "error", "detail": f"     ✗ UAT failed (rate={uat_pass_rate:.2f})", "ts": time.time()})
+        writer(
+            {
+                "type": "error",
+                "phase": "BUILD",
+                "step": "error",
+                "detail": f"     ✗ UAT failed (rate={uat_pass_rate:.2f})",
+                "ts": time.time(),
+            }
+        )
         state["errors"].append(f"UAT: pass rate {uat_pass_rate:.2f} < 0.8")
-        state["errors"] = state["errors"][-bounds.feedback.max_error_entries:]
+        state["errors"] = state["errors"][-bounds.feedback.max_error_entries :]
 
     state["uat_pass_rate"] = uat_pass_rate
     state["uat_result"] = uat_result
@@ -695,7 +1111,9 @@ def uat_node(state: BuildSubState) -> BuildSubState:
     state["sub_phase"] = "UAT"
     return state
 
+
 # ── Conditional routing ────────────────────────────────────────────
+
 
 def route_build(state: BuildSubState) -> str:
     """Route within the BUILD subgraph."""
@@ -738,13 +1156,22 @@ def route_build(state: BuildSubState) -> str:
 
     return END
 
+
 def security_review_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Aggregate security review pass after all implementation items.
 
     Runs security-and-hardening skill on the generated codebase.
     """
-    writer({"type": "progress", "phase": "BUILD", "step": "progress", "detail": "  → [SECURITY_REVIEW] Running security audit...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "progress",
+            "detail": "  → [SECURITY_REVIEW] Running security audit...",
+            "ts": time.time(),
+        }
+    )
     skills = state["skills"]
     security_skill = skills.get("security-and-hardening", {})
     if security_skill:
@@ -762,11 +1189,22 @@ def security_review_node(state: BuildSubState) -> BuildSubState:
             "Report findings and score the security posture.\n"
         )
         from tools.llm import invoke_skill
-        result = invoke_skill(security_skill["content"], task,
-                             f"Project: {project_path}", llm=None)
+
+        result = invoke_skill(
+            security_skill["content"], task, f"Project: {project_path}", llm=None
+        )
         state["security_review"] = result[:5000]
-        writer({"type": "progress", "phase": "BUILD", "step": "success", "detail": f"     ✓ Security review complete ({len(result)} chars)", "ts": time.time()})
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "success",
+                "detail": f"     ✓ Security review complete ({len(result)} chars)",
+                "ts": time.time(),
+            }
+        )
     return state
+
 
 def code_review_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
@@ -774,7 +1212,15 @@ def code_review_node(state: BuildSubState) -> BuildSubState:
 
     Runs requesting-code-review skill on the generated codebase.
     """
-    writer({"type": "progress", "phase": "BUILD", "step": "progress", "detail": "  → [CODE_REVIEW] Running code quality review...", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "progress",
+            "detail": "  → [CODE_REVIEW] Running code quality review...",
+            "ts": time.time(),
+        }
+    )
     skills = state["skills"]
     review_skill = skills.get("requesting-code-review", {})
     if review_skill:
@@ -790,12 +1236,23 @@ def code_review_node(state: BuildSubState) -> BuildSubState:
             "Report findings and score the code quality.\n"
         )
         from tools.llm import invoke_skill
-        result = invoke_skill(review_skill["content"], task,
-                             f"Project: {project_path}", llm=None)
+
+        result = invoke_skill(
+            review_skill["content"], task, f"Project: {project_path}", llm=None
+        )
         state.setdefault("code_review", "")
-        state["code_review"] = result[:state["skills"].get("max_review_chars", 5000)]
-        writer({"type": "progress", "phase": "BUILD", "step": "success", "detail": f"     ✓ Code review complete ({len(result)} chars)", "ts": time.time()})
+        state["code_review"] = result[: state["skills"].get("max_review_chars", 5000)]
+        writer(
+            {
+                "type": "progress",
+                "phase": "BUILD",
+                "step": "success",
+                "detail": f"     ✓ Code review complete ({len(result)} chars)",
+                "ts": time.time(),
+            }
+        )
     return state
+
 
 def security_gate_node(state: BuildSubState) -> BuildSubState:
     """Security and code review gate before DEPLOY_GATE.
@@ -806,7 +1263,9 @@ def security_gate_node(state: BuildSubState) -> BuildSubState:
     state = code_review_node(state)
     return state
 
+
 # ── State mapping functions (parent ↔ child) ──────────────────────
+
 
 def build_input_mapping(parent: dict) -> BuildSubState:
     """Map parent WorkflowState → BuildSubState for native subgraph entry.
@@ -819,39 +1278,45 @@ def build_input_mapping(parent: dict) -> BuildSubState:
     docker_proj = find_docker_project(project_path)
 
     from config import loader as config_loader
+
     skills = build_skill_registry(config_loader.config.workflow.skill_registry_path)
 
-    return BuildSubState({
-        "sub_phase": "IMPL_PLAN",
-        "project_path": project_path,
-        "docker_proj": docker_proj,
-        "spec_text": (parent.get("artifacts", {}).get("spec_refined", "") or "")[:16_000],
-        "tasks_text": (parent.get("artifacts", {}).get("tasks", "") or "")[:8_000],
-        "skills": skills,
-        "backlog": [],
-        "backlog_idx": 0,
-        "impl_plan": "",
-        "current_code": "",
-        "test_code": "",
-        "test_result": "",
-        "test_output": "",
-        "retry_count": 0,
-        "int_test_result": "",
-        "int_test_output": "",
-        "seed_result": "",
-        "seed_output": "",
-        "uat_result": "",
-        "uat_output": "",
-        "uat_pass_rate": 0.5,
-        "all_generated_code": [],
-        "errors": [],
-        "build_status": "pending",
-        "parent_artifacts": parent.get("artifacts", {}),
-        "superweb_mode": "agent",  # Default: agent mode
-        "superweb_agent_report": {},
-        "security_review": "",
-        "code_review": "",
-    })
+    return BuildSubState(
+        {
+            "sub_phase": "IMPL_PLAN",
+            "project_path": project_path,
+            "docker_proj": docker_proj,
+            "spec_text": (parent.get("artifacts", {}).get("spec_refined", "") or "")[
+                :16_000
+            ],
+            "tasks_text": (parent.get("artifacts", {}).get("tasks", "") or "")[:8_000],
+            "skills": skills,
+            "backlog": [],
+            "backlog_idx": 0,
+            "impl_plan": "",
+            "current_code": "",
+            "test_code": "",
+            "test_result": "",
+            "test_output": "",
+            "retry_count": 0,
+            "int_test_result": "",
+            "int_test_output": "",
+            "seed_result": "",
+            "seed_output": "",
+            "uat_result": "",
+            "uat_output": "",
+            "uat_pass_rate": 0.5,
+            "all_generated_code": [],
+            "errors": [],
+            "build_status": "pending",
+            "parent_artifacts": parent.get("artifacts", {}),
+            "superweb_mode": "agent",  # Default: agent mode
+            "superweb_agent_report": {},
+            "security_review": "",
+            "code_review": "",
+        }
+    )
+
 
 def build_output_mapping(child: BuildSubState) -> dict:
     writer = safe_stream_writer()  # fallback for tests/CLI
@@ -879,7 +1344,9 @@ def build_output_mapping(child: BuildSubState) -> dict:
     backlog_path.write_text(generate_backlog_md(backlog, project_folder))
 
     # ── Determine pass/fail ──
-    all_completed = all(i["status"] == "completed" for i in backlog) if backlog else False
+    all_completed = (
+        all(i["status"] == "completed" for i in backlog) if backlog else False
+    )
     has_errors = bool(errors) or uat_result == "fail"
 
     # ── Build updated artifacts dict ──
@@ -888,10 +1355,19 @@ def build_output_mapping(child: BuildSubState) -> dict:
         # ── FAILURE ──
         error_summary = "\n".join(errors[:10])
         incomplete = sum(1 for i in backlog if i["status"] != "completed")
-        writer({"type": "error", "phase": "BUILD", "step": "error", "detail": f"\n  ✗ BUILD: {incomplete} items incomplete, UAT={uat_result}", "ts": time.time()})
+        writer(
+            {
+                "type": "error",
+                "phase": "BUILD",
+                "step": "error",
+                "detail": f"\n  ✗ BUILD: {incomplete} items incomplete, UAT={uat_result}",
+                "ts": time.time(),
+            }
+        )
         artifacts["build_status"] = "fail"
 
         from graph.state import CycleMetrics
+
         metrics = CycleMetrics(
             uat_pass_rate=uat_pass_rate,
         )
@@ -912,13 +1388,22 @@ def build_output_mapping(child: BuildSubState) -> dict:
     artifacts["uat_pass_rate"] = uat_pass_rate
 
     from graph.state import CycleMetrics
+
     metrics = CycleMetrics(
         uat_pass_rate=uat_pass_rate,
         test_flakiness_rate=0.0,
         latency_ms=0.0,
     )
 
-    writer({"type": "progress", "phase": "BUILD", "step": "success", "detail": f"\n  ✓ BUILD passed: {items_completed}/{len(backlog)} items, UAT rate={uat_pass_rate}", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "BUILD",
+            "step": "success",
+            "detail": f"\n  ✓ BUILD passed: {items_completed}/{len(backlog)} items, UAT rate={uat_pass_rate}",
+            "ts": time.time(),
+        }
+    )
 
     return {
         "phase": "BUILD",
@@ -928,7 +1413,9 @@ def build_output_mapping(child: BuildSubState) -> dict:
         "metrics": metrics,
     }
 
+
 # ── Build subgraph ─────────────────────────────────────────────────
+
 
 def build_subgraph() -> StateGraph:
     """Build the BUILD subgraph (returns the StateGraph, not compiled)."""
@@ -957,9 +1444,11 @@ def build_subgraph() -> StateGraph:
 
     return sub
 
+
 def get_compiled_subgraph():
     """Return the compiled BUILD subgraph for native parent integration."""
     return build_subgraph().compile()
+
 
 def build_subgraph_node(state: dict) -> dict:
     """Wrapper node that bridges WorkflowState ↔ BuildSubState.

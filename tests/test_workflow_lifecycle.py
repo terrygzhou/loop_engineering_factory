@@ -246,7 +246,14 @@ class TestWorkflowLifecycle:
         assert expected.issubset(VALID_PHASES)
 
     def test_full_chain_coverage(self):
-        """Every forward-path phase has a corresponding route_phase branch."""
+        """Every forward-path phase has a corresponding route_phase branch.
+
+        Decision 2: VERIFY with a passing verify_status routes to SHIP;
+        the _forward_paths["VERIFY"] target is "ERROR" (halt) which is
+        only reached when the retry budget is exhausted. This test uses
+        a clean passing state, so the expected target for VERIFY is "SHIP".
+        """
+        verify_expected = "SHIP"  # clean passing VERIFY -> SHIP
         for phase in _forward_paths:
             state = _make_state(phase)
             state["metrics"] = CycleMetrics(
@@ -257,6 +264,10 @@ class TestWorkflowLifecycle:
                 uat_pass_rate=0.99,
             )
             state["artifacts"] = {"review_approved": True}
+            if phase == "VERIFY":
+                state["artifacts"]["verify_status"] = "pass"
+                expected = verify_expected
+            else:
+                expected = _forward_paths[phase]
             result = route_phase(state)
-            expected = _forward_paths[phase]
             assert result == expected, f"{phase} → expected {expected}, got {result}"

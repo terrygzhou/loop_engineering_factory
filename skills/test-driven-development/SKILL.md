@@ -62,16 +62,17 @@ Write one minimal test showing what should happen.
 ```python
 def test_retries_failed_operations_3_times():
     attempts = 0
+
     def operation():
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            raise Exception('fail')
-        return 'success'
+            raise Exception("fail")
+        return "success"
 
     result = retry_operation(operation)
 
-    assert result == 'success'
+    assert result == "success"
     assert attempts == 3
 ```
 Clear name, tests real behavior, one thing.
@@ -80,9 +81,9 @@ Clear name, tests real behavior, one thing.
 ```python
 def test_retry_works():
     mock = MagicMock()
-    mock.side_effect = [Exception(), Exception(), 'success']
+    mock.side_effect = [Exception(), Exception(), "success"]
     result = retry_operation(mock)
-    assert result == 'success'  # What about retry count? Timing?
+    assert result == "success"  # What about retry count? Timing?
 ```
 Vague name, tests mock not real code.
 
@@ -326,13 +327,15 @@ In production code, DRY (Don't Repeat Yourself) is usually right. In tests, **DA
 ```python
 # DAMP: Each test is self-contained and readable
 def test_rejects_tasks_with_empty_titles():
-    result = create_task(title='', assignee='user-1')
+    result = create_task(title="", assignee="user-1")
     assert result.status_code == 422
-    assert 'Title is required' in str(result.json())
+    assert "Title is required" in str(result.json())
+
 
 def test_trims_whitespace_from_titles():
-    task = create_task(title='  Buy groceries  ', assignee='user-1')
-    assert task.title == 'Buy groceries'
+    task = create_task(title="  Buy groceries  ", assignee="user-1")
+    assert task.title == "Buy groceries"
+
 
 # Over-DRY: Shared setup obscures what each test actually verifies
 # (Don't do this just to avoid repeating the input shape)
@@ -343,10 +346,10 @@ def test_trims_whitespace_from_titles():
 ```python
 def test_marks_overdue_tasks():
     # Arrange: Set up the test scenario
-    task = create_task(title='Test', deadline='2026-01-01')
+    task = create_task(title="Test", deadline="2026-01-01")
 
     # Act: Perform the action being tested
-    result = check_overdue(task, current_date='2026-01-02')
+    result = check_overdue(task, current_date="2026-01-02")
 
     # Assert: Verify the outcome
     assert result.is_overdue is True
@@ -451,7 +454,7 @@ delegate_task(
     Project test command: pytest tests/ -q
     Project structure: [describe relevant files]
     """,
-    toolsets=['terminal', 'file']
+    toolsets=["terminal", "file"],
 )
 ```
 
@@ -499,13 +502,14 @@ Assert on the *outcome* of an operation, not on which methods were called intern
 ```python
 # Good: Tests what the function does (state-based)
 def test_returns_tasks_sorted_newest_first():
-    tasks = list_tasks(sort_by='createdAt', sort_order='desc')
+    tasks = list_tasks(sort_by="createdAt", sort_order="desc")
     assert tasks[0].created_at > tasks[1].created_at
+
 
 # Bad: Tests how the function works internally (interaction-based)
 def test_calls_db_query_with_order_by():
-    list_tasks(sort_by='createdAt', sort_order='desc')
-    assert db.query.call_args[0][0].endswith('ORDER BY created_at DESC')
+    list_tasks(sort_by="createdAt", sort_order="desc")
+    assert db.query.call_args[0][0].endswith("ORDER BY created_at DESC")
 ```
 
 #### DAMP Over DRY in Tests
@@ -516,11 +520,13 @@ In production code, DRY (Don't Repeat Yourself) is usually right. In tests, **DA
 # DAMP: Each test is self-contained and readable
 def test_rejects_empty_title():
     with pytest.raises(ValueError, match="Title is required"):
-        create_task(title='', assignee='user-1')
+        create_task(title="", assignee="user-1")
+
 
 def test_trims_whitespace_from_title():
-    task = create_task(title='  Buy groceries  ', assignee='user-1')
-    assert task.title == 'Buy groceries'
+    task = create_task(title="  Buy groceries  ", assignee="user-1")
+    assert task.title == "Buy groceries"
+
 
 # Over-DRY: Shared setup obscures what each test actually verifies
 # (Don't do this just to avoid repeating the input shape)
@@ -547,7 +553,7 @@ Use mocks only when the real implementation is too slow, non-deterministic, or h
 ```python
 def test_marks_overdue_tasks():
     # Arrange: Set up the test scenario
-    task = create_task(title='Test', deadline=datetime(2025, 1, 1))
+    task = create_task(title="Test", deadline=datetime(2025, 1, 1))
 
     # Act: Perform the action being tested
     result = check_overdue(task, datetime(2025, 1, 2))
@@ -564,11 +570,14 @@ def test_rejects_empty_title(): ...
 def test_trims_whitespace(): ...
 def test_enforces_max_length(): ...
 
+
 # Bad: Everything in one test
 def test_validates_titles():
-    with pytest.raises(ValueError): create_task(title='')
-    assert create_task(title='  hello  ').title == 'hello'
-    with pytest.raises(ValueError): create_task(title='a' * 256)
+    with pytest.raises(ValueError):
+        create_task(title="")
+    assert create_task(title="  hello  ").title == "hello"
+    with pytest.raises(ValueError):
+        create_task(title="a" * 256)
 ```
 
 #### Name Tests Descriptively
@@ -579,6 +588,7 @@ class TestCompleteTask:
     def test_sets_status_and_records_timestamp(self): ...
     def test_raises_not_found_for_non_existent_task(self): ...
     def test_is_idempotent_when_already_completed(self): ...
+
 
 # Bad: Vague names
 def test_works(): ...

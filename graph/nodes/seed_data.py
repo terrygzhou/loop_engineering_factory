@@ -8,7 +8,6 @@ initial data generation) in a future iteration.
 Output: marks seed phase as complete, preserves all artifacts.
 """
 
-
 import time
 from tools.audit_logger import AuditLog
 from tools.stream_writer import safe_stream_writer
@@ -24,15 +23,34 @@ def seed_data_node(state: dict) -> dict:
 
     Returns partial update dict (LangGraph reducer merges).
     """
-    writer({"type": "progress", "phase": "SEED_DATA", "step": "started", "detail": "\n=== SEED_DATA PHASE (placeholder) ===", "ts": time.time()})
-    writer({"type": "progress", "phase": "SEED_DATA", "step": "progress", "detail": "  -> Seed data seeding not yet implemented — pass-through to VERIFY", "ts": time.time()})
+    writer(
+        {
+            "type": "progress",
+            "phase": "SEED_DATA",
+            "step": "started",
+            "detail": "\n=== SEED_DATA PHASE (placeholder) ===",
+            "ts": time.time(),
+        }
+    )
+    writer(
+        {
+            "type": "progress",
+            "phase": "SEED_DATA",
+            "step": "progress",
+            "detail": "  -> Seed data seeding not yet implemented — pass-through to VERIFY",
+            "ts": time.time(),
+        }
+    )
 
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
     audit.log_node_input("SEED_DATA", {"is_placeholder": True})
-    audit.log_node_output("SEED_DATA", {
-        "status": "skipped_placeholder",
-        "note": "Will be implemented with real seeding logic",
-    })
+    audit.log_node_output(
+        "SEED_DATA",
+        {
+            "status": "skipped_placeholder",
+            "note": "Will be implemented with real seeding logic",
+        },
+    )
 
     return {
         "phase": "SEED_DATA",

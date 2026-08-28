@@ -2,6 +2,7 @@
 Context size management — estimate, compress, and prune context before LLM calls.
 Implements headroom calculation and context pruning to prevent overflow.
 """
+
 import re
 from typing import Optional
 
@@ -14,13 +15,17 @@ def estimate_tokens(text: str) -> int:
         return 0
     # More accurate estimation accounting for code vs prose
     # Code tends to be denser, prose sparser
-    code_ratio = len(re.findall(r'[{}[\]();=<>!@#\$%\^&\*\|]', text)) / max(len(text), 1)
+    code_ratio = len(re.findall(r"[{}[\]();=<>!@#\$%\^&\*\|]", text)) / max(
+        len(text), 1
+    )
     # ~3.5 chars/token for code-heavy, ~4.5 for prose-heavy
     avg_chars = 3.5 + (1 - code_ratio) * 1.0
     return max(1, int(len(text) / avg_chars))
 
 
-def check_headroom(current_tokens: int, max_tokens: int, reserve_pct: float = 0.2) -> dict:
+def check_headroom(
+    current_tokens: int, max_tokens: int, reserve_pct: float = 0.2
+) -> dict:
     """Calculate available headroom for context expansion.
     reserve_pct: fraction of max_tokens to reserve for the response.
     """
@@ -38,7 +43,9 @@ def check_headroom(current_tokens: int, max_tokens: int, reserve_pct: float = 0.
     }
 
 
-def compress_context(context: str, max_tokens: int, target_compression: float = 0.5) -> str:
+def compress_context(
+    context: str, max_tokens: int, target_compression: float = 0.5
+) -> str:
     """Compress context by removing blank lines, trailing whitespace, and collapsing whitespace.
     Returns compressed text guaranteed to fit within max_tokens.
     """
@@ -53,11 +60,11 @@ def compress_context(context: str, max_tokens: int, target_compression: float = 
     compressed = context
 
     # Step 1: Collapse multiple blank lines to single
-    compressed = re.sub(r'\n\s*\n\s*\n', '\n\n', compressed)
+    compressed = re.sub(r"\n\s*\n\s*\n", "\n\n", compressed)
 
     # Step 2: Strip leading/trailing whitespace from each line
-    lines = [line.strip() for line in compressed.split('\n')]
-    compressed = '\n'.join(lines)
+    lines = [line.strip() for line in compressed.split("\n")]
+    compressed = "\n".join(lines)
 
     # Step 3: Truncate from the end if still too large
     current = estimate_tokens(compressed)
@@ -66,7 +73,7 @@ def compress_context(context: str, max_tokens: int, target_compression: float = 
         target_chars = int(len(compressed) * (max_tokens / current))
         truncated = compressed[:target_chars]
         # Break at sentence boundary
-        last_newline = truncated.rfind('\n')
+        last_newline = truncated.rfind("\n")
         if last_newline > target_chars * 0.5:
             truncated = truncated[:last_newline]
         truncated += "\n\n[... truncated for context size ...]"
@@ -75,7 +82,9 @@ def compress_context(context: str, max_tokens: int, target_compression: float = 
     return compressed
 
 
-def prune_context(contexts: Optional[list[tuple[str, str, float]]] = None, max_tokens: int = 16000) -> str:
+def prune_context(
+    contexts: Optional[list[tuple[str, str, float]]] = None, max_tokens: int = 16000
+) -> str:
     """Prune context by priority — keep high-priority content first.
     contexts: list of (name, content, priority) tuples. Higher priority = keep first.
     """
@@ -99,7 +108,7 @@ def prune_context(contexts: Optional[list[tuple[str, str, float]]] = None, max_t
         result.append(f"## {name}\n{content}")
         total += tokens
 
-    return '\n\n'.join(result)
+    return "\n\n".join(result)
 
 
 def prepare_context_for_llm(

@@ -21,23 +21,28 @@ REVIEW_SECTIONS: List[Dict[str, str]] = [
     {"key": "interview_notes", "label": "Interview Notes"},
 ]
 
+
 def build_review_sections(artifacts: Dict[str, str]) -> List[Dict[str, Any]]:
     """Build the full review payload from artifacts — identical for CLI & Web."""
     sections = []
     for sec in REVIEW_SECTIONS:
         key = sec["key"]
         text = artifacts.get(key, "")
-        sections.append({
-            "key": key,
-            "label": sec["label"],
-            "content": text,
-            "word_count": len(text.split()) if text else 0,
-        })
+        sections.append(
+            {
+                "key": key,
+                "label": sec["label"],
+                "content": text,
+                "word_count": len(text.split()) if text else 0,
+            }
+        )
     return sections
+
 
 def build_review_summary(sections: List[Dict[str, Any]]) -> Dict[str, str]:
     """One-line summary per section (key → description)."""
     return {s["key"]: f"{s['label']}: {s['word_count']} words" for s in sections}
+
 
 def build_review_metrics(state: Any) -> Dict[str, float]:
     """Extract spec_confidence from state.metrics."""
@@ -49,9 +54,11 @@ def build_review_metrics(state: Any) -> Dict[str, float]:
         val = metrics.get("spec_confidence", 0.0)
     return {"spec_confidence": float(val)}
 
+
 @dataclass
 class SectionFeedback:
     """Structured per-section review feedback — CLI and Web UI return this."""
+
     approved: bool = True
     edited: bool = False
     comment: str = ""
@@ -61,9 +68,11 @@ class SectionFeedback:
         d = asdict(self)
         return {k: v for k, v in d.items() if v is not None and v != ""}
 
+
 @dataclass
 class ReviewResult:
     """Return type for _cli_human_review — matches Web UI JSON payload exactly."""
+
     approved: bool
     section_feedback: Dict[str, Dict[str, Any]]
 

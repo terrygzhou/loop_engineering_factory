@@ -6,6 +6,7 @@ Usage:
     manager.signal()       # on abort
     await manager.wait(1.0) # in workflow loop
 """
+
 import asyncio
 
 

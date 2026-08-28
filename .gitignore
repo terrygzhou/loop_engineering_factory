@@ -91,3 +91,6 @@ langgraph-state-machine.md
 
 # pytest-cov
 .coverage
+
+# Fabric agent runtime state
+.pi/

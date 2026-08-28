@@ -45,6 +45,7 @@ import json
 import sys
 from datetime import datetime
 
+
 class JSONFormatter(logging.Formatter):
     def format(self, record):
         log_entry = {
@@ -61,6 +62,7 @@ class JSONFormatter(logging.Formatter):
                 "message": str(record.exc_info[1]),
             }
         return json.dumps(log_entry)
+
 
 # Configure root logger
 logger = logging.getLogger()
@@ -102,12 +104,14 @@ from collections import defaultdict
 
 metrics = defaultdict(lambda: {"count": 0, "errors": 0, "total_duration": 0.0})
 
+
 def track_metric(endpoint: str, duration: float, error: bool = False):
     m = metrics[endpoint]
     m["count"] += 1
     if error:
         m["errors"] += 1
     m["total_duration"] += duration
+
 
 # In your route:
 @router.get("/items")
@@ -132,10 +136,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
+
 @router.get("/health")
 async def health_check():
     """Liveness probe — always returns 200 if the process is running."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
 
 @router.get("/health/ready")
 async def readiness_check(session: AsyncSession = Depends(get_db)):
@@ -173,20 +179,23 @@ import sys
 
 logger = logging.getLogger(__name__)
 
+
 class CorrelationIdMiddleware:
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            request_id = scope.get("headers", {}).get(
-                b"x-request-id", uuid.uuid4().hex
-            ).decode()
+            request_id = (
+                scope.get("headers", {}).get(b"x-request-id", uuid.uuid4().hex).decode()
+            )
             scope["request_id"] = request_id
 
             # Inject into logging
             extra = {"request_id": request_id}
-            logger.info(f"Request started: {scope['method']} {scope['path']}", extra=extra)
+            logger.info(
+                f"Request started: {scope['method']} {scope['path']}", extra=extra
+            )
 
         await self.app(scope, receive, send)
 ```

@@ -4,6 +4,7 @@ Guardrails loader — load quality thresholds from YAML at runtime.
 Used by edges.py, verify.py, and reflect.py to read thresholds that REFLECT
 can update between cycles. Falls back to built-in defaults if YAML missing.
 """
+
 from pathlib import Path
 from typing import Any, Dict
 
@@ -29,6 +30,7 @@ _DEFAULTS: Dict[str, Any] = {
 def _resolve_path() -> str:
     """Resolve guardrails path: config.yaml > default."""
     from config.loader import config
+
     _guardrails_path = config.paths.guardrails_path
     # Try alongside this module
     mod_path = Path(__file__).resolve().parent / "guardrails.yaml"
@@ -61,7 +63,18 @@ def load_guardrails() -> Dict[str, Any]:
         "reflection": raw.get("reflection", {}),
         "llm": raw.get("llm", {}),
         # Preserve any extra top-level keys (e.g. code_review, spec_generation)
-        **{k: v for k, v in raw.items() if k not in ("quality_thresholds", "security_sensitive", "feedback", "reflection", "llm")},
+        **{
+            k: v
+            for k, v in raw.items()
+            if k
+            not in (
+                "quality_thresholds",
+                "security_sensitive",
+                "feedback",
+                "reflection",
+                "llm",
+            )
+        },
     }
 
 

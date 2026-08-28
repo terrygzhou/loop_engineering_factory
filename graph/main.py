@@ -5,6 +5,7 @@ Uses LangGraph OOTB APIs:
 - interrupt() inside nodes for HIL pauses (DISCOVER, ARCH_REVIEW)
 - SQLiteSaver for checkpoint persistence
 """
+
 import logging
 
 from langgraph.graph import StateGraph, START, END
@@ -30,6 +31,7 @@ def error_node(state: WorkflowState) -> WorkflowState:
     _logger.error("ERROR terminal reached: %s", error_msg)
     state["phase"] = "ERROR"
     return state
+
 
 def build_graph(checkpointer=None, auto_approve=False):
     """
@@ -80,7 +82,11 @@ def build_graph(checkpointer=None, auto_approve=False):
     # Note: no unconditional add_edge("BUILD", ...) — route_phase handles all BUILD routing
     # including BUILD→BUILD (retry), BUILD→SEED_DATA (pass), BUILD→REFLECT (fail)
     workflow.add_edge("SEED_DATA", "VERIFY")
-    workflow.add_edge("VERIFY", "SHIP")
+    # Decision 2: VERIFY is a real gate, not a static pass-through.
+    # A failing VERIFY (deterministic test_errors / critical findings) loops
+    # back to BUILD or halts — it never reaches SHIP. route_phase owns the
+    # deterministic signal; LLM review findings are advisory only.
+    workflow.add_conditional_edges("VERIFY", route_phase)
     workflow.add_conditional_edges("SHIP", route_phase)
     workflow.add_conditional_edges("REFLECT", route_phase)
 

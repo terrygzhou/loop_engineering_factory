@@ -4,6 +4,7 @@ Health check and metrics endpoint for the orchestrator.
 Provides HTTP endpoints for Docker health checks and Prometheus scraping.
 Runs on port 8081 inside the container (published as :48081 on the host; configurable via OBSERVABILITY_PORT env).
 """
+
 import atexit
 import json
 import time
@@ -14,7 +15,9 @@ from typing import Optional
 from prometheus_client import Counter, Histogram, Gauge, generate_latest  # type: ignore
 
 # ── Prometheus metrics ──
-WORKFLOW_DURATION = Histogram("workflow_duration_seconds", "Workflow cycle duration", ["project"])
+WORKFLOW_DURATION = Histogram(
+    "workflow_duration_seconds", "Workflow cycle duration", ["project"]
+)
 PHASE_DURATION = Histogram("phase_duration_seconds", "Phase execution time", ["phase"])
 PHASE_ERRORS = Counter("phase_errors_total", "Phase failures", ["phase"])
 LLM_CALLS = Counter("llm_calls_total", "LLM invocations", ["skill", "status"])
@@ -26,6 +29,7 @@ WORKFLOW_PHASE = Gauge("workflow_current_phase", "Current workflow phase", ["pro
 _start_time = time.time()
 _active_workflows: dict[str, dict] = {}
 _stats_lock = Lock()
+
 
 class HealthHandler(BaseHTTPRequestHandler):
     """Minimal health check + metrics handler — no external deps."""
@@ -59,6 +63,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         """Check dependencies — chromadb + OTel collector."""
         import httpx
         from config.loader import config as _cfg
+
         ok = True
         deps = {}
         try:
@@ -86,6 +91,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(generate_latest())
 
+
 def start_health_server(port: int = 0):
     """Start health server in a background thread. Guards against double-start."""
     global _health_server
@@ -94,6 +100,7 @@ def start_health_server(port: int = 0):
         return _health_server
     if port == 0:
         from config.loader import config
+
         port = int(config.services.observability.port)
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     _health_server = server
@@ -102,7 +109,9 @@ def start_health_server(port: int = 0):
     print(f"[Health] Server listening on :{port}")
     return server
 
+
 _health_server: Optional["HTTPServer"] = None  # type: ignore
+
 
 def _shutdown_health_server():
     try:
@@ -111,12 +120,15 @@ def _shutdown_health_server():
     except Exception:
         pass
 
+
 atexit.register(_shutdown_health_server)
+
 
 def track_workflow_start(project_name: str):
     with _stats_lock:
         _active_workflows[project_name] = {"started": time.time()}
         ACTIVE_WORKFLOWS.set(len(_active_workflows))
+
 
 def track_workflow_end(project_name: str, duration: float):
     WORKFLOW_DURATION.labels(project=project_name).observe(duration)
@@ -124,25 +136,31 @@ def track_workflow_end(project_name: str, duration: float):
         _active_workflows.pop(project_name, None)
         ACTIVE_WORKFLOWS.set(len(_active_workflows))
 
+
 def track_workflow_error(project_name: str):
     """Reset active_workflows gauge when a workflow fails mid-cycle."""
     with _stats_lock:
         _active_workflows.pop(project_name, None)
         ACTIVE_WORKFLOWS.set(len(_active_workflows))
 
+
 def track_phase(phase: str, duration: float, success: bool = True):
     PHASE_DURATION.labels(phase=phase).observe(duration)
     if not success:
         PHASE_ERRORS.labels(phase=phase).inc()
 
+
 def track_llm(skill: str, duration: float, success: bool = True):
     LLM_DURATION.labels(skill=skill).observe(duration)
     LLM_CALLS.labels(skill=skill, status="success" if success else "error").inc()
 
+
 def set_current_phase(project_name: str, phase: str):
     WORKFLOW_PHASE.labels(project=project_name).set(1)
 
+
 if __name__ == "__main__":
     import signal
+
     start_health_server()
     signal.pause()

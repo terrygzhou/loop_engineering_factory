@@ -2,6 +2,7 @@
 Load skills from local ./skills directory. Prioritizes local over external sources.
 Supports versioning, hot-reload, and validation.
 """
+
 from config.loader import config
 import os
 import json
@@ -12,13 +13,14 @@ from typing import List, Dict, Any, Optional
 LOCAL_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 SKILLS_INDEX = LOCAL_SKILLS_DIR / "SKILLS_INDEX.json"
 
+
 def parse_skill_md(filepath: str) -> Dict[str, Any]:
     """Parse a SKILL.md file: extract YAML frontmatter and markdown body."""
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         content = f.read()
 
-    if content.startswith('---'):
-        parts = content.split('---', 2)
+    if content.startswith("---"):
+        parts = content.split("---", 2)
         if len(parts) >= 3:
             frontmatter = yaml.safe_load(parts[1])
             body = parts[2].strip()
@@ -35,6 +37,7 @@ def parse_skill_md(filepath: str) -> Dict[str, Any]:
         "path": filepath,
     }
 
+
 def validate_skill(skill: Dict[str, Any]) -> bool:
     """Validate skill structure — name, description, content."""
     if not skill.get("name"):
@@ -44,6 +47,7 @@ def validate_skill(skill: Dict[str, Any]) -> bool:
     if not skill.get("content"):
         return False
     return True
+
 
 def load_skills(skills_dir: str = "") -> List[Dict[str, Any]]:
     """Scan skills_dir for all SKILL.md files and return parsed skill objects."""
@@ -71,7 +75,9 @@ def load_skills(skills_dir: str = "") -> List[Dict[str, Any]]:
                     "triggers": meta.get("triggers", []),
                     "version": meta.get("version", "1.0.0"),
                     "content": parsed["content"],
-                    "category": str(skill_dir.relative_to(skills_path).parent) if skills_path != Path(root) else "",
+                    "category": str(skill_dir.relative_to(skills_path).parent)
+                    if skills_path != Path(root)
+                    else "",
                     "path": filepath,
                 }
                 if validate_skill(skill):
@@ -83,9 +89,11 @@ def load_skills(skills_dir: str = "") -> List[Dict[str, Any]]:
 
     return skills
 
+
 # ── Cached registry (singleton, hot-reload on file change) ──
 _registry: Dict[str, Dict[str, Any]] = {}
 _registry_mtime: float = 0.0
+
 
 def build_skill_registry(skills_dir: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """
@@ -126,6 +134,7 @@ def build_skill_registry(skills_dir: Optional[str] = None) -> Dict[str, Dict[str
 
     return _registry
 
+
 def _save_skills_index(registry: Dict[str, Dict[str, Any]]):
     """Save skills index with versions for change detection."""
     index = {}
@@ -137,17 +146,18 @@ def _save_skills_index(registry: Dict[str, Dict[str, Any]]):
         }
     try:
         SKILLS_INDEX.parent.mkdir(parents=True, exist_ok=True)
-        with open(SKILLS_INDEX, 'w') as f:
+        with open(SKILLS_INDEX, "w") as f:
             json.dump(index, f, indent=2)
     except Exception as e:
         print(f"WARNING: Could not save skills index: {e}")
+
 
 def check_skills_changed(registry: Dict[str, Dict[str, Any]]) -> bool:
     """Check if any skill files have changed since last load."""
     if not SKILLS_INDEX.exists():
         return True
     try:
-        with open(SKILLS_INDEX, 'r') as f:
+        with open(SKILLS_INDEX, "r") as f:
             index = json.load(f)
         for name, skill in registry.items():
             path = skill.get("path", "")
@@ -159,12 +169,19 @@ def check_skills_changed(registry: Dict[str, Dict[str, Any]]) -> bool:
     except Exception:
         return True
 
-def find_skills_by_trigger(trigger_keyword: str, skills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+def find_skills_by_trigger(
+    trigger_keyword: str, skills: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     """Find skills that match a trigger keyword."""
     matches = []
     keyword = trigger_keyword.lower()
     for skill in skills:
         triggers = [t.lower() for t in skill.get("triggers", [])]
-        if keyword in triggers or keyword in skill["name"].lower() or keyword in skill["description"].lower():
+        if (
+            keyword in triggers
+            or keyword in skill["name"].lower()
+            or keyword in skill["description"].lower()
+        ):
             matches.append(skill)
     return matches

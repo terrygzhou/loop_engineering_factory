@@ -54,7 +54,7 @@ def process_order(order):
     if order.user_id:
         if order.items:
             if order.items.count() > 0:
-                if order.status == 'active':
+                if order.status == "active":
                     return calculate_total(order)
             else:
                 raise EmptyOrderError()
@@ -62,6 +62,7 @@ def process_order(order):
             raise MissingItemsError()
     else:
         raise InvalidUserError()
+
 
 # After: Guard clauses
 def process_order(order):
@@ -71,7 +72,7 @@ def process_order(order):
         raise MissingItemsError()
     if order.items.count() == 0:
         raise EmptyOrderError()
-    if order.status != 'active':
+    if order.status != "active":
         return 0
     return calculate_total(order)
 ```
@@ -85,6 +86,7 @@ When a function does multiple things, extract each thing into a named helper. Th
 def process_booking(booking):
     # 80 lines of mixed validation, calculation, and persistence
     ...
+
 
 # After: Composed from named helpers
 def process_booking(booking):
@@ -143,6 +145,7 @@ def validate_user(user):
         result = False
     return result
 
+
 # After
 def validate_user(user):
     if not user.is_active:
@@ -156,14 +159,14 @@ def validate_user(user):
 
 ```python
 # Before: Parallel lists
-names = ['Alice', 'Bob', 'Charlie']
+names = ["Alice", "Bob", "Charlie"]
 ages = [30, 25, 35]
 
 # After: Structured data
 users = [
-    {'name': 'Alice', 'age': 30},
-    {'name': 'Bob', 'age': 25},
-    {'name': 'Charlie', 'age': 35},
+    {"name": "Alice", "age": 30},
+    {"name": "Bob", "age": 25},
+    {"name": "Charlie", "age": 35},
 ]
 ```
 

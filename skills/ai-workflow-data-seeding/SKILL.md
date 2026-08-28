@@ -24,6 +24,7 @@ Any task involving database seeding in an AI loop engineering context. Also appl
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
 async def seed_table(session: AsyncSession, table_cls, data: list[dict]):
     for row in data:
         stmt = insert(table_cls).values(**row)
@@ -58,9 +59,11 @@ Seed parent tables before children to satisfy FK constraints:
 import hashlib
 import uuid
 
+
 def deterministic_uuid(seed: str) -> uuid.UUID:
     """Generate a stable UUID from a seed string for idempotent seeding."""
     return uuid.UUID(hashlib.sha256(seed.encode()).hexdigest[:32])
+
 
 # Usage in seed data
 address_data = [

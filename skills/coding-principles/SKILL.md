@@ -49,9 +49,12 @@ Write clear, modular, and minimal code.
 - **Fix — type-check before slicing:**
   ```python
   def truncate_for_storage(value, limit=500):
-      if isinstance(value, str): return value[:limit]
-      if isinstance(value, list): return value[:limit]
-      if isinstance(value, dict): return {k: str(v)[:limit] for k, v in value.items()}
+      if isinstance(value, str):
+          return value[:limit]
+      if isinstance(value, list):
+          return value[:limit]
+      if isinstance(value, dict):
+          return {k: str(v)[:limit] for k, v in value.items()}
       return str(value)[:limit]
   ```
 

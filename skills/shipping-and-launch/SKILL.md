@@ -104,6 +104,7 @@ FEATURES = {
 # routes/items.py
 from config.flags import FEATURES
 
+
 @router.post("/items")
 async def create_item(body: CreateItemRequest):
     if not FEATURES["new_items_api"]:

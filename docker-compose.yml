@@ -173,6 +173,12 @@ services:
       - loop_factory_default
       - grafana-stack_observability
 
+# Compose project name — promtail filters on "loop_factory-loop-1", so the
+# project MUST be named loop_factory for the loop container's logs to reach
+# Loki (W1). Without this, compose derives the name from the directory
+# (loop_engineering_factory) and promtail matches nothing.
+name: loop_factory
+
 volumes:
   chroma_data:
   skills_data:

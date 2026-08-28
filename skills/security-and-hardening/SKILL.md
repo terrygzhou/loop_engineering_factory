@@ -52,14 +52,15 @@ Apply security practices during BUILD phase — input validation, authentication
 def validate_field(cls, v):
     return v.strip()[:255]
 
+
 # Rate limiting
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI()
 
+
 @app.post("/api/v1/resource")
 @limiter.limit("100/minute")
-async def create_resource(data: ResourceCreate):
-    ...
+async def create_resource(data: ResourceCreate): ...
 ```
 
 ## STRIDE Threat Model

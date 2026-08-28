@@ -1,6 +1,7 @@
 """
 Feedback aggregator: collect metrics and artifacts from each phase run.
 """
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -26,8 +27,9 @@ class FeedbackAggregator:
         self.cycles_dir = self.storage_dir / "cycles"
         self.cycles_dir.mkdir(exist_ok=True)
 
-    def record_cycle(self, cycle_id: str, phase: str, metrics: dict,
-                     artifacts: dict, feedback: list) -> dict:
+    def record_cycle(
+        self, cycle_id: str, phase: str, metrics: dict, artifacts: dict, feedback: list
+    ) -> dict:
         """Record a phase execution and return the cycle record."""
         record = {
             "cycle_id": cycle_id,
@@ -42,7 +44,7 @@ class FeedbackAggregator:
         filepath = self.cycles_dir / f"{cycle_id}.json"
         if filepath.exists():
             # Append to existing cycle
-            with open(filepath, 'r') as f:
+            with open(filepath, "r") as f:
                 existing = json.load(f)
             if isinstance(existing, dict):
                 # Convert single record to list
@@ -51,7 +53,7 @@ class FeedbackAggregator:
         else:
             existing = [record]
 
-        with open(filepath, 'w') as f:
+        with open(filepath, "w") as f:
             json.dump(existing, f, indent=2)
 
         return record
@@ -61,7 +63,7 @@ class FeedbackAggregator:
         filepath = self.cycles_dir / f"{cycle_id}.json"
         if not filepath.exists():
             return []
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             return json.load(f)
 
     def list_cycles(self) -> list:
@@ -76,11 +78,14 @@ class FeedbackAggregator:
         patterns = []
         for f in self.cycles_dir.glob("*.json"):
             try:
-                with open(f, 'r') as fh:
+                with open(f, "r") as fh:
                     records = json.load(fh)
                 for rec in records:
                     metrics = rec.get("metrics", {})
-                    if isinstance(metrics, dict) and metrics.get(metric_name, 0) > threshold:
+                    if (
+                        isinstance(metrics, dict)
+                        and metrics.get(metric_name, 0) > threshold
+                    ):
                         patterns.append(rec)
             except (json.JSONDecodeError, KeyError):
                 continue

@@ -26,6 +26,7 @@ Behaviour:
 The gate is a pure function of (config, artifacts, evaluator) — unit
 testable with a mocked evaluator singleton.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -75,7 +76,9 @@ class PxGate:
             from service.evaluator import evaluator as px_evaluator
         except Exception:
             return False
-        return px_evaluator is not None and bool(getattr(px_evaluator, "_available", False))
+        return px_evaluator is not None and bool(
+            getattr(px_evaluator, "_available", False)
+        )
 
     @staticmethod
     def _score_ok(result: Any) -> bool:
@@ -118,6 +121,7 @@ class PxGate:
             )
 
         from service.evaluator import evaluator as px_evaluator
+
         assert px_evaluator is not None, "guaranteed by _evaluator_available() above"
 
         failures: list[str] = []
@@ -141,7 +145,9 @@ class PxGate:
                         f"{self.min_spec_quality:.2f}"
                     )
 
-        plan_result = px_evaluator.eval_plan(plan_text, spec_ref=spec_text) if plan_text else None
+        plan_result = (
+            px_evaluator.eval_plan(plan_text, spec_ref=spec_text) if plan_text else None
+        )
         if plan_text:
             if plan_result is None or not self._score_ok(plan_result):
                 failures.append(

@@ -18,6 +18,7 @@ Metrics:
   - build_quality  (BUILD)      — code quality, test coverage, architecture, security
   - ship_quality   (SHIP)       — prod config completeness, secret safety, resilience
 """
+
 from __future__ import annotations
 
 import json
@@ -42,11 +43,13 @@ __all__ = ["Evaluator", "evaluator"]
 
 # ── Evaluator definitions ──────────────────────────────────────────────
 
+
 @dataclass
 class EvalResult:
     """Single evaluation result with score, rationale, and dimensions."""
+
     name: str
-    score: float                        # 0.0–1.0
+    score: float  # 0.0–1.0
     rationale: str = ""
     dimensions: dict[str, float] = field(default_factory=dict)
     duration_s: float = 0.0
@@ -175,6 +178,7 @@ Respond JSON only: {{"score": float, "dimensions": {{"config_completeness": floa
 
 # ── Evaluator class ──────────────────────────────────────────────────
 
+
 class Evaluator:
     """LLM-as-judge evaluator using the existing model endpoint.
 
@@ -204,19 +208,36 @@ class Evaluator:
 
     def eval_plan(self, plan_text: str, spec_ref: str = "") -> EvalResult:
         """Evaluate PLAN phase output. Score plan against project-specific spec."""
-        return self._judge("plan_score", PLAN_SCORE_PROMPT, plan_text=plan_text, spec_ref=spec_ref)
+        return self._judge(
+            "plan_score", PLAN_SCORE_PROMPT, plan_text=plan_text, spec_ref=spec_ref
+        )
 
     def eval_review(self, review_text: str, spec_context: str = "") -> EvalResult:
         """Evaluate REVIEW phase output. Score review depth against project context."""
-        return self._judge("review_score", REVIEW_SCORE_PROMPT, review_text=review_text, spec_context=spec_context)
+        return self._judge(
+            "review_score",
+            REVIEW_SCORE_PROMPT,
+            review_text=review_text,
+            spec_context=spec_context,
+        )
 
     def eval_build(self, build_artifacts: str, spec_ref: str = "") -> EvalResult:
         """Evaluate BUILD phase output. Score code quality, test coverage, security, performance, maintainability."""
-        return self._judge("build_quality", BUILD_QUALITY_PROMPT, build_artifacts=build_artifacts, spec_ref=spec_ref)
+        return self._judge(
+            "build_quality",
+            BUILD_QUALITY_PROMPT,
+            build_artifacts=build_artifacts,
+            spec_ref=spec_ref,
+        )
 
     def eval_ship(self, ship_artifacts: str, spec_ref: str = "") -> EvalResult:
         """Evaluate SHIP phase output. Score prod config completeness, secret safety, resilience, observability, deployment automation."""
-        return self._judge("ship_quality", SHIP_QUALITY_PROMPT, ship_artifacts=ship_artifacts, spec_ref=spec_ref)
+        return self._judge(
+            "ship_quality",
+            SHIP_QUALITY_PROMPT,
+            ship_artifacts=ship_artifacts,
+            spec_ref=spec_ref,
+        )
 
     # ── Core judge ──
 
@@ -229,6 +250,7 @@ class Evaluator:
 
         try:
             import httpx  # already in requirements.txt
+
             prompt = template.format(**ctx)
             start = time.time()
 
@@ -237,7 +259,10 @@ class Evaluator:
                 json={
                     "model": self.llm_model,
                     "messages": [
-                        {"role": "system", "content": "You are an impartial evaluator. Score 0.0–1.0 and explain briefly. Adapt your criteria to the project domain."},
+                        {
+                            "role": "system",
+                            "content": "You are an impartial evaluator. Score 0.0–1.0 and explain briefly. Adapt your criteria to the project domain.",
+                        },
                         {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.1,
@@ -271,6 +296,7 @@ class Evaluator:
     def _parse_json(self, raw: str) -> dict[str, Any]:
         """Extract JSON from LLM response (handle markdown fences, whitespace)."""
         import re
+
         text = raw.strip()
         # Strip markdown code fences if present
         m = re.search(r"```(?:json)?\s*(.+?)```", text, re.DOTALL)
@@ -316,7 +342,9 @@ class Evaluator:
 evaluator: Evaluator | None = None
 
 
-def init_evaluator(llm_base_url: str, llm_model: str, tracer_instance: Any, api_key: str = ""):
+def init_evaluator(
+    llm_base_url: str, llm_model: str, tracer_instance: Any, api_key: str = ""
+):
     """Initialize the singleton evaluator. Call once at startup."""
     global evaluator
     evaluator = Evaluator(

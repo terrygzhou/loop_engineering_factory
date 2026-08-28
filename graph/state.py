@@ -1,6 +1,7 @@
 """
 WorkflowState definition for the self-improving AI loop.
 """
+
 import operator
 from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ def _dict_merge(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
 
 class CycleMetrics(BaseModel):
     """Metrics collected during a workflow cycle."""
+
     review_revisions: int = 0
     security_findings: int = 0
     test_flakiness_rate: float = 0.0
@@ -28,6 +30,7 @@ class CycleMetrics(BaseModel):
 
 class WorkflowState(TypedDict):
     """LangGraph state for the self-improving AI loop."""
+
     cycle_id: str
     phase: str
     metrics: CycleMetrics

@@ -331,7 +331,8 @@ class User:
         self.name = name
         self.email = email
         self.preferences = {}  # Not needed yet!
-        self.metadata = {}     # Not needed yet!
+        self.metadata = {}  # Not needed yet!
+
 
 # Good — YAGNI
 class User:

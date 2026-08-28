@@ -6,6 +6,7 @@ Architecture:
 
 Graceful degradation — never crashes if OTel is unavailable.
 """
+
 import time
 from contextlib import contextmanager
 from typing import Any, Optional
@@ -25,6 +26,7 @@ __all__ = ["tracer", "OTelTracer"]
 
 _configured = False
 
+
 def setup_otel() -> bool:
     """Configure OTel SDK. Idempotent — returns False if already configured."""
     global _configured
@@ -34,10 +36,13 @@ def setup_otel() -> bool:
         return False
 
     from config.loader import config as _cfg
-    resource = Resource.create({
-        "service.name": _cfg.services.otel.service_name,
-        "service.version": "1.0.0",
-    })
+
+    resource = Resource.create(
+        {
+            "service.name": _cfg.services.otel.service_name,
+            "service.version": "1.0.0",
+        }
+    )
     provider = TracerProvider(resource=resource)
     endpoint = _cfg.services.otel.endpoint
     exporter = OTLPSpanExporter(endpoint=endpoint)
@@ -45,6 +50,7 @@ def setup_otel() -> bool:
     trace.set_tracer_provider(provider)
     _configured = True
     return True
+
 
 class OTelTracer:
     """Facade for OTel tracing — graceful degradation if OTel unavailable."""
@@ -96,7 +102,9 @@ class OTelTracer:
 
     # ── Phase spans ──
 
-    def record_phase(self, phase: str, duration_s: float, success: bool = True, **attrs):
+    def record_phase(
+        self, phase: str, duration_s: float, success: bool = True, **attrs
+    ):
         """Emit a phase-completed span."""
         if not self.is_configured():
             return
@@ -115,8 +123,15 @@ class OTelTracer:
 
     # ── LLM spans ──
 
-    def record_llm_call(self, skill: str, model: str, prompt_len: int,
-                        response_len: int, duration_s: float, error: Optional[str] = None):
+    def record_llm_call(
+        self,
+        skill: str,
+        model: str,
+        prompt_len: int,
+        response_len: int,
+        duration_s: float,
+        error: Optional[str] = None,
+    ):
         """Emit a span for each LLM invocation.
 
         Uses OpenInference semantic conventions so Phoenix can extract
@@ -183,6 +198,7 @@ class OTelTracer:
         finally:
             if cm:
                 cm.__exit__(None, None, None)
+
 
 # Module-level singleton — import anywhere
 tracer = OTelTracer()
