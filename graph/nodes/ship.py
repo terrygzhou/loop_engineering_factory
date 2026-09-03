@@ -11,6 +11,7 @@ from datetime import datetime
 
 from config.bounds_loader import bounds
 from config.loader import config
+from tools.audit_logger import AuditLog
 from tools.llm import invoke_skill
 from tools.loader import build_skill_registry
 from tools.stream_writer import safe_stream_writer
@@ -18,6 +19,8 @@ from tools.stream_writer import safe_stream_writer
 
 def ship_node(state: dict) -> dict:
     writer = safe_stream_writer()  # fallback for tests/CLI
+    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input("SHIP", {"project_path": state.get("project_path", "")})
     """
     SHIP phase: Add observability, run launch checklist, deploy via Docker Compose,
     commit with git workflow.
@@ -260,5 +263,8 @@ Target environment considerations:
             "detail": "  ✓ launch_success=True",
             "ts": time.time(),
         }
+    )
+    audit.log_node_output(
+        "SHIP", {"status": "pass", "artifacts": sorted(artifacts_delta.keys())}
     )
     return update
