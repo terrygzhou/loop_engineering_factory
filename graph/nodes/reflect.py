@@ -325,9 +325,19 @@ def reflect_node(state: dict) -> dict:
                     "",
                     llm=get_llm(),
                 )
-                artifacts_delta["git_commit"] = result
+                artifacts_delta["git_commit"] = result or ""
+                if result is None:
+                    writer(
+                        {
+                            "type": "progress",
+                            "phase": "REFLECT",
+                            "step": "warning",
+                            "detail": "  ⚠ git-workflow LLM call failed fatally (None) — commit skipped",
+                            "ts": time.time(),
+                        }
+                    )
                 feedback_entries.append(
-                    {"action": "git_committed", "details": result[:200]}
+                    {"action": "git_committed", "details": (result or "")[:200]}
                 )
             else:
                 writer(

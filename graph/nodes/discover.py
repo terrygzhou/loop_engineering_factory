@@ -549,8 +549,9 @@ def _generate_requirement_via_fabric(
             "Output key technical principles and conventions that should guide implementation."
         )
         timer = SkillTimer("coding-principles")
-        principles_context = invoke_skill(
-            principles_skill["content"], principles_prompt, "", llm=None
+        principles_context = (
+            invoke_skill(principles_skill["content"], principles_prompt, "", llm=None)
+            or ""
         )
         timer.complete()
         principles_context = f"\n\n## Coding Principles\n{principles_context[:1000]}\n"
@@ -567,6 +568,15 @@ def _generate_requirement_via_fabric(
         fabric_timer = SkillTimer("fabric-prompts")
         result = invoke_skill(fabric_skill["content"], fabric_prompt, "", llm=None)
         fabric_timer.complete()
+        if not result:
+            # LLM fatal (None) — degrade to the deterministic template
+            return _generate_requirement_template(
+                project_name,
+                project_description,
+                interview_notes,
+                context,
+                project_folder,
+            )
         md = result.strip()
         if md.startswith("```"):
             md = re.sub(r"^```[a-z]*\n", "", md).rstrip("`")
@@ -867,7 +877,7 @@ def _refine_idea(
     timer = SkillTimer("creative-ideation")
     result = invoke_skill(refine_skill["content"], prompt, "", llm=None)
     timer.complete()
-    return result
+    return result or ""
 
 
 def _build_context(

@@ -218,6 +218,17 @@ def define_node(state: dict) -> dict:
             phase="DEFINE",
         )
         spec_timer.complete()
+        if spec_result is None:
+            writer(
+                {
+                    "type": "progress",
+                    "phase": "DEFINE",
+                    "step": "warning",
+                    "detail": "  ⚠ spec LLM call failed fatally (None) — continuing with empty spec",
+                    "ts": time.time(),
+                }
+            )
+            spec_result = ""
         feedback_entries.append(
             {
                 "skill": "spec-driven-development",
@@ -310,7 +321,7 @@ def define_node(state: dict) -> dict:
                 )
                 src_res = f"[SKILL ERROR] {src_res}"
             else:
-                src_res = str(src_res)
+                src_res = "" if src_res is None else str(src_res)
         if api_skill:
             if isinstance(api_res, Exception):
                 writer(
@@ -324,7 +335,7 @@ def define_node(state: dict) -> dict:
                 )
                 api_res = f"[SKILL ERROR] {api_res}"
             else:
-                api_res = str(api_res)
+                api_res = "" if api_res is None else str(api_res)
 
         return src_res, api_res
 

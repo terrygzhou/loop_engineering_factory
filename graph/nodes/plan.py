@@ -118,6 +118,17 @@ def plan_node(state: dict) -> dict:
             llm=None,
         )
         plan_timer.complete()
+        if plan_result is None:
+            w(
+                {
+                    "type": "progress",
+                    "phase": "PLAN",
+                    "step": "warning",
+                    "detail": "  ⚠ plan LLM call failed fatally (None) — continuing with empty plan",
+                    "ts": time.time(),
+                }
+            )
+            plan_result = ""
         artifacts_delta["plan"] = plan_result[: bounds.artifacts.max_plan_chars]
         # Store structured task breakdown as separate artifact for downstream phases
         # "task_breakdown" = detailed structure, "tasks" = compat key for solution.md + BUILD
@@ -155,6 +166,17 @@ def plan_node(state: dict) -> dict:
             llm=None,
         )
         doubt_timer.complete()
+        if doubt_result is None:
+            w(
+                {
+                    "type": "progress",
+                    "phase": "PLAN",
+                    "step": "warning",
+                    "detail": "  ⚠ doubt LLM call failed fatally (None) — continuing with empty doubt resolution",
+                    "ts": time.time(),
+                }
+            )
+            doubt_result = ""
         artifacts_delta["doubt_resolution"] = doubt_result[
             : bounds.artifacts.max_doubt_chars
         ]

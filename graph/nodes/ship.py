@@ -51,11 +51,14 @@ def ship_node(state: dict) -> dict:
                 "ts": time.time(),
             }
         )
-        result = invoke_skill(
-            obs_skill["content"],
-            "Add structured logging, health endpoints, and RED metrics",
-            f"Project: {project_path}",
-            llm=None,
+        result = (
+            invoke_skill(
+                obs_skill["content"],
+                "Add structured logging, health endpoints, and RED metrics",
+                f"Project: {project_path}",
+                llm=None,
+            )
+            or ""
         )
         artifacts_delta["observability"] = result
         feedback_entries.append(
@@ -77,11 +80,14 @@ def ship_node(state: dict) -> dict:
                 "ts": time.time(),
             }
         )
-        result = invoke_skill(
-            launch_skill["content"],
-            "Run pre-launch checklist: feature flags, rollback plan, staging verification",
-            f"Project: {project_path}",
-            llm=None,
+        result = (
+            invoke_skill(
+                launch_skill["content"],
+                "Run pre-launch checklist: feature flags, rollback plan, staging verification",
+                f"Project: {project_path}",
+                llm=None,
+            )
+            or ""
         )
         artifacts_delta["launch_checklist"] = result
         feedback_entries.append(
@@ -118,11 +124,14 @@ Target environment considerations:
 - TLS/certificate management
 - Cloud-native logging (CloudWatch/Application Insights/Cloud Monitoring)
 """
-        result = invoke_skill(
-            prod_skill["content"],
-            task,
-            state.get("artifacts", {}).get("launch_checklist", ""),
-            llm=None,
+        result = (
+            invoke_skill(
+                prod_skill["content"],
+                task,
+                state.get("artifacts", {}).get("launch_checklist", ""),
+                llm=None,
+            )
+            or ""
         )
         artifacts_delta["prod_deploy_config"] = result
         feedback_entries.append(
@@ -157,11 +166,14 @@ Target environment considerations:
                 "ts": time.time(),
             }
         )
-        result = invoke_skill(
-            git_skill["content"],
-            "Create atomic, conventional commits for this cycle",
-            f"Cycle: {state['cycle_id']}",
-            llm=None,
+        result = (
+            invoke_skill(
+                git_skill["content"],
+                "Create atomic, conventional commits for this cycle",
+                f"Cycle: {state['cycle_id']}",
+                llm=None,
+            )
+            or ""
         )
         artifacts_delta["git_log"] = result
         feedback_entries.append(
