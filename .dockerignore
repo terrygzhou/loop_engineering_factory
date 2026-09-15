@@ -13,7 +13,6 @@ output/
 build/
 
 # Logs & local storage
-log/
 storage/
 
 # Python bytecode & caches

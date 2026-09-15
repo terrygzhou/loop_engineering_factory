@@ -20,6 +20,7 @@ from tools.arckit_loader import (  # noqa: E402
     NO_ARTIFACTS,
     ARTIFACT_SUPERSEDED,
     MALFORMED_ARTIFACT,
+    MALFORMED_FILENAME,
 )
 
 
@@ -540,3 +541,84 @@ class TestInterviewSynthesis:
         # description capped at 500 (§3.4.1), principles at 1000 (§3.4.5)
         assert len(self.ctx.project_description) <= 500
         assert len(self.ctx.principles) <= 1000
+
+
+# ── Explicit artefact list (files= parameter) ─────────────────────────────────
+
+class TestFilesParameter:
+    """Explicit artefact list input: `files=` bypasses glob discovery."""
+
+    def test_files_param_parses_given_files_only(self, tmp_path):
+        """A decoy higher-version ADMP in the root must NOT be picked when
+        the operator lists the exact file they want."""
+        _write(tmp_path, "projects/001-x/ARC-001-ADMP-v1.0.md", ADMP_V1)
+        _write(tmp_path, "projects/001-x/ARC-001-ADMP-v9.9.md", ADMP_V1)
+        _write(tmp_path, "projects/001-x/ARC-001-OAAL-v1.0.md", OAAL_V1)
+        files = [
+            str(tmp_path / "projects/001-x/ARC-001-ADMP-v1.0.md"),
+            str(tmp_path / "projects/001-x/ARC-001-OAAL-v1.0.md"),
+        ]
+        ctx = load_arckit_artifacts(str(tmp_path), files=files)
+        assert ctx.has_valid_artifacts
+        assert {r.type for r in ctx.records} == {"ADMP", "OAAL"}
+        admp = [r for r in ctx.records if r.type == "ADMP"]
+        assert admp[0].version == "v1.0"  # explicit list beats decoy v9.9
+
+    def test_malformed_filename_in_files_skipped(self, tmp_path):
+        """A non-conforming filename in the list is recorded as
+        MALFORMED_FILENAME and skipped; the other files still parse."""
+        _write(tmp_path, "projects/001-x/ARC-001-ADMP-v1.0.md", ADMP_V1)
+        bad = tmp_path / "weird-name.md"
+        bad.write_text(ADMP_V1)
+        ctx = load_arckit_artifacts(
+            str(tmp_path),
+            files=[str(bad), str(tmp_path / "projects/001-x/ARC-001-ADMP-v1.0.md")],
+        )
+        assert [c for c, _ in ctx.errors] and MALFORMED_FILENAME in [
+            c for c, _ in ctx.errors
+        ]
+        assert [r.type for r in ctx.records] == ["ADMP"]
+
+    def test_missing_file_in_files_reported(self, tmp_path):
+        """A listed path that does not exist on disk is an error, not a
+        silent skip."""
+        _write(tmp_path, "ARC-001-ADMP-v1.0.md", ADMP_V1)
+        ctx = load_arckit_artifacts(
+            str(tmp_path), files=[str(tmp_path / "ARC-001-MISSING-v1.0.md")]
+        )
+        assert MALFORMED_ARTIFACT in [c for c, _ in ctx.errors]
+        assert not ctx.has_valid_artifacts
+
+    def test_unknown_type_in_files_skipped(self, tmp_path):
+        """Artefact types outside DISCOVER_TYPES are not consumed by
+        DISCOVER even when listed explicitly."""
+        _write(tmp_path, "ARC-001-TECH-v1.0.md", "# Tech\n")
+        _write(tmp_path, "ARC-001-ADMP-v1.0.md", ADMP_V1)
+        ctx = load_arckit_artifacts(
+            str(tmp_path),
+            files=[
+                str(tmp_path / "ARC-001-TECH-v1.0.md"),
+                str(tmp_path / "ARC-001-ADMP-v1.0.md"),
+            ],
+        )
+        assert [r.type for r in ctx.records] == ["ADMP"]
+
+    def test_files_without_valid_root(self, tmp_path):
+        """Explicit files are parsed even when the scan root is absent —
+        the operator's list is authoritative."""
+        _write(tmp_path, "ARC-001-ADMP-v1.0.md", ADMP_V1)
+        ctx = load_arckit_artifacts(
+            "/nonexistent/arckit/root",
+            files=[str(tmp_path / "ARC-001-ADMP-v1.0.md")],
+        )
+        assert ctx.has_valid_artifacts
+        assert [r.type for r in ctx.records] == ["ADMP"]
+
+    def test_empty_files_preserves_glob_behaviour(self, tmp_path):
+        """files=[] / files=None must be byte-identical to legacy glob
+        discovery."""
+        build_tree_a(tmp_path)
+        legacy = load_arckit_artifacts(str(tmp_path))
+        empty = load_arckit_artifacts(str(tmp_path), files=[])
+        assert [r.path for r in empty.records] == [r.path for r in legacy.records]
+        assert [c for c, _ in empty.errors] == [c for c, _ in legacy.errors]

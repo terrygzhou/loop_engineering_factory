@@ -94,3 +94,6 @@ langgraph-state-machine.md
 
 # Fabric agent runtime state
 .pi/
+
+# local git worktrees (sdd/spec-conformance etc.) — do not lint/test these
+.worktrees/

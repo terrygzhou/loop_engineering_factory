@@ -48,15 +48,15 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 | `tools/` | Shared utilities | `llm.py` (invoke_skill + invoke_skill_async + LLMError retry), `loader.py` (skills), `context_manager.py` |
 | `config/` | Configuration | `config.yaml`, `guardrails.yaml`, `bounds.yaml` |
 | `feedback/` | ChromaDB + diffs | `chroma_client.py`, `aggregator.py`, `diff_engine.py` (W3 target) |
-| `tests/` | Test suite | 299 tests across 18 files (see Testing below) |
+| `tests/` | Test suite | 322 tests across 17 test files + conftest (see Testing below) |
 
 ## Phase Details
 
-**DISCOVER** (2 nodes) — Setup + Interview. HIL gates for project name, description, context folder.
+**DISCOVER** (2 nodes) — Setup + Interview. HIL gates for project name, description, context folder (+ optional `arckit_artifacts` paths: state key, HIL setup field, or `POST /api/start` body; when non-empty the loader runs in `files=` mode, skipping glob discovery; carried forward in state, powers auto-population + `discover_artifact_audit`). The ArcKit pre-scan runs in **every interactive run** (arckit-web-ingestion): valid artefacts in `context_folder` auto-populate setup + interview even under the Web bridge's forced-HIL mode; no valid artefacts → HIL gates as before. Headless auto-approve still skips the scan.
 **DEFINE** — Spec + API contract generation. Parallel LLM calls: source-driven + api-design.
 **PLAN** — Implementation plan + doubt resolution + 4 architecture diagrams. Parallel diagram generation.
 **ARCH_REVIEW** — HIL human approval gate. Reject → PLAN with feedback.
-**BUILD** — OpenHands agent delegation via Gateway API (`/api/conversations`). Writes `build_report.json` manifest (Decision 1). Falls back to legacy text parser if manifest absent/invalid. Retry counter in `artifacts.loop_counts["BUILD"]` (max 2).
+**BUILD** — OpenHands agent delegation via Gateway API (`/api/conversations`). Writes `build_report.json` manifest (Decision 1); a missing/invalid manifest is a **hard fail** (`BuildReportMissingError`, no free-text fallback — superseded the original regex fallback). If the gateway is unreachable/times out, BUILD falls back to the local LangGraph BUILD subgraph. Retry counter in `artifacts.loop_counts["BUILD"]` (max 2).
 **SEED_DATA** — Pass-through placeholder.
 **VERIFY** — Conditional gate (Decision 2). `verify_status` in `artifacts` is the source of truth: `"pass"` → SHIP; `"fail"` → BUILD (loop) or ERROR (budget exhausted). LLM review text is advisory only. Counter in `artifacts.loop_counts["VERIFY"]` (max 2).
 **SHIP** — Forward to REFLECT.
@@ -66,7 +66,7 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| 1 | BUILD result = structured `build_report.json` manifest; regex as fallback | Machine-readable, testable, no LLM text parsing in the hot path |
+| 1 | BUILD result = structured `build_report.json` manifest; regex as fallback (later **superseded**: missing/invalid manifest is a hard fail, D1+D3) | Machine-readable, testable, no LLM text parsing in the hot path |
 | 2 | VERIFY = conditional gate on deterministic `test_errors`; failing build loops to BUILD or halts, never SHIPs | Prevents shipping broken code; LLM review text alone is advisory |
 | 3 | LLM failures = typed errors (`LLMError`); `None`-on-fatal; no sentinel strings | Clean error propagation; no magic strings leaking into state |
 | 4 | REFLECT = fix (structured diffs + semantic Chroma embedding); demote to audit-only if not deterministic by W3 | Makes self-improvement testable and safe |
@@ -83,7 +83,8 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 - `tools/llm.py` defines `LLMError` (fatal) and `_LLMTimeout` (retryable)
 - `_invoke_with_retry`: bounded exponential backoff (base 1.0s, cap 15s, max 2 retries)
 - `_is_retryable`: transient errors (5xx, timeout, connection) retry; 401/403/404/model-not-found do NOT
-- `invoke_skill` / `invoke_skill_async`: on fatal → `return None` (NOT a sentinel string); caller must check
+- `invoke_skill` / `invoke_skill_async`: on fatal → `return None` (NOT a sentinel string); caller must check.
+- Active-path nodes degrade on None (2026-09-16 follow-up): DEFINE spec/parallel, PLAN plan/doubt, SHIP's 4 skill calls, REFLECT git-workflow, DISCOVER fabric/principles/idea-refinement all coerce `None` → `""` (+ warning event) instead of raising `TypeError`; see `tests/test_llm_failure_robustness.py`
 - Dry-run mode (no LLM configured): returns `"[DRY-RUN] ..."` string — tests must handle this
 
 ## BUILD Contract (Decision 1)
@@ -93,7 +94,8 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
   {"status": "pass|fail|partial", "test_results": "...", "files": [...], "errors": [...]}
   ```
 - `graph/nodes/openhands_build.py:_parse_build_report()` validates and normalizes
-- Fallback: legacy regex parser (`_parse_assistant_text`) if manifest absent/invalid
+- Missing/invalid manifest → `BuildReportMissingError` (hard fail; the original legacy regex fallback was removed — Decision 3, no weaker-signal downgrade)
+- Unreachable gateway / timed-out / empty conversation → local LangGraph BUILD subgraph (`_run_local_subgraph`)
 - `rel_path` sanitization: rejects absolute paths and `..` traversal
 - Retry counter: `artifacts.loop_counts["BUILD"]` (max 2); halt sets `next_phase=None` explicitly
 
@@ -113,11 +115,12 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 .venv/bin/python3 -m pytest tests/ -q
 ```
 
-299 tests, 0 failures (W2 baseline). Key test files:
+334 tests, 0 failures (verified 2026-09-16; W2 baseline was 299, +6 LLM-fatal robustness). Key test files:
 
 | File | Coverage |
 |------|----------|
 | `test_w2_wayforward.py` | build_report.json parsing, manifest prompt, rel_path traversal, VERIFY routing (4 paths), LLMError retry/exhaustion/fatal, BUILD counter halt/increment/reset, route_phase BUILD budget |
+| `test_llm_failure_robustness.py` | active-path nodes (define/plan/ship/reflect + discover fabric/refine) degrade gracefully when `invoke_skill` returns None (LLM fatal, Decision 3) — no `TypeError`, fallbacks exercised |
 | `test_edges.py` | route_phase all phases, _forward_paths chain, HIL interlocks |
 | `test_workflow_lifecycle.py` | full chain coverage, forward paths valid |
 | `test_checkpointer.py` | AsyncSqliteSaver round-trip |
@@ -141,7 +144,7 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 
 ## Docker Build Context
 
-`.dockerignore` excludes: `.venv/`, `output/`, `build/`, `log/`, `storage/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.coverage`, `coverage.xml`, `htmlcov/`, `.git/`, `.gitignore`, `docs/`, `reports/`, `.codegraph/`.
+`.dockerignore` excludes: `.venv/`, `output/`, `build/`, `storage/`, `__pycache__/`, `*.pyc`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.coverage`, `coverage.xml`, `htmlcov/`, `.git/`, `.gitignore`, `docs/`, `reports/`, `.codegraph/`.
 DO NOT ignore `*.md` (skills are `SKILL.md`) or `tests/` (self-check tests).
 
 ## Auto-Handoff

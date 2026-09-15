@@ -935,7 +935,11 @@ def _process_artifact(
 # ── Public API (§1, §4, §6.4) ──────────────────────────────────────────────
 
 
-def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
+def load_arckit_artifacts(
+    root: str,
+    project_id: str = "",
+    files: list[str] | None = None,
+) -> ArcKitContext:
     """Scan `root` (ArcKit project tree, or a project directory) and build the
     DISCOVER context per the EYW-171 data contract.
 
@@ -944,49 +948,90 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
     - §1.1 precedence: ADMP → REQ → STKE → OAAL → PRIN; later artefacts add,
       never replace, fields filled by earlier ones.
     - §6.4 audit record is always populated (even when nothing is found).
+
+    `files`: optional explicit list of artefact paths. When non-empty, glob
+    discovery is skipped and each file is parsed directly (type/pid/version
+    from the filename); the root may be absent. Malformed filenames are
+    recorded as MALFORMED_FILENAME and skipped; a non-DISCOVER type is
+    ignored; a missing file is recorded as MALFORMED_ARTIFACT. Highest
+    version per type and same-version conflict detection still apply.
     """
     ctx = ArcKitContext(
         scanned_root=str(root or ""),
         project_id=str(project_id).zfill(3) if project_id else "",
     )
-    root_p = Path(root).expanduser() if root else Path("/dev/null")
-    if not root_p.is_dir():
-        _err(ctx, NO_ARTIFACTS, f"context folder '{root}' does not exist")
-        ctx.audit = _build_audit(ctx)
-        return ctx
+    explicit: dict[str, list[Path]] = {}
+    artifact_files = [Path(str(entry)).expanduser() for entry in (files or [])]
+    if artifact_files:
+        # Explicit artefact list: operator-supplied paths are authoritative —
+        # no glob scan, root need not exist.
+        for p in artifact_files:
+            if not p.is_file():
+                _err(ctx, MALFORMED_ARTIFACT, f"{p.name}: file not found")
+                continue
+            m = ARTIFACT_FILENAME_RE.match(p.name)
+            if m is None:
+                _err(
+                    ctx,
+                    MALFORMED_FILENAME,
+                    f"{p.name}: does not match ARC-{{PID}}-{{TYPE}}-vN.N.md",
+                )
+                continue
+            if m.group("type") not in DISCOVER_TYPES:
+                continue  # not consumed by DISCOVER
+            explicit.setdefault(m.group("type"), []).append(p)
+        if not ctx.project_id:
+            pids = {
+                ARTIFACT_FILENAME_RE.match(p.name).group("pid")
+                for p in (q for ps in explicit.values() for q in ps)
+            }
+            pids.discard("000")
+            if len(pids) == 1:
+                ctx.project_id = pids.pop()
+        chosen: dict[str, Path | None] = {
+            t: _pick_highest(explicit.get(t, [])) for t in DISCOVER_TYPES
+        }
+        conflict_map = explicit
+    else:
+        root_p = Path(root).expanduser() if root else Path("/dev/null")
+        if not root_p.is_dir():
+            _err(ctx, NO_ARTIFACTS, f"context folder '{root}' does not exist")
+            ctx.audit = _build_audit(ctx)
+            return ctx
 
-    files = discover_artifact_files(root_p, project_id)
+        discovered = discover_artifact_files(root_p, project_id)
 
-    # Resolve the project ID when not given: prefer a single non-global project
-    # dir that holds DISCOVER artefacts.
-    if not ctx.project_id:
-        pids = set()
-        for type_code in ("ADMP", "REQ", "STKE", "OAAL"):
-            for p in files.get(type_code, []):
-                m = ARTIFACT_FILENAME_RE.match(p.name)
-                if m:
-                    pids.add(m.group("pid"))
-        pids.discard("000")
-        if len(pids) == 1:
-            ctx.project_id = pids.pop()
+        # Resolve the project ID when not given: prefer a single non-global
+        # project dir that holds DISCOVER artefacts.
+        if not ctx.project_id:
+            pids = set()
+            for type_code in ("ADMP", "REQ", "STKE", "OAAL"):
+                for p in discovered.get(type_code, []):
+                    m = ARTIFACT_FILENAME_RE.match(p.name)
+                    if m:
+                        pids.add(m.group("pid"))
+            pids.discard("000")
+            if len(pids) == 1:
+                ctx.project_id = pids.pop()
 
-    chosen: dict[str, Path | None] = {}
-    for type_code in DISCOVER_TYPES:
-        candidates = [
-            p
-            for p in files.get(type_code, [])
-            if type_code == "PRIN"
-            or not (
-                ctx.project_id
-                and (m := ARTIFACT_FILENAME_RE.match(p.name))
-                and m.group("pid") != ctx.project_id
-            )
-        ]
-        chosen[type_code] = _pick_highest(candidates)
+        chosen: dict[str, Path | None] = {}
+        for type_code in DISCOVER_TYPES:
+            candidates = [
+                p
+                for p in discovered.get(type_code, [])
+                if type_code == "PRIN"
+                or not (
+                    ctx.project_id
+                    and (m := ARTIFACT_FILENAME_RE.match(p.name))
+                    and m.group("pid") != ctx.project_id
+                )
+            ]
+            chosen[type_code] = _pick_highest(candidates)
+        conflict_map = discovered
 
     # Conflict detection: two different files for the same (type, version)
     for type_code in DISCOVER_TYPES:
-        cand = files.get(type_code, [])
+        cand = conflict_map.get(type_code, [])
         if len(cand) > 1:
             by_version: dict[tuple[int, int], list[Path]] = {}
             for p in cand:
@@ -1012,9 +1057,12 @@ def load_arckit_artifacts(root: str, project_id: str = "") -> ArcKitContext:
 
     valid = [r for r in ctx.records if r.schema_valid]
     if not valid:
-        found_any = any(files.get(t) for t in DISCOVER_TYPES)
+        found_any = any(conflict_map.get(t) for t in DISCOVER_TYPES)
         if not found_any:
-            _err(ctx, NO_ARTIFACTS, f"no ArcKit artefacts found under '{root_p}'")
+            if artifact_files:
+                _err(ctx, NO_ARTIFACTS, "no valid ArcKit artefacts in explicit list")
+            else:
+                _err(ctx, NO_ARTIFACTS, f"no ArcKit artefacts found under '{root_p}'")
 
     # ── §1.1 precedence merge ──
     def parsed_of(type_code: str) -> dict[str, Any]:

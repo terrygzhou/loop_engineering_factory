@@ -45,6 +45,8 @@ class WorkflowState(TypedDict):
     project_description: str
     skip_discover: bool
     context_folder: str
+    # ── DISCOVER: explicit ArcKit artefact list (EYW-171 input, Option 1+2) ──
+    arckit_artifacts: list[str]
     error: Optional[str]
 
     # ── B-010: Architecture diagrams ──

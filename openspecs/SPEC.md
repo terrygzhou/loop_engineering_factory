@@ -1,5 +1,11 @@
 # Spec: Loop Engineering Factory (Self-Improving AI Workflow)
 
+> **SUPERSEDED (2026-09-03) — kept as historical reference only.**
+> Content has been merged into the structured OpenSpec specs: capability features live in
+> `openspec/specs/<capability>/spec.md` (12 capabilities), project context / commands /
+> decision log / open questions live in `openspec/config.yaml`.
+> This monolith is no longer authoritative; the OpenSpec specs are the source of truth.
+
 Reconstructed 2025-07-28 from the live codebase, `AGENTS.md`, `CLAUDE.md`, and the `spec-driven-development` / `source-driven-development` skill templates. Where the spec was previously implicit (docstrings, decision-log comments, inline `EYW-*` references), it is now explicit.
 
 ---
@@ -34,7 +40,7 @@ Reconstructed 2025-07-28 from the live codebase, `AGENTS.md`, `CLAUDE.md`, and t
 | Web backend | FastAPI + WebSocket (single shared `WorkflowBridge`) | SSE/WS event stream to the static UI |
 | Frontend | Plain static HTML/CSS/JS (`frontend/static`) served by nginx | No build step |
 | Observability | OTel (OTLP) → Phoenix :46006; Prometheus in-process :8081; Loki via promtail (external Grafana stack) | Decision 5 staging |
-| Tests | `pytest` + `httpx` test client | 299 tests across 18 files |
+| Tests | `pytest` + `httpx` test client | 312 tests across 17 test files + conftest (verified 2026-09-03) |
 | Container | Docker Compose (project name `loop_factory`) | Container names `loop_factory-<service>-1` |
 
 **Ports**
@@ -144,7 +150,7 @@ loop_engineering_factory/
 ├── log/logging.py               # setup_logger + log_event (JSON or plain)
 ├── skills/                      # 35 SKILL.md files (spec-driven, TDD, debugging, …)
 ├── observability/               # otel-collector + promtail configs
-├── tests/                       # 299 tests across 18 files
+├── tests/                       # 312 tests across 17 test files + conftest
 └── output/                      # generated projects land here
 ```
 
@@ -190,17 +196,17 @@ Naming: `snake_case` modules, `PascalCase` classes, `SCREAMING_SNAKE` constants.
 
 **Framework:** `pytest` (no plugins beyond `pytest-mock` / `httpx` for FastAPI tests).
 
-**Layout:** 18 files, 299 tests, flat under `tests/`. No sub-packages; conftest at `tests/conftest.py`.
+**Layout:** 17 test files + conftest, 312 tests, flat under `tests/` (empty `tests/api/` subpackage reserved for FastAPI client tests); conftest at `tests/conftest.py`.
 
 **Levels:**
 
 | Level | Files | Scope |
 |---|---|---|
-| Unit | `test_checkpointer.py`, `test_config_guardrails.py`, `test_config_loader.py`, `test_discover.py`, `test_edges.py` | Pure functions / state machines, no LLM |
-| Behavioural | `test_w3_behavioral.py` | Node state invariants (happy + error), `invoke_skill` → `None` |
+| Unit | `test_checkpointer.py`, `test_config_guardrails.py`, `test_config_loader.py`, `test_discover.py`, `test_discover_arckit.py`, `test_arckit_loader.py`, `test_edges.py` | Pure functions / state machines, no LLM |
+| Behavioural | `test_w3_behavioral.py`, `test_evaluator.py` | Node state invariants (happy + error), `invoke_skill` → `None`, LLM-as-judge scoring |
 | Wayforward | `test_w2_wayforward.py` | `build_report.json` parse, manifest prompt, `rel_path` traversal, 4 VERIFY routes, `LLMError` retry/exhaustion/fatal, BUILD counter halt/increment/reset, `route_phase` BUILD budget |
 | Lifecycle | `test_workflow_lifecycle.py` | Full chain coverage + `_forward_paths` validity |
-| HIL | `test_runner_hil_loop.py`, `test_arch_review_interlocks.py`, `test_bridge_custom_events.py`, `test_ui_bridge.py` | interrupt → resume cycle, ACHG interlock, custom stream events |
+| HIL | `test_runner.py`, `test_runner_hil_loop.py`, `test_arch_review_interlocks.py`, `test_bridge_custom_events.py`, `test_ui_bridge.py` | interrupt → resume cycle, runner lifecycle, ACHG interlock, custom stream events |
 | HTTP | `tests/api/`, `test_health.py` | FastAPI test client |
 
 **Conventions:**
@@ -258,14 +264,14 @@ Naming: `snake_case` modules, `PascalCase` classes, `SCREAMING_SNAKE` constants.
 4. **Build retry:** `artifacts.loop_counts["BUILD"]` increments on retry; at `>= 2`, `next_phase=None` and routing is to `ERROR`.
 5. **VERIFY gate:** `verify_status == "fail"` or `test_errors > 0` → BUILD (loop) or ERROR (budget exhausted). `verify_status == "pass"` → SHIP.
 6. **LLM errors:** `LLMError` is raised after bounded backoff (base 1.0 s, cap 15 s, max 2 retries); `invoke_skill` returns `None` on fatal. 401/403/404/model-not-found are non-retryable.
-7. **build_report.json:** `_parse_build_report` validates `status ∈ {pass, fail, partial}`, `test_results`, `files`, `errors`; rejects `rel_path` with `..` or absolute paths; falls back to legacy regex parse when manifest absent.
+7. **build_report.json:** `_parse_build_report` validates `status ∈ {pass, fail, partial}`, `test_results`, `files`, `errors`; rejects `rel_path` with `..` or absolute paths; a missing/invalid manifest is a hard failure (`BuildReportMissingError` — no free-text fallback, superseding the original regex fallback); an unreachable gateway falls back to the local BUILD subgraph.
 8. **Checkpoint resume:** Killing the run mid-phase and re-invoking with the same `thread_id` resumes from the last checkpoint; `AsyncSqliteSaver` round-trips `WorkflowState`.
 9. **Auto-approve:** `auto_approve=true` in config or `--auto-approve` flag skips both DISCOVER HILs and the ARCH_REVIEW HIL, and the graph compiles *without* `interrupt_after`.
 10. **ACHG interlock (EYW-184):** If any ACHG in the ArcKit tree has `PENDING` board status, `auto-approve` of ARCH_REVIEW is blocked; explicit human `approve` or `reject` is required.
 11. **Pattern storage:** `store_pattern` writes to the ChromaDB `patterns` collection; `query_patterns(top_k=3)` returns top-3 matches; failure is graceful (returns `[]` / `None`).
 12. **Config diff (REFLECT):** `generate_config_diffs` returns structured `{section, key, op, value}` entries; `dry_run_validation` runs against a copy before apply; human approval is required when `human_approval_required=true`.
 13. **Observability:** `/metrics` on :8081 exposes `workflow_duration_seconds`, `phase_duration_seconds`, `phase_errors_total`, `llm_calls_total`, `active_workflows`.
-14. **No live-LLM dependency in tests:** All 299 tests pass with `LLM_BASE_URL` unset and `invoke_skill` → `None`.
+14. **No live-LLM dependency in tests:** All 312 tests pass with `LLM_BASE_URL` unset and `invoke_skill` → `None` (verified on host 2026-09-03).
 
 ---
 

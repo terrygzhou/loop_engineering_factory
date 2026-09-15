@@ -43,14 +43,23 @@ async def discover_node(state: dict) -> dict:
     # Pre-interrupt phase (§8): scan context_folder for ArcKit artefacts
     # (ADMP/REQ/STKE/OAAL/PRIN). When valid artefacts exist, project_setup +
     # interview_notes are auto-populated (§4.1) and both interrupts are
-    # skipped. auto_approve (stub path) and force_hil keep the existing
-    # behaviour; no artefacts → generic interview fallback (§6.2 NO_ARTIFACTS).
+    # skipped — in every interactive run, including forced-HIL runs driven
+    # by the Web bridge (arckit-web-ingestion). Only auto_approve (headless
+    # stub path) keeps skipping the scan. No valid artefacts → fall through
+    # to the HIL gates / generic interview fallback (§6.2 NO_ARTIFACTS).
     arckit_ctx = None
-    if not auto_approve and not force_hil:
+    # Explicit operator-supplied artefact list (Option 1+2): when present it
+    # replaces glob discovery for this run; a HIL setup answer can add to it.
+    arckit_files = [
+        str(p).strip() for p in (state.get("arckit_artifacts") or []) if str(p).strip()
+    ]
+    if not auto_approve:
         try:
             from tools.arckit_loader import load_arckit_artifacts
 
-            arckit_ctx = load_arckit_artifacts(state.get("context_folder") or "")
+            arckit_ctx = load_arckit_artifacts(
+                state.get("context_folder") or "", files=arckit_files or None
+            )
         except Exception as e:  # noqa: BLE001 — ingestion must never break DISCOVER
             logging.getLogger("discover").warning("ArcKit artefact scan failed: %s", e)
             arckit_ctx = None
@@ -101,6 +110,11 @@ async def discover_node(state: dict) -> dict:
                         "label": "Existing codebase path (leave empty for greenfield)",
                         "required": False,
                     },
+                    {
+                        "key": "arckit_artifacts",
+                        "label": "ArcKit artefact paths (one per line, optional)",
+                        "required": False,
+                    },
                 ],
             }
         )
@@ -110,6 +124,28 @@ async def discover_node(state: dict) -> dict:
         project_name = setup.get("project_name", "")
         project_description = setup.get("project_description", "")
         context_folder = setup.get("context_folder", "")
+        # HIL setup answer may supply the explicit artefact list (newline-
+        # separated). Re-scan so auto-population + audit reflect it (§8).
+        raw_artifacts = setup.get("arckit_artifacts") or ""
+        artifact_lines = (
+            raw_artifacts
+            if isinstance(raw_artifacts, list)
+            else str(raw_artifacts).splitlines()
+        )
+        arckit_files = [str(ln).strip() for ln in artifact_lines if str(ln).strip()]
+        if arckit_files:
+            try:
+                from tools.arckit_loader import load_arckit_artifacts
+
+                arckit_ctx = load_arckit_artifacts(context_folder, files=arckit_files)
+            except Exception as e:  # noqa: BLE001 — ingestion must never break DISCOVER
+                logging.getLogger("discover").warning(
+                    "ArcKit artefact list load failed: %s", e
+                )
+                arckit_ctx = None
+            arckit_autopop = bool(
+                arckit_ctx is not None and arckit_ctx.has_valid_artifacts
+            )
     else:
         project_name = state.get("project_name", "Untitled")
         project_description = state.get("project_description", "")
@@ -268,7 +304,7 @@ async def discover_node(state: dict) -> dict:
         },
     )
 
-    return {
+    result = {
         "project_name": project_name,
         "project_description": project_description,
         "context_folder": context_folder,
@@ -283,6 +319,11 @@ async def discover_node(state: dict) -> dict:
         "diagrams": {},
         "diagram_status": "pending",
     }
+    if arckit_files:
+        # Persist the active explicit list so later phases / resume runs see
+        # the authoritative ingestion source (Option 1+2).
+        result["arckit_artifacts"] = arckit_files
+    return result
 
 
 # ── Helpers ──

@@ -55,6 +55,8 @@ class StartRequest(BaseModel):
         ""  # Path to existing codebase/docs folder; empty = skip DISCOVER
     )
     auto_approve: Optional[bool] = None  # None = use config.yaml default
+    # arckit-web-ingestion: explicit ArcKit artefact paths (container-visible); empty = glob discovery of context_folder remains the default.
+    arckit_artifacts: list[str] = []
 
 
 class WorkflowResponse(BaseModel):
@@ -207,6 +209,7 @@ async def start_workflow(req: StartRequest):
     bridge._spec_text = req.spec
     bridge._project_name = req.project_name
     bridge._context_folder = req.context_folder
+    bridge._arckit_artifacts = list(req.arckit_artifacts)
     bridge._aborted = False
     # auto_approve defaults from config.yaml; Web UI may override via StartRequest
     if req.auto_approve is not None:

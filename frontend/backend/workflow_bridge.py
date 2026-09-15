@@ -227,6 +227,7 @@ class WorkflowBridge:
         self._project_name = ""
         self._spec_text = ""
         self._context_folder = ""
+        self._arckit_artifacts: list[str] = []
         self._interrupt_counts: dict[str, int] = {}  # Track interrupt index per phase
         self._thread_id: str | None = self._load_persisted_inputs().get("_thread_id")
         self._checkpointer = None
@@ -269,6 +270,7 @@ class WorkflowBridge:
                 "_project_name": self._project_name,
                 "_context_folder": self._context_folder,
                 "_spec_text": self._spec_text,
+                "_arckit_artifacts": self._arckit_artifacts,
             }
             with open(self._user_inputs_path, "w") as f:
                 json.dump(payload, f)
@@ -401,6 +403,7 @@ class WorkflowBridge:
         self._project_name = persisted.get("_project_name", "")
         self._context_folder = persisted.get("_context_folder", "")
         self._spec_text = persisted.get("_spec_text", "")
+        self._arckit_artifacts = list(persisted.get("_arckit_artifacts", []))
         self.status = "running"
         self.current_phase = hil_phase
         self.waiting_for = hil_phase
@@ -989,6 +992,7 @@ class WorkflowBridge:
             project_name=self._project_name,
             spec_text=self._spec_text,
             context_folder=self._context_folder,
+            arckit_artifacts=self._arckit_artifacts,
         )
 
         # ── Skill progress: nodes emit via get_stream_writer() on the
@@ -1382,7 +1386,14 @@ class WorkflowBridge:
             )
             return {"pending_achgs": [], "rejected_achgs": [], "note": ""}
 
-    def _build_executor_state(self, cycle_id, project_name, spec_text, context_folder):
+    def _build_executor_state(
+        self,
+        cycle_id,
+        project_name,
+        spec_text,
+        context_folder,
+        arckit_artifacts=None,
+    ):
         """Build state via shared executor — identical to what CLI uses.
 
         Web UI always forces HIL mode (auto_approve_override=False) so that
@@ -1400,6 +1411,11 @@ class WorkflowBridge:
         state["auto_approve_override"] = False
         # Force HIL: ensure setup node doesn't skip when project_name is provided
         state["force_hil"] = True
+        # arckit-web-ingestion: explicit artefact list posted via /api/start
+        # seeds the loader's explicit-list path (glob skip); empty -> unset so
+        # context_folder globs stay the default.
+        if arckit_artifacts:
+            state["arckit_artifacts"] = [str(p) for p in arckit_artifacts]
         # Pre-seed project data so DISCOVER skips the project_setup interrupt
         # and goes straight to the interview interrupt. The web UI already
         # collects project_name / description in the start request, so pausing
