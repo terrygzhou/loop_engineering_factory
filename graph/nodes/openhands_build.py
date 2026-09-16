@@ -412,7 +412,13 @@ def _run_local_subgraph(state: dict) -> dict:
     logger.warning("  -> [OPENHANDS] Running local BUILD subgraph")
     child_state = build_input_mapping(state)
     compiled = get_compiled_subgraph()
-    result = compiled.invoke(child_state)
+    # The subgraph now carries a MemorySaver checkpointer, so LangGraph's
+    # Pregel loop requires a thread_id. Use a per-invocation thread id
+    # (uuid) so each BUILD retry starts from a clean subgraph state —
+    # the MemorySaver is fresh per get_compiled_subgraph() call anyway.
+    import uuid
+    config = {"configurable": {"thread_id": f"build-{uuid.uuid4()}"}}
+    result = compiled.invoke(child_state, config=config)
     return build_output_mapping(cast(BuildSubState, result))
 
 
@@ -665,13 +671,18 @@ def openhands_build_wrapper(state: dict) -> dict:
         )
         return _run_local_subgraph(state)
     except httpx.HTTPStatusError as e:
-        if e.response.status_code in (404, 502, 503, 504):
-            logger.warning(
-                "  -> [OPENHANDS] Server error %d -- fallback",
-                e.response.status_code,
-            )
-            return _run_local_subgraph(state)
-        raise
+        # UAT finding: a 5xx (e.g. OpenHands event_service PermissionError)
+        # used to fall through to "raise" because only 4xx/5xx were listed.
+        # Any gateway failure — 4xx AND 5xx — falls back to the local
+        # subgraph so a server-side bug can't crash the whole cycle.
+        if e.response.status_code < 500:
+            raise
+        logger.warning(
+            "  -> [OPENHANDS] Server error %d -- fallback",
+            e.response.status_code,
+        )
+        return _run_local_subgraph(state)
+    raise
 
 
 # Backward compatibility alias — consumers that imported openhands_build_node

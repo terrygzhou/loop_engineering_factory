@@ -125,6 +125,10 @@ services:
       - ~/.openhands:/.openhands
       # Docker socket removed — OpenHands sandbox uses its own network isolation
       - ./output:/opt/workspace_base/output
+      # The gateway's CWD is /, and event_service resolves relative 'output/'
+      # paths from CWD. Bind the shared volume to /output so
+      # 'output/<project>' resolves without needing root inside the image.
+      - ./output:/output
     environment:
       - LLM_BASE_URL=http://host.docker.internal:8080/v1
       - LLM_MODEL=Qwen3.6-35B-A3B
