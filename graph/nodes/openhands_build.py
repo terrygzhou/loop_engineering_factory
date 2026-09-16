@@ -347,7 +347,7 @@ def _poll_conversation(
     Poll GET /api/conversations/{conv_id} until finished/errored.
     Then fetch final response via GET /api/conversations/{conv_id}/agent_final_response.
 
-    Returns the agent's final response text, or None on timeout/error.
+    Returns the agent's final response text, or None on timeout, error, or a lost conversation (404).
     """
     elapsed = 0
     while elapsed < timeout:
@@ -357,6 +357,17 @@ def _poll_conversation(
                 headers={"X-Api-Key": secret_key},
                 timeout=30.0,
             )
+            if resp.status_code == 404:
+                # Terminal: the conversation was lost — most likely the agent-server
+                # restarted mid-build and wiped its in-memory store. Retrying would
+                # loop until BUILD_TIMEOUT, so fall back to the local subgraph now
+                # (the caller treats a None poll result as terminal).
+                logger.warning(
+                    "  -> [OPENHANDS] Conversation %s no longer exists (404) — "
+                    "gateway likely restarted mid-build; falling back",
+                    conv_id,
+                )
+                return None
             data = resp.json()
 
             status = data.get("execution_status", "")
