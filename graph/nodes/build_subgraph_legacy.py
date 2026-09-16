@@ -1446,19 +1446,8 @@ def build_subgraph() -> StateGraph:
 
 
 def get_compiled_subgraph():
-    """Return the compiled BUILD subgraph for native parent integration.
-
-    UAT finding: compiling with no checkpointer makes the child graph's
-    SyncPregelLoop call ``checkpointer.get_tuple`` on the default
-    ``CheckpointSaver`` base class, which raises ``NotImplementedError``
-    (langgraph/checkpoint/base/__init__.py:251). The subgraph is a plain
-    helper graph with no persistence requirement — a fresh
-    ``MemorySaver`` satisfies the loop's checkpoint protocol without the
-    base-class stub error.
-    """
-    from langgraph.checkpoint.memory import MemorySaver
-
-    return build_subgraph().compile(checkpointer=MemorySaver())
+    """Return the compiled BUILD subgraph for native parent integration."""
+    return build_subgraph().compile()
 
 
 def build_subgraph_node(state: dict) -> dict:
@@ -1469,7 +1458,5 @@ def build_subgraph_node(state: dict) -> dict:
     """
     child_state = build_input_mapping(state)
     compiled = get_compiled_subgraph()
-    import uuid
-    config = {"configurable": {"thread_id": f"build-{uuid.uuid4()}"}}
-    result = compiled.invoke(child_state, config=config)
+    result = compiled.invoke(child_state)
     return build_output_mapping(result)

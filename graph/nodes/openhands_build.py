@@ -412,13 +412,7 @@ def _run_local_subgraph(state: dict) -> dict:
     logger.warning("  -> [OPENHANDS] Running local BUILD subgraph")
     child_state = build_input_mapping(state)
     compiled = get_compiled_subgraph()
-    # The subgraph now carries a MemorySaver checkpointer, so LangGraph's
-    # Pregel loop requires a thread_id. Use a per-invocation thread id
-    # (uuid) so each BUILD retry starts from a clean subgraph state —
-    # the MemorySaver is fresh per get_compiled_subgraph() call anyway.
-    import uuid
-    config = {"configurable": {"thread_id": f"build-{uuid.uuid4()}"}}
-    result = compiled.invoke(child_state, config=config)
+    result = compiled.invoke(child_state)
     return build_output_mapping(cast(BuildSubState, result))
 
 
