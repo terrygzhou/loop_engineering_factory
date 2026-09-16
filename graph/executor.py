@@ -142,6 +142,7 @@ def build_executor_state(
     spec_text: str = "",
     context_folder: str = "",
     improve_mode: bool = False,
+    arckit_artifacts: list[str] | None = None,
 ) -> WorkflowState:
     """Build initial WorkflowState. Skill registry is lazy-loaded per-node via build_skill_registry()."""
     skip_discover = not bool(context_folder) and not improve_mode
@@ -173,6 +174,7 @@ def build_executor_state(
         project_path=get_project_path(),
         skip_discover=skip_discover,
         context_folder=context_folder,
+        arckit_artifacts=[str(x) for x in (arckit_artifacts or [])],
         human_approval_required=False,
         improve_mode=improve_mode,
         diagrams={},

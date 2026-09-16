@@ -1641,11 +1641,12 @@ def _warn_lite_conflict(ctx: ArcKitContext, paths: list[Path]) -> None:
     with an ARTIFACT_CONFLICT audit error (mirrors the canonical rule)."""
     if len(paths) > 1:
         newest = _pick_lite(paths)
-        _err(
-            ctx,
-            ARTIFACT_CONFLICT,
-            f"OAA-ADM-lite: {len(paths)} vision files — using {newest.name} (mtime)",
-        )
+        if newest is not None:
+            _err(
+                ctx,
+                ARTIFACT_CONFLICT,
+                f"OAA-ADM-lite: {len(paths)} vision files — using {newest.name} (mtime)",
+            )
 
 
 def load_arckit_artifacts(
@@ -1737,7 +1738,7 @@ def load_arckit_artifacts(
             if len(pids) == 1:
                 ctx.project_id = pids.pop()
 
-        chosen: dict[str, Path | None] = {}
+        chosen = {}
         for type_code in DISCOVER_TYPES:
             candidates = [
                 p

@@ -1406,16 +1406,12 @@ class WorkflowBridge:
             project_name=project_name,
             spec_text=spec_text,
             context_folder=context_folder,
+            arckit_artifacts=arckit_artifacts,
         )
         # Force HIL: override any config defaults so nodes hit interrupt() gates
         state["auto_approve_override"] = False
         # Force HIL: ensure setup node doesn't skip when project_name is provided
         state["force_hil"] = True
-        # arckit-web-ingestion: explicit artefact list posted via /api/start
-        # seeds the loader's explicit-list path (glob skip); empty -> unset so
-        # context_folder globs stay the default.
-        if arckit_artifacts:
-            state["arckit_artifacts"] = [str(p) for p in arckit_artifacts]
         # Pre-seed project data so DISCOVER skips the project_setup interrupt
         # and goes straight to the interview interrupt. The web UI already
         # collects project_name / description in the start request, so pausing

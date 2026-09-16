@@ -53,12 +53,13 @@ class TestBridgeStateSeed:
         )
         assert state["arckit_artifacts"] == ["/a/ARC-001-ADMP-v1.0.md"]
 
-    def test_empty_list_leaves_key_absent(self, tmp_path):
+    def test_empty_list_is_unset_equivalent(self, tmp_path):
         bridge = _bridge(tmp_path)
-        # explicit empty list == omitted: glob discovery stays the default
+        # explicit empty list == omitted: DISCOVER treats [] the same as an
+        # absent key (files = [] or None -> None -> glob default discovery).
         state = bridge._build_executor_state("1", "proj", "spec", "/ctx",
                                              arckit_artifacts=[])
-        assert "arckit_artifacts" not in state
+        assert state.get("arckit_artifacts", []) == []
 
     def test_persisted_inputs_round_trip(self, tmp_path):
         bridge = _bridge(tmp_path)

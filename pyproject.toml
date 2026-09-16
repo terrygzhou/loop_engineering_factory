@@ -13,6 +13,8 @@ mypy_path = "."
 namespace_packages = true
 explicit_package_bases = true
 ignore_missing_imports = true
+# Generated artifacts & build dirs are not part of the type-checked codebase.
+exclude = ["(^|/)output/", "(^|/)build/", "(^|/)storage/"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
