@@ -41,3 +41,37 @@ go to ERROR.
 #### Scenario: BUILD retries exhausted
 - **WHEN** BUILD fails with loop_counts["BUILD"] already at 2
 - **THEN** the workflow routes to ERROR and never re-enters BUILD
+
+### Requirement: BUILD prompt advisory context
+The OpenHands build prompt SHALL include, as advisory (non-routing) sections,
+exactly those of the following keys that are set in `artifacts`:
+`arch_review_answers`, `arckit_product_backlog`,
+`arckit_strategy_waves`, `arckit_data_model`,
+`arckit_integration_standards`, `arckit_security_controls`,
+`arckit_nfr_constraints`. Unset keys SHALL contribute no section: when
+none of the keys is set the prompt SHALL be byte-identical to the prompt of a
+run with no ArcKit context. Advisory sections SHALL NOT alter the
+build_report.json manifest contract (Decision 1) or the BUILD retry budget.
+
+#### Scenario: ArcKit context present
+- **WHEN** BUILD runs with `arckit_data_model`,
+  `arckit_integration_standards`, and `arch_review_answers` set
+- **THEN** the build prompt contains three advisory sections with that
+  content and the manifest contract is unchanged
+
+#### Scenario: No ArcKit context
+- **WHEN** no ArcKit-related key is set
+- **THEN** the prompt is identical to the pre-change prompt (no empty
+  sections, no sentinel markers)
+
+### Requirement: BUILD prompt diagram context
+The OpenHands build prompt SHALL include the contents of
+`artifacts.diagrams` — the four base views and any `sequence_*` use-case
+views — as advisory diagram context, emitted only for keys that are present.
+When no diagrams are present the prompt SHALL be identical to the pre-change
+prompt. Diagram content SHALL NOT alter the build_report.json manifest
+contract (Decision 1).
+
+#### Scenario: Sequence views present
+- **WHEN** BUILD runs with `diagrams` containing two `sequence_*` views
+- **THEN** the build prompt's diagram section includes both views
