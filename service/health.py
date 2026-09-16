@@ -68,7 +68,12 @@ class HealthHandler(BaseHTTPRequestHandler):
         deps = {}
         try:
             r = httpx.get(_cfg.services.chroma.url + "/api/v1/heartbeat", timeout=3)
+            if r.status_code in (404, 410):
+                # Chroma >= 1.x serves the v2-only REST API: v1 endpoints are
+                # retired (410 Gone) — fall back to the v2 heartbeat.
+                r = httpx.get(_cfg.services.chroma.url + "/api/v2/heartbeat", timeout=3)
             deps["chromadb"] = r.status_code == 200
+            ok = deps["chromadb"]
         except Exception:
             deps["chromadb"] = False
             ok = False
