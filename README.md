@@ -53,7 +53,7 @@ The BUILD node delegates to the OpenHands agent-server via the Gateway API (Open
 graph LR
     START([START]) --> OH_CHECK["OpenHands health<br/>check"]
 
-    OH_CHECK -->|healthy| CREATE_CONV["Create conversation<br/>POST /v1/chat/completions"]
+    OH_CHECK -->|healthy| CREATE_CONV["Create conversation<br/>POST /api/conversations"]
     OH_CHECK -->|unhealthy| INLINE["Inline fallback<br/>build logic"]
 
     CREATE_CONV --> POLL["Poll conversation<br/>GET /api/conversations/{id}"]
@@ -80,14 +80,14 @@ graph LR
 | Step | Implementation | Notes |
 |------|---------------|-------|
 | Health check | `GET /health` | Falls back to inline build on any failure |
-| Create conversation | `POST /v1/chat/completions` | Profile `build_agent` created idempotently |
+| Create conversation | `POST /api/conversations` | OpenHands Gateway API (container :8000, host :43005) |
 | Poll | `GET /api/conversations/{id}` | 5s interval, 1h timeout |
 | Parse | Regex → file blocks + test results | Derives `build_status`: pass/partial/fail |
 | Write files | Disk I/O to `project_path` | Downstream phases (SEED_DATA, VERIFY) read from disk |
 | Quality gates | `route_phase()` in `edges.py` | Security findings, UAT pass rate, review revisions |
 | Inline fallback | Direct implementation in `openhands_build.py` | Full per-task incremental implementation pipeline |
 
-**Outer graph routing** (from `edges.py`): All conditional routing via `route_phase()` — no unconditional edges from BUILD, SHIP, or REFLECT. BUILD self-loops if `security_findings > 0`, `review_revisions > max`, or `uat_pass_rate < min`. After 3 consecutive build failures, routes to `REFLECT` to skip `SEED_DATA`/`VERIFY`/`SHIP`.
+**Outer graph routing** (from `edges.py`): All conditional routing via `route_phase()` — no unconditional edges from BUILD, SHIP, or REFLECT. BUILD self-loops if `security_findings > 0`, `review_revisions > max`, or `uat_pass_rate < min`. After the retry budget (`BUILD_MAX_RETRIES = 2`) is exhausted, the BUILD node sets `next_phase = None` and routes to the `ERROR` terminal — it does **not** skip to `REFLECT`.
 
 Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop) review gates, and self-improvement via ChromaDB pattern storage. CLI and Web UI share the same `WorkflowRunner` — identical node execution, different UX layers.
 
@@ -129,7 +129,7 @@ graph LR
         LLM_Srv["LLM Server<br/>(SGLang :8080)"]
         Docker["Docker Engine"]
         Chroma["ChromaDB :8000<br/>(internal)"]
-        OpenHands["OpenHands<br/>(:43005)<br/>Agent Server"]
+        OpenHands["OpenHands<br/>(:8000 in container;<br/>host :43005)"]
         Builder["DELETED<br/>OpenHands Gateway replaces remote builder"]
     end
 
@@ -178,7 +178,7 @@ graph TB
             CC[("ChromaDB<br/>:8000 internal")]
             OC[("OTel Collector<br/>:4318")]
             PH[("Phoenix<br/>:46006")]
-            OH[("OpenHands<br/>:43005")]
+            OH[("OpenHands<br/>:8000 in container<br/>(host :43005)")]
             PT[("Promtail")]
         end
     end
@@ -204,7 +204,7 @@ graph TB
 | `graph/main.py` | LangGraph StateGraph definition | `workflow.hil_mode` |
 | `graph/edges.py` | Conditional routing via `route_phase()` — quality gates, loop limits, forward paths | N/A |
 | `graph/nodes/*.py` | Phase node implementations (9 nodes) | `paths.*` |
-| `graph/state.py` | WorkflowState (37 fields) + CycleMetrics (11 fields) — pruned for token efficiency | N/A |
+| `graph/state.py` | WorkflowState (~50 top-level keys) + CycleMetrics (9 fields) — pruned for token efficiency | N/A |
 | `graph/executor.py` | WorkflowRunner — orchestrates graph execution with HIL pauses | N/A |
 | `tools/llm.py` | LLM call dispatch with retry & context compression | `services.llm.*` |
 | `tools/loader.py` | Skill registry discovery & hot-reload | `workflow.skill_registry_path` |
@@ -305,7 +305,7 @@ services:
     base_url: http://host.docker.internal:8080/v1
     model: Qwen3.6-27B
     temperature: 0.1
-    max_tokens: 32768
+    max_tokens: 65535
 
 observability:
   log_level: info
@@ -346,14 +346,13 @@ docker compose up -d --build loop
 | Service | Port | Purpose |
 |---------|------|---------|
 | `loop` | :4080 | nginx — static frontend (Web UI) |
-| `loop` | :4080 | nginx — static frontend (Web UI) |
 | `loop` | :48011 | FastAPI backend — workflow API |
 | `loop` | :48081 | Health check server |
 | `chromadb` | :8000 (internal) | Pattern storage |
 | `otel-collector` | :4318 | OpenTelemetry trace collection |
 | `phoenix` | :46006 | Trace visualization + LLM evaluation UI (Arize Phoenix) |
 | `promtail` | _(internal)_ | Log aggregation |
-| `openhands` | :43005 | OpenHands Agent Server — BUILD delegation |
+| `openhands` | :43005 (host) → :8000 (container) | OpenHands Agent Server — BUILD delegation |
 
 > **Note**: Prometheus and Grafana run as a separate Grafana stack on the host (`~/.hermes/grafana-stack/`), not in this Docker Compose file.
 
@@ -381,7 +380,7 @@ docker compose up -d --build
 
 - **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:48011`) for HIL workflow
 - **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via `route_phase()` in `edges.py`, in-node `interrupt()` for HIL pauses
-- **State Management**: `WorkflowState` (37 fields) + `CycleMetrics` (11 fields) — pruned for token efficiency. All keys initialized in `graph/executor.py`
+- **State Management**: `WorkflowState` (~50 top-level keys) + `CycleMetrics` (9 fields) — pruned for token efficiency. All keys initialized in `graph/executor.py`
 - **Skills System**: 35 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
 - **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; uses in-node `interrupt()` calls for DISCOVER double-pause and ARCH_REVIEW approval
 - **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
@@ -422,7 +421,7 @@ workflow:
 
 superweb:
   mode: agent
-  openhands_url: http://openhands:8000
+  openhands_url: http://openhands-server:8000
   openhands_port: 8000
   agent_conversations: 3
   agent_timeout_seconds: 3600
@@ -433,7 +432,7 @@ superweb:
 ## Dependencies
 
 ```
-langgraph, langchain-core, langgraph-checkpoint (workflow engine)
+langgraph, langchain-core, langgraph-checkpoint, langgraph-checkpoint-sqlite, aiosqlite (workflow engine + AsyncSqliteSaver)
 pydantic, pyyaml, httpx (core utilities)
 chromadb (pattern storage)
 opentelemetry-api, opentelemetry-sdk, arize-phoenix (observability + evaluation)
