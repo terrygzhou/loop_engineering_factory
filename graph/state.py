@@ -80,6 +80,23 @@ class WorkflowState(TypedDict):
     #                            written by DISCOVER)
     #   oaal_sprint_map        — OAAL sprint map handoff to PLAN/BUILD
     #                            (EYW-171 §7, written by DISCOVER)
+    #   arckit_product_backlog — OAPR §3 backlog rows handoff (Tier-2,
+    #                            written by DISCOVER when a valid OAPR exists)
+    #   arckit_open_questions  — OAPR D1–D10 TBD open questions (Tier-2,
+    #                            written by DISCOVER when TBD rows exist)
+    #   arckit_strategy_waves  — OASTR/TRANS transformation waves (Tier-2 P1,
+    #                            written by DISCOVER when waves exist; OASTR wins)
+    #   arch_review_answers    — ARCH_REVIEW HIL answers to missing build
+    #                            inputs (written by graph/nodes/review.py on resume)
+    #   arckit_data_model        — DATA entities/relationships/classification
+    #                               (W3, written by DISCOVER when a valid DATA
+    #                               artefact exists; unset otherwise)
+    #   arckit_integration_standards — TECH API-standards / messaging-patterns /
+    #                            integration-security tables (W3, DISCOVER)
+    #   arckit_security_controls — OASEC pillars/threats/guardrails/risks (W3,
+    #                            DISCOVER)
+    #   arckit_nfr_constraints   — OAA-ADM-lite use_cases + NFR fields (W3,
+    #                            DISCOVER)
 
     # ── Parent graph runtime keys (S-001: schema enforcement) ──
     project_context: str

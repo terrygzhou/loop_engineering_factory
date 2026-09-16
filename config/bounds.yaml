@@ -8,6 +8,9 @@ context:
   define_max_tokens: 32768
   # Max tokens for PLAN phase LLM calls (plan/task generation)
   plan_max_tokens: 24576
+  # Max chars of one ArcKit advisory build-context block in LLM prompts
+  # (arckit-build-context W3; engineering-conventions prompt capping)
+  arckit_advisory_max_chars: 4000
   # Max chars for diagram generation context (per input source)
   diagram_context:
     spec_chars: 8000
@@ -44,6 +47,12 @@ build:
   recent_code_snippets: 2
   # Max chars for recent code context
   recent_code_chars: 2000
+
+# ── VERIFY gate limits ──────────────────────────────────────────
+verify:
+  # Per-acceptance-test-check subprocess timeout (W5
+  # verify-acceptance-criteria); 0 -> immediate timeout (no budget)
+  acceptance_timeout_s: 60
 
 # ── Feedback & logging limits ────────────────────────────────────
 feedback:

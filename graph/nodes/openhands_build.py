@@ -136,6 +136,94 @@ def _build_prompt(state: dict) -> str:
         except Exception:
             logger.debug("solution_path read failed", exc_info=True)
 
+    # P0.5 (arckit-tier2-ingestion): human answers captured at the
+    # ARCH_REVIEW gate surface as advisory "Review supplements". Absent /
+    # empty key -> byte-identical prompt to before this change.
+    review_answers = artifacts.get("arch_review_answers") or ""
+    supplements = ""
+    if review_answers:
+        supplements = (
+            "\nREVIEW SUPPLEMENTS (human answers captured at ARCH_REVIEW "
+            "- advisory; treat as authoritative guidance where they answer "
+            "open design questions):\n"
+            + review_answers[:PROMPT_CHAR_LIMIT]
+        )
+
+    # W3 arckit-build-context: advisory ArcKit build-context sections,
+    # emitted ONLY for keys that are set; when none is set the prompt is
+    # byte-identical to a run with no ArcKit context. Advisory
+    # (non-routing) context — the build_report.json manifest contract
+    # (Decision 1) and the BUILD retry budget are unchanged.
+    arckit_sections = []
+    for key, header in (
+        ("arckit_product_backlog", "PRODUCT BACKLOG"),
+        ("arckit_strategy_waves", "STRATEGY WAVES"),
+        ("arckit_data_model", "DATA MODEL"),
+        ("arckit_integration_standards", "INTEGRATION STANDARDS"),
+        ("arckit_security_controls", "SECURITY CONTROLS"),
+        ("arckit_nfr_constraints", "NFR CONSTRAINTS"),
+    ):
+        raw = artifacts.get(key)
+        if raw:
+            arckit_sections.append(
+                f"\nARCKIT {header} (advisory context - conform where "
+                f"feasible):\n{str(raw)[:PROMPT_CHAR_LIMIT]}"
+            )
+    arckit_context = "".join(arckit_sections)
+
+    # W4 plan-sequence-view: advisory architecture diagram views (the 4 base
+    # views + any sequence_* use-case views). Emitted only for keys that are
+    # present AND whose files are readable; when no diagrams are present the
+    # prompt is byte-identical to the pre-change prompt. Deliberately no
+    # "ARCKIT" marker in this section (W3 baseline tests assert its absence).
+    diagram_blocks: list[str] = []
+    diagrams = artifacts.get("diagrams")
+    if isinstance(diagrams, dict):
+        for key in sorted(diagrams):
+            try:
+                content = Path(str(diagrams.get(key))).read_text()[:PROMPT_CHAR_LIMIT]
+            except (OSError, TypeError):
+                continue
+            diagram_blocks.append(f"### {key}\n{content}")
+    diagram_context = ""
+    if diagram_blocks:
+        diagram_context = (
+            "\nARCHITECTURE DIAGRAMS (reference views - advisory):"
+            + "".join("\n" + block for block in diagram_blocks)
+        )
+
+    # W5 verify-acceptance-criteria: failing acceptance tests from the most
+    # recent VERIFY run surface as retry guidance (advisory context).
+    # Absent / empty / no-failures -> byte-identical prompt to before.
+    failing_acceptance: list[dict] = []
+    raw_results = artifacts.get("acceptance_results")
+    if raw_results:
+        try:
+            results = (
+                json.loads(raw_results)
+                if isinstance(raw_results, str)
+                else raw_results
+            )
+            if isinstance(results, dict):
+                failing_acceptance = [
+                    rec
+                    for rec in results.values()
+                    if isinstance(rec, dict) and rec.get("passed") is False
+                ]
+        except (ValueError, TypeError):
+            failing_acceptance = []
+    acceptance_context = ""
+    if failing_acceptance:
+        lines = [
+            f"- {rec.get('id', '?')}: check `{rec.get('check', '')}` — "
+            f"expect: {rec.get('expect', '')}"
+            for rec in failing_acceptance
+        ]
+        acceptance_context = (
+            "\nACCEPTANCE TEST FAILURES (retry - make these pass):\n"
+            + "\n".join(lines)
+        )
+
     return f"""You are a senior software engineer building a project end-to-end.
 
 PROJECT: {project_name}
@@ -182,6 +270,7 @@ SPECIFICATION:
 
 TASKS:
 {tasks}
+{supplements}{arckit_context}{diagram_context}{acceptance_context}
 """
 
 

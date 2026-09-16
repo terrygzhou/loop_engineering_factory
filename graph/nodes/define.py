@@ -15,11 +15,56 @@ from config.bounds_loader import bounds
 from config.loader import config
 from feedback.chroma_client import get_chroma_client, query_patterns
 from graph.ui_bridge import SkillTimer
+from tools.acceptance import parse_acceptance_block
 from tools.audit_logger import AuditLog
 from tools.context_manager import prepare_context_for_llm
 from tools.llm import invoke_skill, invoke_skill_async
 from tools.loader import build_skill_registry
 from tools.stream_writer import safe_stream_writer
+
+
+# W5 verify-acceptance-criteria: machine-checkable acceptance-test block
+# that the spec LLM must emit (fenced JSON) in addition to the 6 core
+# spec areas. Each test: id + check (local command, no network) +
+# expect (expected outcome). Absent user stories/NFRs -> no block.
+_SPEC_TASK_INSTRUCTION = (
+    "Produce structured spec with all 6 core areas: objective, commands, "
+    "project structure, code style, testing strategy, boundaries. Include "
+    "success criteria and out-of-scope items. "
+    "Also derive machine-checkable acceptance tests from the user stories "
+    "and NFR constraints (when present) and emit them as a fenced JSON "
+    'block of the form {"acceptance_tests": [{"id": "AT-01", '
+    '"check": "<local command, no network>", '
+    '"expect": "<expected result>"}]}. '
+    "Omit the block entirely when there are no user stories or NFRs to "
+    "derive tests from - never an empty array, never a placeholder."
+)
+
+
+def _arckit_advisory_context(state: dict) -> str:
+    """W3 arckit-build-context — advisory build-context blocks for the
+    parallel source-driven + api-design prompts.
+
+    Returns "" when neither key is set (prompts byte-identical to a
+    non-ArcKit run). Each block is capped by
+    ``bounds.context.arckit_advisory_max_chars`` (engineering-conventions
+    prompt capping). Advisory only — never a routing input.
+    """
+    arts = state.get("artifacts") or {}
+    cap = bounds.context.arckit_advisory_max_chars
+    blocks = []
+    for key, header in (
+        ("arckit_integration_standards", "INTEGRATION STANDARDS"),
+        ("arckit_nfr_constraints", "NFR CONSTRAINTS"),
+    ):
+        raw = arts.get(key)
+        if not raw:
+            continue
+        blocks.append(
+            f"## ArcKit {header} (advisory context — conform to these "
+            f"standards where feasible)\n{str(raw)[:cap]}"
+        )
+    return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
 def define_node(state: dict) -> dict:
@@ -195,15 +240,9 @@ def define_node(state: dict) -> dict:
             }
         )
         spec_timer = SkillTimer("spec-driven-development")
-        context = f"Spec path: {state.get('spec_path', '')}\n"
-        if project_context:
-            context += f"Existing project context:\n{project_context}\n"
-        context += f"Interview notes:\n{interview_notes}\n"
-        feedback_ctx = feedback_context if feedback_context else ""
-        if feedback_ctx:
-            context += f"\n\n{feedback_ctx}\n"
-        if user_review_comments:
-            context += f"\n\n## User Review Comments (from ARCH_REVIEW rejection)\n{user_review_comments}\n"
+        context = _build_spec_context(
+            state, interview_notes, feedback_context, user_review_comments
+        )
 
         # Context optimization: prune before LLM call
         optimized = prepare_context_for_llm(
@@ -211,7 +250,7 @@ def define_node(state: dict) -> dict:
         )
         spec_result = invoke_skill(
             spec_skill["content"],
-            "Produce structured spec with all 6 core areas: objective, commands, project structure, code style, testing strategy, boundaries. Include success criteria and out-of-scope items.",
+            _SPEC_TASK_INSTRUCTION,
             optimized["context"],
             llm=None,
             workflow_id=project_name,
@@ -263,6 +302,9 @@ def define_node(state: dict) -> dict:
                 src_context += f"Spec draft:\n{spec_result}\n"
             if interview_notes:
                 src_context += f"Interview notes:\n{interview_notes[:600]}\n"
+            # W3: advisory build-context blocks (empty string when unset)
+            adv = _arckit_advisory_context(state)
+            src_context += adv
             tasks.append(
                 invoke_skill_async(
                     source_skill["content"],
@@ -285,6 +327,7 @@ def define_node(state: dict) -> dict:
                 }
             )
             api_context = state.get("artifacts", {}).get("spec_refined", "")
+            api_context += _arckit_advisory_context(state)
             tasks.append(
                 invoke_skill_async(
                     api_skill["content"],
@@ -525,6 +568,38 @@ def _load_feedback_context(state: dict) -> str:
         return ""
 
 
+def _build_spec_context(
+    state: dict,
+    interview_notes: str,
+    feedback_context: str,
+    user_review_comments: str,
+) -> str:
+    """Assemble the spec-generation LLM context.
+
+    W5 verify-acceptance-criteria: appends an ``NFR constraints`` block
+    carrying the raw ``arckit_nfr_constraints`` value ONLY when that
+    artifact is set - non-ArcKit runs build a context identical to
+    before the change.
+    """
+    arts = state.get("artifacts") or {}
+    project_context = arts.get("project_context", "")
+    context = f"Spec path: {state.get('spec_path', '')}\n"
+    if project_context:
+        context += f"Existing project context:\n{project_context}\n"
+    context += f"Interview notes:\n{interview_notes}\n"
+    if feedback_context:
+        context += f"\n\n{feedback_context}\n"
+    if user_review_comments:
+        context += (
+            f"\n\n## User Review Comments (from ARCH_REVIEW rejection)\n"
+            f"{user_review_comments}\n"
+        )
+    nfr = arts.get("arckit_nfr_constraints")
+    if nfr:
+        context += f"\n\n## NFR constraints (ArcKit - advisory)\n{nfr}\n"
+    return context
+
+
 def _estimate_spec_confidence(artifacts: dict) -> float:
     """Derive spec confidence from actual artifact content."""
     score = 0.0
@@ -552,5 +627,10 @@ def _estimate_spec_confidence(artifacts: dict) -> float:
         kw in spec_lower
         for kw in ["error handling", "exception", "failure", "rollback", "fallback"]
     ):
+        score += 0.1
+    # W5: a well-formed machine-checkable acceptance-test block is a strong
+    # completeness signal. Absent or invalid block -> no bonus (backward-
+    # compatible scoring).
+    if parse_acceptance_block(spec_text):
         score += 0.1
     return min(score, 1.0)

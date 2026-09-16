@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Any
 
 
+from config.bounds_loader import bounds
 from config.loader import config
 from graph.ui_bridge import SkillTimer
+from tools.acceptance import parse_acceptance_block
 from tools.audit_logger import AuditLog
 from tools.llm import invoke_skill
 from tools.loader import build_skill_registry
@@ -391,9 +393,32 @@ def verify_node(state: dict) -> dict:
         )
         test_results = _run_test_infrastructure(project_path, writer, audit)
 
+    # ── W5: acceptance tests (spec block -> deterministic gate input) ──
+    # Parse the acceptance-test block from the spec; when present (and the
+    # project exists) run each check and record per-test results. No block
+    # -> gate is identical to today (test_errors only).
+    acceptance_results: dict = {}
+    acceptance_tests = parse_acceptance_block(spec_text)
+    if acceptance_tests and project_path and Path(project_path).exists():
+        writer(
+            {
+                "type": "progress",
+                "phase": "VERIFY",
+                "step": "progress",
+                "detail": f"  → Running {len(acceptance_tests)} acceptance tests...",
+                "ts": time.time(),
+            }
+        )
+        acceptance_results = _run_acceptance_tests(
+            acceptance_tests, project_path, writer
+        )
+
     # ── Compute metrics from findings + test results ──
     test_errors = sum(
         1 for v in test_results.values() if v and v.get("failures", 0) > 0
+    )
+    acceptance_failures = sum(
+        1 for r in acceptance_results.values() if r.get("passed") is False
     )
     review_revisions = max(findings["critical"], findings["required"])
     uat_pass_rate = (
@@ -422,7 +447,9 @@ def verify_node(state: dict) -> dict:
     # edges only read) — required so route_phase can see a fresh counter on
     # the next pass through the graph after a BUILD->VERIFY loop.
     loop_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
-    if has_failures := (findings["critical"] > 0 or test_errors > 0):
+    if has_failures := (
+        findings["critical"] > 0 or test_errors > 0 or acceptance_failures > 0
+    ):
         loop_counts["VERIFY"] = loop_counts.get("VERIFY", 0) + 1
 
     # ── Build partial update ──
@@ -452,15 +479,19 @@ def verify_node(state: dict) -> dict:
     if test_results.get("pytest") or test_results.get("ruff"):
         update["artifacts"]["test_results"] = json.dumps(
             {
-                "pytest_pass": test_results.get("pytest", {}).get("passed", 0),
-                "pytest_fail": test_results.get("pytest", {}).get("failed", 0),
-                "ruff_violations": test_results.get("ruff", {}).get("violations", 0),
-                "mypy_errors": test_results.get("mypy", {}).get("errors", 0),
+                "pytest_pass": (test_results.get("pytest") or {}).get("passed", 0),
+                "pytest_fail": (test_results.get("pytest") or {}).get("failed", 0),
+                "ruff_violations": (test_results.get("ruff") or {}).get("violations", 0),
+                "mypy_errors": (test_results.get("mypy") or {}).get("errors", 0),
             }
         )
+    if acceptance_results:
+        update["artifacts"]["acceptance_results"] = json.dumps(acceptance_results)
     if has_failures:
         update["error"] = (
-            f"VERIFY failed: {findings['critical']} critical, {test_errors} test suite failures"
+            f"VERIFY failed: {findings['critical']} critical, "
+            f"{test_errors} test suite failures, "
+            f"{acceptance_failures} acceptance test failures"
         )
     if metrics_update:
         update["metrics"] = metrics_update
@@ -474,6 +505,68 @@ def verify_node(state: dict) -> dict:
 
 
 # ── Automated test infrastructure ────────────────────────────────────
+
+
+def _run_acceptance_tests(
+    tests: list[dict], project_path: str, writer
+) -> dict:
+    """W5: execute each spec acceptance-test check locally (bounded).
+
+    Each check runs via ``subprocess`` (shell, cwd=project_path) with
+    the per-test timeout from ``config/bounds.yaml``
+    (``bounds.verify.acceptance_timeout_s``). Returns a dict keyed by
+    test id: ``{id, check, expect, passed, output, timed_out}`` where
+    ``passed`` is ``returncode == 0`` and a timed-out check is
+    ``passed=False, timed_out=True``.
+    """
+    timeout = bounds.verify.acceptance_timeout_s
+    results: dict[str, dict] = {}
+    for test in tests:
+        test_id = str(test.get("id", "AT-?"))
+        check = str(test.get("check", ""))
+        expect = str(test.get("expect", ""))
+        record: dict[str, Any] = {
+            "id": test_id,
+            "check": check,
+            "expect": expect,
+            "passed": False,
+            "output": "",
+            "timed_out": False,
+        }
+        writer(
+            {
+                "type": "progress",
+                "phase": "VERIFY",
+                "step": "progress",
+                "detail": f"  → Acceptance test {test_id}: {check or '(no check command)'}",
+                "ts": time.time(),
+            }
+        )
+        if not check:
+            record["output"] = "no check command - counted as failure"
+        elif timeout <= 0:
+            record["timed_out"] = True
+            record["output"] = "timed out (0s timeout budget)"
+        else:
+            try:
+                proc = subprocess.run(
+                    check,
+                    shell=True,
+                    cwd=project_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                record["passed"] = proc.returncode == 0
+                record["output"] = ((proc.stdout or "") + (proc.stderr or ""))[-500:]
+            except subprocess.TimeoutExpired:
+                record["passed"] = False
+                record["timed_out"] = True
+                record["output"] = f"Timeout after {timeout}s"
+            except Exception as e:  # noqa: BLE001 - bounded: any check error is a failure
+                record["output"] = str(e)
+        results[test_id] = record
+    return results
 
 
 def _find_venv_python(project_path: str) -> str | None:

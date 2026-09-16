@@ -292,6 +292,40 @@ async def discover_node(state: dict) -> dict:
         artifacts["discover_artifact_audit"] = json.dumps(arckit_ctx.audit, indent=2)
         if arckit_ctx.sprint_map:
             artifacts["oaal_sprint_map"] = json.dumps(arckit_ctx.sprint_map, indent=2)
+        # Tier-2 OAPR handoff (arckit-tier2-ingestion): backlog + D1–D10
+        # open questions feed DEFINE/PLAN prompts and the ARCH_REVIEW gate.
+        if arckit_ctx.product_backlog:
+            artifacts["arckit_product_backlog"] = json.dumps(
+                arckit_ctx.product_backlog, indent=2
+            )
+        if arckit_ctx.open_questions:
+            artifacts["arckit_open_questions"] = json.dumps(
+                arckit_ctx.open_questions, indent=2
+            )
+        # Tier-2 P1: strategy waves handoff (OASTR §4 wins, TRANS §1 fallback)
+        if arckit_ctx.strategy_waves:
+            artifacts["arckit_strategy_waves"] = json.dumps(
+                arckit_ctx.strategy_waves, indent=2
+            )
+        # W3 arckit-build-context: advisory build-context carry-forward —
+        # written only when the corresponding valid artefact exists; absent
+        # artefacts leave the key unset (never sentinel values).
+        if arckit_ctx.data_model:
+            artifacts["arckit_data_model"] = json.dumps(
+                arckit_ctx.data_model, indent=2
+            )
+        if arckit_ctx.integration_standards:
+            artifacts["arckit_integration_standards"] = json.dumps(
+                arckit_ctx.integration_standards, indent=2
+            )
+        if arckit_ctx.security_controls:
+            artifacts["arckit_security_controls"] = json.dumps(
+                arckit_ctx.security_controls, indent=2
+            )
+        if arckit_ctx.nfr_constraints:
+            artifacts["arckit_nfr_constraints"] = json.dumps(
+                arckit_ctx.nfr_constraints, indent=2
+            )
 
     audit.log_node_output(
         "DISCOVER",

@@ -95,7 +95,10 @@ def route_phase(state: WorkflowState) -> str:
 
     # If there's an error, route to ERROR terminal for safe landing.
     # Exception: next_phase is an intentional override (e.g., BUILD fail guard → REFLECT).
-    if error and not state.get("next_phase"):
+    # VERIFY is exempt: its gate branch below owns the error semantics (a
+    # completed-and-failed gate retries via BUILD; only a terminal error
+    # that never completed the gate — or an exhausted budget — halts).
+    if error and not state.get("next_phase") and phase != "VERIFY":
         return "ERROR"
 
     # DISCOVER -> always forward to DEFINE (no quality gate needed)
@@ -139,11 +142,22 @@ def route_phase(state: WorkflowState) -> str:
 
     # VERIFY -> real gate (Decision 2). A failing VERIFY must loop back to
     # BUILD or halt — it can never reach SHIP. The deterministic signal is
-    # test_errors (real pytest failures) OR critical review findings; LLM
-    # review text alone is advisory and never the gate.
+    # verify_status (set by the node from test_errors / critical findings /
+    # W5 acceptance-test failures) or test_results.pytest_fail; LLM review
+    # text alone is advisory and never the gate.
     #
-    # `verify_status` (not the LLM text) is the source of truth, so the
-    # `error` + next_phase==ERROR escape hatch still routes to ERROR terminal.
+    # Gate semantics (loop counter is incremented BY the node when the gate
+    # completes and fails):
+    #   counter >= max_loops (2)          -> ERROR (budget exhausted, halt)
+    #   gate failed, counter >= 1        -> BUILD (retry; W5: the retry
+    #                                        prompt carries the failing
+    #                                        acceptance-test ids)
+    #   gate failed, counter == 0, no
+    #   terminal error                   -> BUILD (plain deterministic
+    #                                        failure, first attempt)
+    #   counter == 0 WITH terminal error -> ERROR (LLM-fatal escape hatch:
+    #                                        the gate never completed, so no
+    #                                        retry)
     if phase == "VERIFY":
         verify_status = state.get("artifacts", {}).get("verify_status")
         test_errors = 0
@@ -155,17 +169,19 @@ def route_phase(state: WorkflowState) -> str:
                 test_errors = _json.loads(test_summary).get("pytest_fail", 0) or 0
             except (ValueError, TypeError):
                 test_errors = 0
-        has_failures = bool(state.get("error")) and state.get("next_phase") is None
-        failed = verify_status == "fail" or test_errors > 0 or has_failures
-        if failed:
+        terminal_error = bool(state.get("error")) and state.get("next_phase") is None
+        gate_failed = verify_status == "fail" or test_errors > 0
+        if gate_failed:
             if loop_count >= max_loops:
-                # Exceeded the retry budget — force forward (livelock guard).
-                # NOTE: the generic branch above sends a plain terminal error
-                # to the ERROR sink; a failed-VERIFY that exhausted its retry
-                # budget is the one case where halting beats the ERROR sink,
-                # so it returns "ERROR" here explicitly.
+                # Exceeded the retry budget — halt (livelock guard).
                 return "ERROR"
-            return "BUILD"
+            if loop_count >= 1 or not terminal_error:
+                return "BUILD"
+            # Counter never incremented: the gate itself died (e.g. fatal
+            # LLM error before it could evaluate) — terminal, no retry.
+            return "ERROR"
+        if terminal_error:
+            return "ERROR"
         return "SHIP"
 
     # SHIP -> always reflect

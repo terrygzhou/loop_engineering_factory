@@ -53,6 +53,11 @@ class Bounds:
         )
         plan_max_tokens: int = _resolve(_bounds_data, "context.plan_max_tokens", 10000)
 
+        # ArcKit advisory build-context block cap (arckit-build-context W3)
+        arckit_advisory_max_chars: int = _resolve(
+            _bounds_data, "context.arckit_advisory_max_chars", 4000
+        )
+
         # Diagram context char limits
         diagram_spec_chars: int = _resolve(
             _bounds_data, "context.diagram_context.spec_chars", 3000
@@ -101,6 +106,13 @@ class Bounds:
         )
         recent_code_chars: int = _resolve(_bounds_data, "build.recent_code_chars", 2000)
 
+    class Verify:
+        # Per-acceptance-test-check subprocess timeout (W5
+        # verify-acceptance-criteria); 0 -> immediate timeout (no budget)
+        acceptance_timeout_s: int = _resolve(
+            _bounds_data, "verify.acceptance_timeout_s", 60
+        )
+
     class Feedback:
         # Logging & historical context limits
         max_feedback_entry_chars: int = _resolve(
@@ -126,6 +138,7 @@ class Bounds:
     artifacts = Artifacts()
     build = Build()
     feedback = Feedback()
+    verify = Verify()
 
 
 bounds = Bounds()

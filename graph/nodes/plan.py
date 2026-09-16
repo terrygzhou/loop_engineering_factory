@@ -7,7 +7,9 @@ Skill chain:
 """
 
 import asyncio
+import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -463,6 +465,62 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     return diagram
 
 
+# ── W4 plan-sequence-view: use-case-driven sequence views ─────────────
+# Extraction order (spec plan-architecture-diagrams): arckit_nfr_constraints
+# use_cases first, then user-flow lines from interview/spec, else none.
+_UC_PREFIX_RE = re.compile(
+    r"^\s*(?:[-*+]\s*)?(?:user\s+(?:story|flow|journey)|scenario)\s*[:\-]?\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
+_UC_AS_A_RE = re.compile(
+    r"^\s*(?:[-*+]\s*)?as\s+(?:a|an|the)\s+[^.;]{0,80}?\s+I\s+(?:want|need|can)\s+.+?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_use_cases(artifacts: dict) -> list[str]:
+    """Extract use cases: NFR key first, else user-flow lines, else []."""
+    raw = artifacts.get("arckit_nfr_constraints")
+    if raw:
+        try:
+            nfr = json.loads(raw)
+        except (TypeError, ValueError):
+            nfr = None
+        if isinstance(nfr, dict):
+            ucs = nfr.get("use_cases")
+            if isinstance(ucs, list):
+                names = [str(u).strip() for u in ucs if str(u).strip()]
+                if names:
+                    return names
+    text = "\n".join(
+        part
+        for part in (
+            artifacts.get("interview_notes", "") or "",
+            artifacts.get("spec_refined", "") or "",
+        )
+        if part
+    )
+    found: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        m = _UC_PREFIX_RE.match(line)
+        cand = m.group(1).strip() if m else None
+        if cand is None:
+            m2 = _UC_AS_A_RE.match(line)
+            cand = m2.group(0).strip() if m2 else None
+        if cand and cand.lower() not in seen:
+            seen.add(cand.lower())
+            found.append(cand)
+    return found
+
+
+def _slugify(text: str, limit: int = 40) -> str:
+    """URL/identifier-safe slug for diagram keys (sequence_<slug>)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
+    slug = re.sub(r"-{2,}", "-", slug)[:limit].rstrip("-")
+    return slug or "uc"
+
+
 def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     project_folder = state.get("project_folder", state.get("project_path", ""))
     diagrams_dir = Path(project_folder) / "build" / "diagrams"
@@ -477,6 +535,31 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
         'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
     )
 
+    # W4: per-use-case sequence views replace the generic "sequence" view
+    # only when use cases are found; the generic view stays as the fallback
+    # (behaviour identical to pre-W4 when no use cases are available).
+    use_cases = _extract_use_cases(state.get("artifacts", {}))
+    uc_entries: list[tuple[str, str, str]] = []  # (key, use case, filename)
+    used_keys: set[str] = set()
+    for uc in use_cases:
+        base = _slugify(uc)
+        slug, n = base, 2
+        while f"sequence_{slug}" in used_keys:
+            slug = f"{base}-{n}"
+            n += 1
+        key = f"sequence_{slug}"
+        used_keys.add(key)
+        uc_entries.append((key, uc, f"{key.replace('_', '-')}.mmd"))
+
+    diagram_types = [
+        ("component", "component-diagram.mmd"),
+        ("data flow", "data-flow.mmd"),
+        ("deployment", "deployment-diagram.mmd"),
+    ]
+    if not uc_entries:
+        # fallback: today's 4-view set including the generic sequence view
+        diagram_types.insert(1, ("sequence", "sequence-diagram.mmd"))
+
     if context_length < 200:
         w = safe_stream_writer()
         w(
@@ -489,27 +572,22 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
             }
         )
         diagrams = {}
-        diagram_types = [
-            ("component", "component-diagram.mmd"),
-            ("sequence", "sequence-diagram.mmd"),
-            ("data flow", "data-flow.mmd"),
-            ("deployment", "deployment-diagram.mmd"),
-        ]
         for dtype, filename in diagram_types:
             filepath = diagrams_dir / filename
             filepath.write_text(_DIAGRAM_PLACEHOLDER)
             diagrams[dtype] = str(filepath)
+        for key, _uc, filename in uc_entries:
+            filepath = diagrams_dir / filename
+            filepath.write_text(_DIAGRAM_PLACEHOLDER)
+            diagrams[key] = str(filepath)
         return diagrams
 
     diagrams = {}
-    diagram_types = [
-        ("component", "component-diagram.mmd"),
-        ("sequence", "sequence-diagram.mmd"),
-        ("data flow", "data-flow.mmd"),
-        ("deployment", "deployment-diagram.mmd"),
-    ]
 
-    # ── Parallel LLM calls for all 4 diagrams ──
+    # ── Parallel LLM calls: base views + one sequence view per use case ──
+    spec_cap = state.get("artifacts", {}).get("spec_refined", "")[: bounds.context.diagram_spec_chars]
+    plan_cap = state.get("artifacts", {}).get("plan", "")[: bounds.context.diagram_plan_chars]
+
     async def _run_parallel():
         tasks = []
         for dtype, filename in diagram_types:
@@ -533,19 +611,56 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
                     phase="PLAN",
                 )
             )
-        return await asyncio.gather(*tasks, return_exceptions=True)
-
-    results = asyncio.run(_run_parallel())
-    for (dtype, filename), result in zip(diagram_types, results):
-        diagram_text: str
-        if isinstance(result, Exception):
+        for key, uc, filename in uc_entries:
             w = safe_stream_writer()
             w(
                 {
-                    "type": "error",
+                    "type": "progress",
                     "phase": "PLAN",
                     "step": "diagram",
-                    "detail": f"Diagram {dtype} failed: {result}",
+                    "detail": f"Generating sequence diagram for use case '{uc}' (parallel)...",
+                    "ts": time.time(),
+                }
+            )
+            tasks.append(
+                invoke_skill_async(
+                    skill_content=_get_diagram_skill(skills),
+                    task=(
+                        f"Generate a UML sequence diagram (mermaid `sequenceDiagram`) for the use "
+                        f"case: {uc}. Show participant interactions, all components and data "
+                        f"flows involved. Use the spec and plan as the primary source of truth."
+                    ),
+                    context=(
+                        f"Spec:\n{spec_cap}\n\nPlan:\n{plan_cap}\n\n"
+                        f"Use case:\n{uc}"
+                    ),
+                    llm=None,
+                    workflow_id=state.get("project_name", ""),
+                    phase="PLAN",
+                )
+            )
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = asyncio.run(_run_parallel())
+    entries = [(k, f) for (k, f) in diagram_types] + [
+        (k, f) for (k, _uc, f) in uc_entries
+    ]
+    for (key, filename), result in zip(entries, results):
+        diagram_text: str
+        if result is None or isinstance(result, Exception):
+            # Decision 3: None = fatal LLM failure → placeholder, never raise.
+            detail = (
+                f"Diagram {key} LLM call failed"
+                if result is None
+                else f"Diagram {key} failed: {result}"
+            )
+            w = safe_stream_writer()
+            w(
+                {
+                    "type": "error" if result is None else "progress",
+                    "phase": "PLAN",
+                    "step": "diagram",
+                    "detail": detail,
                     "ts": time.time(),
                 }
             )
@@ -554,7 +669,7 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
             diagram_text = str(result)
         filepath = diagrams_dir / filename
         filepath.write_text(diagram_text)
-        diagrams[dtype] = str(filepath)
+        diagrams[key] = str(filepath)
     return diagrams
 
 

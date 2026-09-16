@@ -22,7 +22,62 @@ from tools.audit_logger import AuditLog
 from graph.achg_scanner import scan_achg_context, pending_achg_ids
 from service.px_gate import PxGate
 
+import json
 import re
+
+from tools.arckit_loader import VALUABLE_ARTIFACT_TYPES
+
+
+def _parse_json_artifact(raw):
+    """Best-effort JSON parse of an artifacts value; None when unusable."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _missing_build_inputs(artifacts: dict) -> list[str]:
+    """Advisory missing-build-inputs channel (arckit-tier2-ingestion P0.5).
+
+    Derived from two optional upstream DISCOVER artifacts:
+
+    - ``arckit_open_questions`` -- JSON list of ``{dimension, question}``
+      (OAPR D1-D10 TBD rows); each becomes a question line.
+    - ``discover_artifact_audit`` -- JSON audit (S6.4); Tier-2 types with no
+      *valid* record are listed as "valuable but absent" advisories.
+
+    Returns ``[]`` when nothing is derivable, in which case the caller omits
+    the field entirely (byte-identical payload for non-ArcKit runs).
+    """
+    items: list[str] = []
+    oq = _parse_json_artifact(artifacts.get("arckit_open_questions"))
+    if isinstance(oq, list):
+        for q in oq:
+            if isinstance(q, dict) and q.get("question"):
+                dim = q.get("dimension") or ""
+                prefix = f"[{dim}] " if dim else ""
+                items.append(f"OAPR {prefix}{q['question']}")
+    audit = _parse_json_artifact(artifacts.get("discover_artifact_audit"))
+    if isinstance(audit, dict):
+        # W3 arckit-build-context: prefer the DISCOVER-computed
+        # 'valuable but absent' list (covers Tier-2 + DATA/TECH/OASEC/
+        # OAA-ADM-lite); fall back to recomputing from the record set for
+        # pre-W3 audit payloads (or hand-built test audits).
+        valuable_absent = audit.get("valuable_absent")
+        if not isinstance(valuable_absent, list):
+            valid_types = {
+                r.get("type")
+                for r in audit.get("artefacts", [])
+                if isinstance(r, dict) and r.get("schemaValid")
+            }
+            valuable_absent = [
+                t for t in VALUABLE_ARTIFACT_TYPES if t not in valid_types
+            ]
+        for t in valuable_absent:
+            items.append(f"Missing valuable ArcKit artefact: {t}")
+    return items
 
 
 def _resolve_achg_context(state: dict) -> dict:
@@ -261,6 +316,12 @@ def review_node(state: dict) -> dict:
         },
     }
 
+    # Missing-build-inputs advisory (arckit-tier2-ingestion P0.5): only when
+    # there is something to surface — non-ArcKit payloads stay unchanged.
+    missing_inputs = _missing_build_inputs(artifacts)
+    if missing_inputs:
+        interrupt_payload["missing_build_inputs"] = missing_inputs
+
     writer(
         {
             "type": "progress",
@@ -295,6 +356,14 @@ def review_node(state: dict) -> dict:
     user_review_comments = resume_data.get(
         "feedback", resume_data.get("user_review_comments", "")
     )
+
+    # P0.5: optional `answers` mapping (HIL UI response to
+    # missing_build_inputs). Accept a dict or a JSON-encoded string.
+    answers = resume_data.get("answers")
+    if isinstance(answers, str):
+        parsed = _parse_json_artifact(answers)
+        answers = parsed if isinstance(parsed, dict) else {}
+    answers = answers if isinstance(answers, dict) else {}
 
     # ── EYW-184 px-gate interlock: plain approve below threshold → reject ──
     if approved and px_gate.enabled and not gate_result.passed and not override:
@@ -335,15 +404,18 @@ def review_node(state: dict) -> dict:
             },
         )
         audit.log_node_transition("ARCH_REVIEW", "BUILD", "plan approved")
+        review_artifacts = {
+            "review_approved": True,
+            "achg_context": achg_context,
+            "px_gate_result": gate_result.to_artifact(),
+        }
+        if answers:
+            review_artifacts["arch_review_answers"] = json.dumps(answers, indent=2)
         return {
             "phase": "ARCH_REVIEW",
             "next_phase": "BUILD",
             "diagram_status": "approved",
-            "artifacts": {
-                "review_approved": True,
-                "achg_context": achg_context,
-                "px_gate_result": gate_result.to_artifact(),
-            },
+            "artifacts": review_artifacts,
         }
     else:
         # Persist the ARCH_REVIEW loop count so the route_phase livelock guard
@@ -372,16 +444,19 @@ def review_node(state: dict) -> dict:
             },
         )
         audit.log_node_transition("ARCH_REVIEW", "PLAN", "plan rejected with feedback")
+        reject_artifacts = {
+            "review_approved": False,
+            "loop_counts": loop_counts,
+            "achg_context": achg_context,
+            "px_gate_result": gate_result.to_artifact(),
+        }
+        if answers:
+            reject_artifacts["arch_review_answers"] = json.dumps(answers, indent=2)
         return {
             "phase": "ARCH_REVIEW",
             "next_phase": "PLAN",
             "diagram_status": "rejected",
             "diagram_feedback": user_review_comments,
             "user_review_comments": user_review_comments,
-            "artifacts": {
-                "review_approved": False,
-                "loop_counts": loop_counts,
-                "achg_context": achg_context,
-                "px_gate_result": gate_result.to_artifact(),
-            },
+            "artifacts": reject_artifacts,
         }

@@ -13,6 +13,7 @@ Proves the pre-interrupt auto-population path end-to-end:
 
 import asyncio
 import json
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -269,3 +270,94 @@ class TestDiscoverArcKitArtifactList:
         fields = {f["key"]: f for f in payloads[0]["fields"]}
         assert "arckit_artifacts" in fields
         assert fields["arckit_artifacts"]["required"] is False
+
+
+ARCKIT_FIXTURES = Path(__file__).parent / "fixtures" / "arckit"
+
+
+class TestDiscoverBuildContextKeys:
+    """W3 arckit-build-context (tasks 3.1-3.3): DISCOVER writes the four
+    carry-forward keys (JSON, omitted when the artefact is absent) and the
+    audit records a 'valuable but absent' list incl. the build-context types.
+    """
+
+    @pytest.fixture
+    def mock_llm(self, monkeypatch):
+        import graph.nodes.discover  # noqa: F401  ensure module before patch
+
+        def fake(*args, **kwargs):
+            return "[MOCK-LLM]"
+
+        monkeypatch.setattr("tools.llm.invoke_skill", fake)
+        monkeypatch.setattr("graph.nodes.discover.invoke_skill", fake)
+        monkeypatch.setattr(
+            "graph.nodes.discover._refine_idea", lambda *a, **k: "[MOCK-REFINE]"
+        )
+        monkeypatch.setattr(
+            "graph.nodes.discover._build_context", lambda *a, **k: "{}"
+        )
+        monkeypatch.setattr(
+            "graph.nodes.discover._generate_requirement_via_fabric",
+            lambda *a, **k: "# Mock requirement\n",
+        )
+
+        async def fast_to_thread(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr("asyncio.to_thread", fast_to_thread)
+        return fake
+
+    def _state(self, tmp_path, tree):
+        return {
+            "context_folder": str(tree),
+            "project_folder": str(tmp_path / "project"),
+            "auto_approve_override": False,
+            "force_hil": False,
+        }
+
+    def test_full_tree_writes_four_keys(self, tmp_path, mock_llm):
+        dst = tmp_path / "ctx"
+        shutil.copytree(ARCKIT_FIXTURES / "build-context", dst)
+        result = _run(tmp_path, self._state(tmp_path, dst))
+        art = result["artifacts"]
+        for key in (
+            "arckit_data_model",
+            "arckit_integration_standards",
+            "arckit_security_controls",
+            "arckit_nfr_constraints",
+        ):
+            assert key in art, f"{key} missing from DISCOVER artifacts"
+        dm = json.loads(art["arckit_data_model"])
+        assert dm["entities"], "entities must survive carry-forward"
+        istd = json.loads(art["arckit_integration_standards"])
+        assert istd["api_standards"]
+        sc = json.loads(art["arckit_security_controls"])
+        assert sc["pillars"]
+        nfr = json.loads(art["arckit_nfr_constraints"])
+        assert nfr["use_cases"]
+
+    def test_partial_tree_set_unset_matrix(self, tmp_path, mock_llm):
+        """adm-data-tech (DATA + TECH only): 2 keys set, 2 keys ABSENT —
+        never sentinel values (3.1/3.3)."""
+        dst = tmp_path / "partial"
+        shutil.copytree(ARCKIT_FIXTURES / "adm-data-tech", dst)
+        result = _run(tmp_path, self._state(tmp_path, dst))
+        art = result["artifacts"]
+        assert "arckit_data_model" in art
+        assert "arckit_integration_standards" in art
+        assert "arckit_security_controls" not in art
+        assert "arckit_nfr_constraints" not in art
+
+    def test_audit_valuable_absent_lists_missing_types(self, tmp_path, mock_llm):
+        """3.2 — audit gains 'valuable but absent' incl. the four new types."""
+        dst = tmp_path / "ctx"
+        shutil.copytree(ARCKIT_FIXTURES / "build-context", dst)
+        result = _run(tmp_path, self._state(tmp_path, dst))
+        audit = json.loads(result["artifacts"]["discover_artifact_audit"])
+        absent = audit["valuable_absent"]
+        # valid in this tree -> not listed
+        for t in ("DATA", "TECH", "OASEC", "OAA-ADM-lite"):
+            assert t not in absent, f"{t} wrongly reported absent"
+        # Tier-2 types are not in this tree -> all listed
+        for t in ("OAPR", "OASTR", "BPCM", "GAPA", "TRANS"):
+            assert t in absent, f"{t} missing from valuable_absent"

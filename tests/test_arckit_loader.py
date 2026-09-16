@@ -591,13 +591,15 @@ class TestFilesParameter:
 
     def test_unknown_type_in_files_skipped(self, tmp_path):
         """Artefact types outside DISCOVER_TYPES are not consumed by
-        DISCOVER even when listed explicitly."""
-        _write(tmp_path, "ARC-001-TECH-v1.0.md", "# Tech\n")
+        DISCOVER even when listed explicitly. (TECH is a DISCOVER type since
+        arckit-build-context; use a genuinely-unknown code FOO to keep the
+        'skipped' path under test.)"""
+        _write(tmp_path, "ARC-001-FOO-v1.0.md", "# Unknown\n")
         _write(tmp_path, "ARC-001-ADMP-v1.0.md", ADMP_V1)
         ctx = load_arckit_artifacts(
             str(tmp_path),
             files=[
-                str(tmp_path / "ARC-001-TECH-v1.0.md"),
+                str(tmp_path / "ARC-001-FOO-v1.0.md"),
                 str(tmp_path / "ARC-001-ADMP-v1.0.md"),
             ],
         )

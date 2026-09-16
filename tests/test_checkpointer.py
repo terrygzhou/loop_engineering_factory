@@ -262,6 +262,43 @@ class TestLazySaverConcurrent:
         assert _run(verify()) == 40
 
 
+class TestArckitBuildContextKeysRoundTrip:
+    """W3 arckit-build-context: the four new DISCOVER handoff keys carry JSON
+    strings in ``artifacts`` and MUST round-trip through AsyncSqliteSaver
+    (state-serializability spec). Guard against anyone later promoting them
+    to typed, non-serializable state fields."""
+
+    def test_build_context_keys_round_trip(self, tmp_path):
+        from graph.checkpointer import LazyAsyncSqliteSaver
+
+        artifacts = {
+            "arckit_data_model": '{"domains": [], "entities": [{"entity": "Policy"}]}',
+            "arckit_integration_standards": '{"api_standards": []}',
+            "arckit_security_controls": '{"pillars": []}',
+            "arckit_nfr_constraints": '{"use_cases": ["Checkout"]}',
+        }
+        state = {"cycle_id": "1", "phase": "DISCOVER", "artifacts": artifacts}
+
+        saver = LazyAsyncSqliteSaver(str(tmp_path / "ctx.db"))
+
+        async def use():
+            checkpoint = {
+                "id": "cp-ctx-1",
+                "v": 1,
+                "ts": "2026-09-16T00:00:00Z",
+                "step": 1,
+                "channel_values": state,
+            }
+            await saver.aput(_config("ctx-thread"), checkpoint, {"source": "test"}, {})
+            fetched = await saver.aget_tuple(_config("ctx-thread"))
+            await saver.close()
+            return fetched
+
+        fetched = _run(use())
+        restored = fetched.checkpoint["channel_values"]
+        assert restored["artifacts"] == artifacts
+
+
 class TestWorkflowStateRoundTrip:
     """EYW-233 (Task A) + EYW-235: WorkflowState is fully serializable.
 
