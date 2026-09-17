@@ -38,36 +38,39 @@ class TestGetLoopCount:
         assert _get_loop_count(state, "BUILD") == 0
 
 
-class TestMaybeIncrementLoop:
-    """Test _maybe_increment_loop — node-side loop counter."""
+class TestIncrementLoop:
+    """Test increment_loop — pure node-side loop counter (E1)."""
 
     def test_first_increment(self):
-        from graph.edges import _maybe_increment_loop
-        state: dict = {"artifacts": {"loop_counts": {}}}
-        exceeded = _maybe_increment_loop(state, "DEFINE")
+        from graph.edges import increment_loop
+        new_artifacts, exceeded = increment_loop({"loop_counts": {}}, "DEFINE")
         assert not exceeded
-        assert state["artifacts"]["loop_counts"]["DEFINE"] == 1
+        assert new_artifacts["loop_counts"]["DEFINE"] == 1
 
     def test_second_increment_exceeds(self):
-        from graph.edges import _maybe_increment_loop
-        state: dict = {"artifacts": {"loop_counts": {"DEFINE": 1}}}
-        exceeded = _maybe_increment_loop(state, "DEFINE")
+        from graph.edges import increment_loop
+        new_artifacts, exceeded = increment_loop({"loop_counts": {"DEFINE": 1}}, "DEFINE")
         assert exceeded
-        assert state["artifacts"]["loop_counts"]["DEFINE"] == 2
+        assert new_artifacts["loop_counts"]["DEFINE"] == 2
 
     def test_starts_from_zero(self):
-        from graph.edges import _maybe_increment_loop
-        state: dict = {}
-        exceeded = _maybe_increment_loop(state, "BUILD")
+        from graph.edges import increment_loop
+        new_artifacts, exceeded = increment_loop({}, "BUILD")
         assert not exceeded
-        assert state["artifacts"]["loop_counts"]["BUILD"] == 1
+        assert new_artifacts["loop_counts"]["BUILD"] == 1
 
     def test_third_call_still_exceeds(self):
-        from graph.edges import _maybe_increment_loop
-        state: dict = {"artifacts": {"loop_counts": {"PLAN": 2}}}
-        exceeded = _maybe_increment_loop(state, "PLAN")
+        from graph.edges import increment_loop
+        new_artifacts, exceeded = increment_loop({"loop_counts": {"PLAN": 2}}, "PLAN")
         assert exceeded
-        assert state["artifacts"]["loop_counts"]["PLAN"] == 3
+        assert new_artifacts["loop_counts"]["PLAN"] == 3
+
+    def test_pure_input_not_mutated(self):
+        from graph.edges import increment_loop
+        arts = {"loop_counts": {"DEFINE": 1}}
+        new_arts, _ = increment_loop(arts, "DEFINE")
+        assert arts == {"loop_counts": {"DEFINE": 1}}
+        assert new_arts is not arts
 
 
 class TestRoutePhase:
