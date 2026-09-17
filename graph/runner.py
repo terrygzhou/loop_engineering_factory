@@ -214,14 +214,6 @@ def _parse_approval(user_input: Any) -> tuple[bool, str]:
     return str(user_input).strip().lower() in ("y", "yes", "true"), ""
 
 
-def _as_int(value: Any, default: int = 0) -> int:
-    """Best-effort int coercion for artifact counters (corrupt values → default)."""
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def build_resume_payload(
     phase: str,
     hil_type: str | None,
@@ -240,14 +232,24 @@ def build_resume_payload(
       gate cleanly (avoids the "orphaned resume" bug, EYW-234).
     - DISCOVER/interview: normalize answers to interview_notes; update
       pre-seeds discover_interview_done so the re-run consumes state.
+    - E12: neither DISCOVER resume pre-seeds or increments
+      ``discover_hil_count`` — that counter is owned by the DISCOVER node,
+      which writes it into its returned ``artifacts`` delta on every resume
+      (setup AND interview). An unknown / None DISCOVER hil_type takes
+      interview semantics (the active Web path always knows hil_type from
+      the interrupt payload; the legacy "dispatch on the persisted count"
+      fallback is gone).
     - ARCH_REVIEW: (approved, feedback) parsing shared by CLI y/n and the
       Web form dict.
     - generic (e.g. REFLECT): approved/feedback from the handler when
       present; auto_approve defaults to approved.
 
     ``update_data`` is None when nothing needs checkpoint pre-seeding.
+
+    ``state`` is accepted for backward compatibility but no longer read: the
+    E12 counter move removed the runner's dependence on the persisted
+    ``artifacts.discover_hil_count``.
     """
-    state = state or {}
     if user_input is None:
         user_input = {"approved": True, "interview_notes": ""}
     if isinstance(user_input, str):
@@ -256,32 +258,21 @@ def build_resume_payload(
         # happens per-phase below, not up front).
         user_input = parse_formatted_input(user_input) or user_input
 
-    def _artifacts() -> dict[str, Any]:
-        arts = dict(state.get("artifacts") or {})
-        arts["discover_hil_count"] = _as_int(arts.get("discover_hil_count", 0), 0) + 1
-        return arts
-
     if phase == "DISCOVER":
+        # E12: discover_hil_count is owned by the DISCOVER node itself —
+        # it writes the counter into its returned artifacts delta on every
+        # resume (setup AND interview). The runner does not pre-seed or
+        # increment it via the checkpoint update_data, and the "unknown
+        # hil_type → dispatch on the persisted count" legacy branch is gone
+        # (the active Web path always knows hil_type from the interrupt
+        # payload). An unknown / None hil_type takes interview semantics
+        # (the interview pause is the DISCOVER node's terminal gate).
         if not isinstance(user_input, dict):
             user_input = {"interview_notes": str(user_input)}
-        if hil_type == "interview":
-            notes = _interview_notes_from(user_input)
-            arts = _artifacts()
-            arts["interview_notes"] = notes
-            resume = {
-                "human_approval_required": False,
-                "interview_notes": notes,
-                "discover_interview_done": True,
-                "artifacts": arts,
-            }
-            update = {"interview_notes": notes, "discover_interview_done": True}
-            return resume, update
-
         if hil_type == "project_setup":
-            arts = _artifacts()
+            notes = ""
             resume = {
                 "human_approval_required": False,
-                "artifacts": arts,
             }
             update = {"discover_setup_done": True}
             for key in ("project_name", "project_description", "context_folder"):
@@ -292,21 +283,15 @@ def build_resume_payload(
                     update[key] = value
             return resume, update
 
-        # Unknown DISCOVER type — fall back on hil count (legacy CLI heuristic)
-        hil_count = _as_int(
-            (state.get("artifacts") or {}).get("discover_hil_count", 0), 0
-        )
-        if hil_count == 0:
-            return build_resume_payload(
-                phase,
-                "project_setup",
-                user_input,
-                auto_approve=auto_approve,
-                state=state,
-            )
-        return build_resume_payload(
-            phase, "interview", user_input, auto_approve=auto_approve, state=state
-        )
+        # hil_type == "interview" or unknown/None → interview semantics.
+        notes = _interview_notes_from(user_input)
+        resume = {
+            "human_approval_required": False,
+            "interview_notes": notes,
+            "discover_interview_done": True,
+        }
+        update = {"interview_notes": notes, "discover_interview_done": True}
+        return resume, update
 
     if phase == "ARCH_REVIEW":
         approved, feedback = _parse_approval(user_input)

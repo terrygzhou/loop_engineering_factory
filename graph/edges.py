@@ -6,6 +6,7 @@ Thresholds loaded from guardrails.yaml at runtime so REFLECT can update them.
 from langgraph.graph import END
 from graph.state import WorkflowState
 from config.guardrails import get_threshold
+from tools.acceptance import count_pytest_fail
 
 # Export END marker for use in main.py
 END_MARKER = END
@@ -50,20 +51,22 @@ def _get_loop_count(state: WorkflowState, phase: str) -> int:
     return counts.get(phase, 0)
 
 
-def _maybe_increment_loop(state: dict, phase: str) -> bool:
+def increment_loop(artifacts: dict, phase: str) -> tuple[dict, bool]:
     """
-    Increment loop counter and return True if max retries exceeded.
-    MUST be called from NODES (not edges) — LangGraph only persists node return values.
-    Usage in nodes:
-        loop_exceeded = _maybe_increment_loop(state, "DEFINE")
-        if loop_exceeded:
-            # force forward, don't loop back
-    NOTE: Must REPLACE state["artifacts"] with new dict for LangGraph shallow merge to see it.
+    Pure loop-counter helper (E1): increment ``phase`` in a NEW artifacts
+    dict and return ``(new_artifacts, exceeded)`` where ``exceeded`` is
+    True once the counter reaches the max (2).
+
+    The input ``artifacts`` dict is never mutated — the caller must return
+    ``new_artifacts`` in the node's partial-update so LangGraph's
+    ``_dict_merge`` reducer persists it (in-place state mutation is
+    invisible to the reducer; that was the E1 DEFINE livelock bug).
     """
-    new_counts = dict(state.get("artifacts", {}).get("loop_counts", {}))
+    new_artifacts = dict(artifacts)
+    new_counts = dict(new_artifacts.get("loop_counts", {}))
     new_counts[phase] = new_counts.get(phase, 0) + 1
-    state.setdefault("artifacts", {})["loop_counts"] = new_counts
-    return new_counts[phase] >= 2
+    new_artifacts["loop_counts"] = new_counts
+    return new_artifacts, new_counts[phase] >= 2
 
 
 def route_phase(state: WorkflowState) -> str:
@@ -160,15 +163,7 @@ def route_phase(state: WorkflowState) -> str:
     #                                        retry)
     if phase == "VERIFY":
         verify_status = state.get("artifacts", {}).get("verify_status")
-        test_errors = 0
-        test_summary = state.get("artifacts", {}).get("test_results")
-        if isinstance(test_summary, str) and test_summary:
-            try:
-                import json as _json
-
-                test_errors = _json.loads(test_summary).get("pytest_fail", 0) or 0
-            except (ValueError, TypeError):
-                test_errors = 0
+        test_errors = count_pytest_fail(state.get("artifacts", {}))
         terminal_error = bool(state.get("error")) and state.get("next_phase") is None
         gate_failed = verify_status == "fail" or test_errors > 0
         if gate_failed:

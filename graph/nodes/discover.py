@@ -45,6 +45,13 @@ async def discover_node(state: dict) -> dict:
     auto_approve = override if override is not None else _cfg.workflow.auto_approve
     force_hil = bool(state.get("force_hil"))
 
+    # E12: DISCOVER owns its HIL counter. Count the HIL pauses that complete
+    # in this node execution (setup and/or interview) and write the running
+    # total into the returned artifacts delta on every resume. The node
+    # re-runs from the top on each resume, so a pause "completes" when its
+    # interrupt() returns a value instead of suspending.
+    hil_pauses_completed = 0
+
     # ── ArcKit artefact ingestion (EYW-171 data contract, EYW-181) ──
     # Pre-interrupt phase (§8): scan context_folder for ArcKit artefacts
     # (ADMP/REQ/STKE/OAAL/PRIN). When valid artefacts exist, project_setup +
@@ -127,6 +134,8 @@ async def discover_node(state: dict) -> dict:
         # LangGraph may wrap resume payload in a list
         if isinstance(setup, list):
             setup = setup[0] if setup else {}
+        # E12: setup HIL pause completed in this execution.
+        hil_pauses_completed += 1
         project_name = setup.get("project_name", "")
         project_description = setup.get("project_description", "")
         context_folder = setup.get("context_folder", "")
@@ -257,6 +266,8 @@ async def discover_node(state: dict) -> dict:
             interrupt_payload["note"] = prefill_note
 
         answers = interrupt(interrupt_payload)
+        # E12: interview HIL pause completed in this execution.
+        hil_pauses_completed += 1
         # LangGraph 1.x: if interrupt() is suppressed on resume (returns None),
         # auto-skip the interview and continue with empty notes.
         if answers is None:
@@ -312,6 +323,16 @@ async def discover_node(state: dict) -> dict:
         "diagrams": {},
         "diagram_pngs": {},
     }
+    # E12: DISCOVER owns discover_hil_count — write the running total into
+    # this node's returned artifacts delta. Read the persisted value back
+    # from state (the dispatching code reads it from state["artifacts"]);
+    # add the pauses completed in this execution. When no HIL pause fired
+    # (auto_approve / arckit autopop / already-done), hil_pauses_completed
+    # is 0 and the persisted value passes through unchanged.
+    persisted_hil_count = int(
+        (state.get("artifacts") or {}).get("discover_hil_count", 0) or 0
+    )
+    artifacts["discover_hil_count"] = persisted_hil_count + hil_pauses_completed
     if arckit_ctx is not None:
         # EYW-171 §6.4 / §7: provenance audit + OAAL handoff to PLAN/BUILD
         artifacts["discover_artifact_audit"] = json.dumps(arckit_ctx.audit, indent=2)

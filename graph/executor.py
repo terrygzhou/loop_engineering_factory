@@ -170,7 +170,6 @@ def build_executor_state(
         },
         feedback=[],
         error=None,
-        spec_text=spec_text,
         project_path=get_project_path(),
         skip_discover=skip_discover,
         context_folder=context_folder,
@@ -190,19 +189,7 @@ def build_executor_state(
         force_hil=False,
         trace_id="",
         superweb_mode="",
-        superweb_agent_report=None,
-        # Parent graph runtime keys (S-001)
-        project_context="",
-        spec_refined="",
-        plan="",
-        tasks="",
-        backlog=[],
-        diagram_pngs={},
         user_review_comments="",
-        status="",
-        retry_count=0,
-        tasks_text="",
-        solution_md="",
     )
 
 
@@ -438,7 +425,12 @@ class WorkflowRunner:
         events = _CliEvents()
 
         async def _input_handler(pause):
-            return await on_hil(pause.phase, pause.state)
+            # E12: thread hil_type through so the HIL handlers can dispatch
+            # on the interrupt payload's type (the authoritative signal at
+            # suspension time) rather than on the persisted
+            # artifacts.discover_hil_count counter (which is only written
+            # when the DISCOVER node's full execution completes).
+            return await on_hil(pause.phase, pause.state, pause.hil_type)
 
         async for chunk in run_workflow(
             self.graph,
@@ -461,8 +453,21 @@ class WorkflowRunner:
 
     # ── CLI HIL handlers ──
 
-    async def _hil_cli(self, phase: str, state: WorkflowState):  # type: ignore[override]
-        """CLI handler for HIL — collects user input via stdin/stdout."""
+    async def _hil_cli(
+        self,
+        phase: str,
+        state: WorkflowState,
+        hil_type: str | None = None,
+    ) -> dict:  # type: ignore[override]
+        """CLI handler for HIL — collects user input via stdin/stdout.
+
+        ``hil_type`` (E12): the interrupt payload's type, threaded through
+        from the runner's ``HilPause``. The DISCOVER HIL handlers dispatch
+        on this — the authoritative signal at suspension time — rather
+        than on the persisted ``artifacts.discover_hil_count`` counter,
+        which is still 0 / absent at the interview suspension (the DISCOVER
+        node writes the counter only when its full execution completes).
+        """
         # Auto-approve: skip input() entirely — return generated defaults
         if self.auto_approve:
             # EYW-184 interlock (EYW-171 §7.4): never auto-approve ARCH_REVIEW
@@ -481,10 +486,12 @@ class WorkflowRunner:
                     }
                 )
             else:
-                return self._hil_auto_approve(phase, state)
+                return self._hil_auto_approve(phase, state, hil_type=hil_type)
 
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, self._hil_cli_sync, phase, state)
+        result = await loop.run_in_executor(
+            None, self._hil_cli_sync, phase, state, hil_type
+        )
         return result
 
     def _archg_pending_blocks(self, state) -> bool:
@@ -503,8 +510,20 @@ class WorkflowRunner:
         except Exception:
             return False
 
-    def _hil_auto_approve(self, phase: str, state: WorkflowState) -> dict:
-        """Generate automatic responses when auto_approve=True."""
+    def _hil_auto_approve(
+        self,
+        phase: str,
+        state: WorkflowState,
+        hil_type: str | None = None,
+    ) -> dict:
+        """Generate automatic responses when auto_approve=True.
+
+        ``hil_type`` (E12): dispatch key for the DISCOVER interview/setup
+        split. The active Web/CLI path always knows the pause's type from
+        the interrupt payload; the persisted counter is only written when
+        the DISCOVER node's full execution completes, so it is a stale
+        signal at suspension time and is no longer used for dispatch.
+        """
         w = safe_stream_writer()
         w(
             {
@@ -517,10 +536,14 @@ class WorkflowRunner:
         )
 
         if phase == "DISCOVER":
-            hil_count = int(
-                (state or {}).get("artifacts", {}).get("discover_hil_count", 0) or 0
-            )
-            if hil_count == 0:
+            # E12: dispatch on the interrupt payload's type — the
+            # authoritative signal at suspension time. The persisted
+            # artifacts.discover_hil_count counter is 0 / absent at the
+            # interview suspension (the DISCOVER node writes it only when
+            # its full execution completes both pauses), so it must not
+            # drive the setup-vs-interview split.
+            is_interview = hil_type in ("interview", None) and hil_type != "project_setup"
+            if not is_interview:
                 # Setup pause — extract from state
                 return {
                     "project_name": (state or {}).get("project_name", "crm_test"),
@@ -529,8 +552,10 @@ class WorkflowRunner:
                     "_pause": "project_setup",
                 }
             else:
-                # Interview pause — generate answers from spec
-                spec = (state or {}).get("spec_text", "")
+                # Interview pause — generate answers from spec.
+                # E12: the DISCOVER node owns discover_hil_count; this
+                # auto-approve path no longer writes the counter.
+                spec = (state or {}).get("project_description", "")
                 interview: dict = {
                     "core_behavior": "",
                     "data_model": "",
@@ -544,10 +569,10 @@ class WorkflowRunner:
                 }
                 if spec:
                     interview["core_behavior"] = spec
-                interview["discover_hil_count"] = hil_count + 1
                 return {
                     "interview_notes": json.dumps(interview),
                     "discover_interview_done": True,
+                    "_pause": "interview",
                 }
 
         if phase == "ARCH_REVIEW":
@@ -556,7 +581,12 @@ class WorkflowRunner:
         # Generic HIL
         return {"human_approval_required": False, "approved": True}
 
-    def _hil_cli_sync(self, phase: str, state: WorkflowState):  # type: ignore[override]
+    def _hil_cli_sync(
+        self,
+        phase: str,
+        state: WorkflowState,
+        hil_type: str | None = None,
+    ) -> dict:  # type: ignore[override]
         """Synchronous part that actually blocks on input()."""
         w = safe_stream_writer()
         w(
@@ -570,12 +600,15 @@ class WorkflowRunner:
         )
 
         if phase == "DISCOVER":
-            # Determine which interrupt fired by checking the suspended state
-            # for discover_hil_count — Pause 1 = 0, Pause 2 = 1+
-            hil_count = (state or {}).get("artifacts", {}).get(
-                "discover_hil_count", 0
-            ) or 0
-            if hil_count == 0:
+            # E12: dispatch on the interrupt payload's type — the
+            # authoritative signal at suspension time. The persisted
+            # artifacts.discover_hil_count counter is 0 / absent at the
+            # interview suspension (the DISCOVER node writes it only when
+            # its full execution completes both pauses), so it must not
+            # drive the setup-vs-interview split. An unknown hil_type
+            # takes the interview branch (the DISCOVER node's terminal
+            # gate), matching the runner's build_resume_payload contract.
+            if hil_type == "project_setup":
                 return self._cli_project_setup(state)
             return self._cli_interview(state)
 

@@ -449,9 +449,16 @@ def define_node(state: dict) -> dict:
     # If spec confidence is low, increment loop counter to prevent infinite loops
     min_spec_conf = 0.9  # Match guardrails.yaml default
     if spec_confidence < min_spec_conf:
-        from graph.edges import _maybe_increment_loop
+        from graph.edges import increment_loop
 
-        if _maybe_increment_loop(state, "DEFINE"):
+        # E1: persist the counter via the node's RETURNED artifacts delta —
+        # LangGraph only persists node return values (in-place state
+        # mutation is silently lost by the _dict_merge reducer; that was
+        # the livelock bug). increment_loop is pure: it builds a fresh
+        # artifacts dict, never mutating the incoming state.
+        new_artifacts, loop_exceeded = increment_loop(merged_artifacts, "DEFINE")
+        artifacts_delta["loop_counts"] = new_artifacts.get("loop_counts", {})
+        if loop_exceeded:
             writer(
                 {
                     "type": "progress",
