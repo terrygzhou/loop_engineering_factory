@@ -3,9 +3,9 @@ services:
   loop:
     build: .
     ports:
-      - "4080:80"       # nginx — static frontend
-      - "48011:8011"   # uvicorn — FastAPI backend
-      - "48081:8081"   # health server — external health checks
+      - "4080:80" # nginx — static frontend
+      - "48011:8011" # uvicorn — FastAPI backend
+      - "48081:8081" # health server — external health checks
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -26,18 +26,29 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2'
+          cpus: "2"
           memory: 3G
     depends_on:
       - chromadb
       - otel-collector
-    entrypoint: ["/bin/sh", "-c", "umask 0002 && mkdir -p /app/output && chown -R 1000:1000 /app/output 2>/dev/null || true && exec /entrypoint.sh"]
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "umask 0002 && mkdir -p /app/output && chown -R 1000:1000 /app/output 2>/dev/null || true && exec /entrypoint.sh",
+      ]
     restart: unless-stopped
     networks:
       - loop_factory_network
       - loop_factory_default
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')"]
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8081/health')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -108,7 +119,13 @@ services:
           memory: 1G
     # healthcheck: python3 exists in phoenix image; use urllib for HTTP check
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6006/')"]
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:6006/')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -147,7 +164,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '4'
+          cpus: "4"
           memory: 4G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000"]
@@ -168,7 +185,13 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD", "perl", "-e", "use IO::Socket::INET; IO::Socket::INET->new(PeerAddr=>'localhost:9080') or exit 1"]
+      test:
+        [
+          "CMD",
+          "perl",
+          "-e",
+          "use IO::Socket::INET; IO::Socket::INET->new(PeerAddr=>'localhost:9080') or exit 1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

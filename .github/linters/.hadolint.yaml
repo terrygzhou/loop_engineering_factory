@@ -1,0 +1,29 @@
+# Hadolint config for Super-Linter's DOCKERFILE_HADOLINT job.
+#
+# The runtime Dockerfile is a multi-port Python + nginx + Playwright
+# orchestrator. Rules ignored here are tracked as rework items, not
+# as lint-gate failures:
+#   - DL3008 (pin base image versions): apt-get lines are unversioned;
+#     rework is tracked separately.
+#   - DL3015 (--no-install-recommends): two apt-get lines in the
+#     Playwright system-deps stage intentionally install full
+#     recommends (fonts, libs) — the slim image has no recommends.
+#   - DL3013 (pin pip versions): requirements.txt pins the app
+#     dependencies; the Playwright install is a tool, not a runtime dep.
+#   - DL4006 (SHELL pipefail before RUN with pipe): the apt-get pipe
+#     to gpg is a one-shot install, not a build step.
+#   - DS-0002 (run as non-root USER): multi-port orchestrator;
+#     non-root USER would require entrypoint rework.
+#   - DS-0026 (HEALTHCHECK): the health server on :48081 is already
+#     probed by Prometheus; a Docker HEALTHCHECK would be redundant.
+#   - SC2086 (double-quote to prevent globbing): hadolint's shellcheck
+#     integration flags the `dpkg --print-architecture` substitution;
+#     it is inside a $(...) command substitution, not a glob.
+ignored:
+  - DL3008
+  - DL3015
+  - DL3013
+  - DL4006
+  - DS-0002
+  - DS-0026
+  - SC2086

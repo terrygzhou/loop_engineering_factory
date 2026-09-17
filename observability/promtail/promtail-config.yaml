@@ -17,11 +17,11 @@ scrape_configs:
             values:
               - loop_factory-loop-1
     relabel_configs:
-      - source_labels: ['__meta_docker_container_name']
+      - source_labels: ["__meta_docker_container_name"]
         target_label: container_name
-      - source_labels: ['__meta_docker_container_name']
-        regex: '^/loop_factory-(.*)-[0-9]+$'
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "^/loop_factory-(.*)-[0-9]+$"
         target_label: service
-        replacement: '${1}'
+        replacement: "${1}"
       - target_label: job
         replacement: loop_factory

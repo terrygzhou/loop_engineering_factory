@@ -1,0 +1,69 @@
+name: Super-Linter
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  super-linter:
+    name: Super-Linter (format, style, shell, markdown, dockerfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # super-linter requires a real git history to diff against DEFAULT_BRANCH
+          fetch-depth: 0
+
+      - name: Run Super-Linter
+        uses: super-linter/super-linter@v8.7.0
+        env:
+          # Only run the linters relevant to this repo; keep the gate fast and
+          # predictable. Super-linter v8 dropped the v7 `ENABLE` comma-list:
+          # each `VALIDATE_<TOOL>` env var toggles one linter, and when at
+          # least one is set explicitly the image auto-defaults every linter
+          # the user didn't mention to `false` (unless at least one `false`
+          # value is provided, in which case the unset ones default to
+          # `true`). So enabling exactly these four — and no others — runs
+          # only these four:
+          #   - VALIDATE_MARKDOWN          -> 35 SKILL.md files + docs
+          #   - VALIDATE_DOCKERFILE_HADOLINT -> Dockerfile, frontend/Dockerfile
+          #   - VALIDATE_BASH              -> entrypoint.sh, scripts/ (tracked)
+          #   - VALIDATE_YAML_PRETTIER     -> docker-compose.yml, config/*.yaml
+          # Python linters are intentionally NOT enabled here: the pinned
+          # ruff (0.16.2, EYW-249) and black jobs in ci.yml are the
+          # authoritative Python gate.
+          VALIDATE_MARKDOWN: "true"
+          VALIDATE_DOCKERFILE_HADOLINT: "true"
+          VALIDATE_BASH: "true"
+          VALIDATE_YAML_PRETTIER: "true"
+          # Whole-repo validation (not diff-only) so untracked-but-committed
+          # files can't slip through a PR that only touches unrelated paths.
+          VALIDATE_ALL_CODE_BASE: "true"
+          # Respect .gitignore so output/, .venv/, docs/, .worktrees/, etc.
+          # are never linted.
+          IGNORE_GITIGNORED_FILES: "true"
+          # Ignore files marked @generated without @not-generated.
+          IGNORE_GENERATED_FILES: "true"
+          # Reduce console noise; the status check still shows failures.
+          LOG_LEVEL: "WARN"
+          MULTI_STATUS: "false"
+          # GitHub Enterprise / custom domains, if needed:
+          # GITHUB_DOMAIN: "github.myenterprise.com"
+          # GITHUB_CUSTOM_SERVER_URL: "https://github.myenterprise.com"
+          # Per-tool config files live in .github/linters/ (see
+          # .github/linters/README.md). Drop files there to override the
+          # built-in defaults without editing this workflow.
+          LINTER_RULES_PATH: ".github/linters"
+
+      - name: Upload Super-Linter log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: super-linter-log
+          path: |
+            super-linter.log
+            super-linter-output/
+          include-hidden-files: true
+          retention-days: 7

@@ -1,0 +1,8 @@
+# ShellCheck config for Super-Linter's BASH job.
+#
+# No extra flags: default severity (style, info, warning, error) is what
+# we want for entrypoint.sh and any tracked scripts/ files.
+#
+# Suppress individual findings in-script with `# shellcheck disable=...`
+# rather than globally, so the suppression stays next to the code it
+# protects.

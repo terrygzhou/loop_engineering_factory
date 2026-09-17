@@ -15,34 +15,34 @@ security_sensitive:
 
 quality_thresholds:
   # DEFINE gates
-  min_spec_confidence: 0.9   # Below this, loop DEFINE to refine spec
+  min_spec_confidence: 0.9 # Below this, loop DEFINE to refine spec
 
   # PLAN gates
-  max_arch_uncertainty: 0.8  # Above this, loop PLAN to resolve doubts
+  max_arch_uncertainty: 0.8 # Above this, loop PLAN to resolve doubts
 
   # BUILD gates
-  max_security_findings: 0   # Critical security findings must be zero
-  max_review_revisions: 2    # Loop back to BUILD if more than this
+  max_security_findings: 0 # Critical security findings must be zero
+  max_review_revisions: 2 # Loop back to BUILD if more than this
 
   # VERIFY gates
-  uat_pass_rate: 0.95        # Minimum UAT pass rate to proceed to SHIP
-  max_latency_ms: 500        # P95 latency threshold — triggers perf optimization
-  max_test_flakiness_rate: 0.1   # Max acceptable test flakiness — triggers debugging
+  uat_pass_rate: 0.95 # Minimum UAT pass rate to proceed to SHIP
+  max_latency_ms: 500 # P95 latency threshold — triggers perf optimization
+  max_test_flakiness_rate: 0.1 # Max acceptable test flakiness — triggers debugging
 
 feedback:
-  min_confidence: 0.9        # Minimum confidence to store pattern
+  min_confidence: 0.9 # Minimum confidence to store pattern
   max_cycles_for_rollback: 3 # If quality drops >15% over N cycles, rollback
-  quality_drop_threshold: 0.15  # 15% quality drop triggers rollback
+  quality_drop_threshold: 0.15 # 15% quality drop triggers rollback
 
 reflection:
-  dry_run_required: true     # Always dry-run config changes
-  human_approval_required: true  # Always require human approval for config changes
-  auto_apply_low_risk: true   # Auto-apply low-risk changes when confidence >= 0.95 AND security_findings == 0
+  dry_run_required: true # Always dry-run config changes
+  human_approval_required: true # Always require human approval for config changes
+  auto_apply_low_risk: true # Auto-apply low-risk changes when confidence >= 0.95 AND security_findings == 0
 
 llm:
   model: Qwen3.6-27B
   base_url: ${LLM_BASE_URL:-http://pop-os:8080/v1}
-  temperature: 0.1          # Low temp for deterministic output
+  temperature: 0.1 # Low temp for deterministic output
   max_retries: 3
 
 # Code review auto-approval settings (from REFLECT cycle-eee15619)
@@ -69,7 +69,7 @@ spec_generation:
 #    unavailable/errored evaluator also blocks approval (no free pass when
 #    scoring is down).
 arch_review_gate:
-  enabled: false           # config flag — set true for regulated engagements
-  min_spec_quality: 0.8    # px eval_spec threshold (0.0–1.0)
-  min_plan_score: 0.8      # px eval_plan threshold (0.0–1.0)
-  fail_closed: true        # evaluator unavailable → block approval unless overridden
+  enabled: false # config flag — set true for regulated engagements
+  min_spec_quality: 0.8 # px eval_spec threshold (0.0–1.0)
+  min_plan_score: 0.8 # px eval_plan threshold (0.0–1.0)
+  fail_closed: true # evaluator unavailable → block approval unless overridden
