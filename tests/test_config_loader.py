@@ -159,3 +159,22 @@ class TestConfigSingleton:
         from config.loader import config
         assert isinstance(config.services.chroma.url, str)
         assert isinstance(config.services.chroma.port, int)
+
+
+class TestNoReload:
+    """E2: Config.reload() is a no-op footgun (reloads YAML, but resolved
+    attribute values are computed at import time, so reload() changed nothing
+    visible). It is removed; the module docstring states the import-time
+    resolution contract and names the one working mtime-reload path."""
+
+    def test_reload_not_present(self):
+        from config.loader import Config
+        assert not hasattr(Config, "reload")
+        assert not hasattr(Config(), "reload")
+
+    def test_docstring_states_import_time_resolution(self):
+        import config.loader
+        doc = config.loader.__doc__ or ""
+        assert "import time" in doc
+        assert "restart" in doc
+        assert "guardrails" in doc and "_get_cache()" in doc

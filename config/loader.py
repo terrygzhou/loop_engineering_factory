@@ -6,6 +6,11 @@ Resolution order for every setting:
   2. config/config.yaml
   3. Built-in default (lowest priority)
 
+Config values are resolved at import time
+(env > config.yaml > default); restart the process to pick up
+changes. `config.guardrails._get_cache()` is the one working
+mtime-reload path (REFLECT guardrails).
+
 Usage:
     from config.loader import config
     llm_base = config.services.llm.base_url
@@ -313,12 +318,6 @@ class Config:
         """
         self.paths.project_name = project_name
         self.paths.project_path_template = "{{project_name}}"
-
-    @staticmethod
-    def reload():
-        """Reload from disk."""
-        global _config
-        _config = _load_yaml(str(_config_path))
 
 
 config = Config()
