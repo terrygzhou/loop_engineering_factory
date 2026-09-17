@@ -9,7 +9,7 @@ Internal routing:
   UNIT_TEST fail → retry IMPLEMENT (max 3) or skip
   INT_TEST bugs → append to backlog → IMPLEMENT
   UAT fail → route back to BUILD parent (outer graph handles retry)
-  SECURITY_GATE → runs security-and-hardening + requesting-code-review aggregate passes
+  SECURITY_GATE → runs security-and-hardening + pre-commit-review aggregate passes
 """
 
 import ast
@@ -74,7 +74,7 @@ class BuildSubState(TypedDict):
     superweb_mode: str  # "agent" (default) | "scripted"
     superweb_agent_report: dict  # Parsed agent_report.json from agent mode
     security_review: str  # Security audit result (security-and-hardening skill)
-    code_review: str  # Code quality review result (requesting-code-review skill)
+    code_review: str  # Code quality review result (pre-commit-review skill)
 
 
 MAX_ITEM_RETRIES = None  # Runtime value from bounds.build.max_item_retries
@@ -1210,7 +1210,7 @@ def code_review_node(state: BuildSubState) -> BuildSubState:
     writer = safe_stream_writer()  # fallback for tests/CLI
     """Aggregate code quality review pass.
 
-    Runs requesting-code-review skill on the generated codebase.
+    Runs pre-commit-review skill on the generated codebase.
     """
     writer(
         {
@@ -1222,7 +1222,7 @@ def code_review_node(state: BuildSubState) -> BuildSubState:
         }
     )
     skills = state["skills"]
-    review_skill = skills.get("requesting-code-review", {})
+    review_skill = skills.get("pre-commit-review", {})
     if review_skill:
         project_path = state["project_path"]
         task = (

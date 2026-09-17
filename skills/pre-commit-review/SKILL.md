@@ -1,5 +1,5 @@
 ---
-name: requesting-code-review
+name: pre-commit-review
 description: Pre-commit code review — quality gates, security scan, auto-fix suggestions, conventional commit formatting
 category: software-development
 ---

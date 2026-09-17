@@ -51,6 +51,7 @@ No skills — human decision point only. Payload enriched with:
 | `incremental-implementation` | ✅ | Build vertical slices |
 | `frontend-ui-engineering` | ✅ | Frontend implementation guidance (injected into UI items in legacy fallback; OpenHands prompt carries UI guardrails) |
 | `context-engineering` | 📦 | Maintain build context |
+| `pre-commit-review` | 🔧 | Pre-commit quality gate (aggregate code quality pass after security-and-hardening in SECURITY_GATE) |
 
 ## SEED_DATA (test data)
 
