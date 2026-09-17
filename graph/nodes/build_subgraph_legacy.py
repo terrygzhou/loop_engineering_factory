@@ -300,6 +300,7 @@ def implement_node(state: BuildSubState) -> BuildSubState:
         if state["retry_count"] >= bounds.build.max_item_retries:
             state["backlog"][idx]["status"] = "failed"
             state["backlog_idx"] = idx + 1
+            state["retry_count"] = 0  # D3: new item gets a fresh retry budget
         return state
 
     return state
