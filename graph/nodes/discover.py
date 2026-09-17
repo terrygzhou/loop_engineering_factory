@@ -1067,9 +1067,12 @@ def _refine_idea(
 ):
     """Sharpen interview notes into a focused concept for DEFINE."""
     skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    refine_skill = skills.get("creative-ideation", {})
+    refine_skill = skills.get("idea-refine", {})
     if not refine_skill or not interview_notes:
-        return "No refinement available (missing interview notes or skill)."
+        return (
+            "No refinement available (missing interview notes "
+            "or idea-refine skill)."
+        )
 
     prompt = (
         f"Refine these interview notes into a sharp, actionable concept for the DEFINE phase.\n\n"
@@ -1078,7 +1081,7 @@ def _refine_idea(
         f"Output: A concise tech + UX concept (2-3 sentences) highlighting core innovation,"
         f" key trade-offs, and the most important design decision."
     )
-    timer = SkillTimer("creative-ideation")
+    timer = SkillTimer("idea-refine")
     result = invoke_skill(refine_skill["content"], prompt, "", llm=None)
     timer.complete()
     return result or ""

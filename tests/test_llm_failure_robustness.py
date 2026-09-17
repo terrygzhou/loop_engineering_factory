@@ -254,10 +254,31 @@ def test_discover_refine_idea_returns_empty_on_llm_fatal(monkeypatch):
     monkeypatch.setattr(
         discover_mod,
         "build_skill_registry",
-        lambda *a, **k: {"creative-ideation": {"content": "c"}},
+        lambda *a, **k: {"idea-refine": {"content": "c"}},
     )
     monkeypatch.setattr(discover_mod, "invoke_skill", lambda *a, **k: None)
 
     out = discover_mod._refine_idea("notes", "proj", "desc", {}, None)
 
     assert out == ""
+
+
+def test_discover_refine_idea_is_live_with_idea_refine_skill(monkeypatch):
+    """_refine_idea must be live for the real idea-refine skill: with a
+    registry providing idea-refine content and a non-None invoke_skill,
+    the result is the LLM output, not the placeholder string. (The lookup
+    was previously for a skill that does not exist, so the refine step
+    silently no-op'd.)"""
+    import graph.nodes.discover as discover_mod
+
+    monkeypatch.setattr(
+        discover_mod,
+        "build_skill_registry",
+        lambda *a, **k: {"idea-refine": {"content": "c"}},
+    )
+    monkeypatch.setattr(discover_mod, "invoke_skill", lambda *a, **k: "REFINED")
+
+    out = discover_mod._refine_idea("notes", "proj", "desc", {}, None)
+
+    assert out == "REFINED"
+    assert "No refinement available" not in out
