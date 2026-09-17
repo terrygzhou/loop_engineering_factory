@@ -6,6 +6,7 @@ Thresholds loaded from guardrails.yaml at runtime so REFLECT can update them.
 from langgraph.graph import END
 from graph.state import WorkflowState
 from config.guardrails import get_threshold
+from tools.acceptance import count_pytest_fail
 
 # Export END marker for use in main.py
 END_MARKER = END
@@ -162,15 +163,7 @@ def route_phase(state: WorkflowState) -> str:
     #                                        retry)
     if phase == "VERIFY":
         verify_status = state.get("artifacts", {}).get("verify_status")
-        test_errors = 0
-        test_summary = state.get("artifacts", {}).get("test_results")
-        if isinstance(test_summary, str) and test_summary:
-            try:
-                import json as _json
-
-                test_errors = _json.loads(test_summary).get("pytest_fail", 0) or 0
-            except (ValueError, TypeError):
-                test_errors = 0
+        test_errors = count_pytest_fail(state.get("artifacts", {}))
         terminal_error = bool(state.get("error")) and state.get("next_phase") is None
         gate_failed = verify_status == "fail" or test_errors > 0
         if gate_failed:

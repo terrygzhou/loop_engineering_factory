@@ -64,3 +64,25 @@ def parse_acceptance_block(text: str | None) -> list[dict] | None:
         if tests is not None:
             return tests
     return None
+
+
+def count_pytest_fail(artifacts: dict) -> int:
+    """Return the ``pytest_fail`` int from ``artifacts["test_results"]``.
+
+    The gate signal is parsed once, here, instead of inline in the
+    VERIFY branch of ``route_phase``: returns the ``pytest_fail`` int
+    when ``test_results`` is a JSON string that parses to a dict;
+    returns 0 when ``test_results`` is absent, empty, invalid JSON,
+    or the parsed value is not a dict or carries a missing/null
+    ``pytest_fail``. Never raises (Decision 3).
+    """
+    test_summary = artifacts.get("test_results")
+    if not isinstance(test_summary, str) or not test_summary:
+        return 0
+    try:
+        data = json.loads(test_summary)
+    except (ValueError, TypeError):
+        return 0
+    if not isinstance(data, dict):
+        return 0
+    return data.get("pytest_fail", 0) or 0
