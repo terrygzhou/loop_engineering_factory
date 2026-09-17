@@ -572,8 +572,8 @@ class WorkflowBridge:
         3. Delete the LangGraph checkpoint thread (prevents stale state)
         4. Reset all bridge state
         """
-        # Get the shared abort manager and signal it
-        abort_mgr = AbortManager.get()
+        # Get the shared abort manager (scoped to this workflow) and signal it
+        abort_mgr = AbortManager.get(self._thread_id)
         abort_mgr.signal()
 
         if self._aborted:
@@ -965,9 +965,9 @@ class WorkflowBridge:
         self._last_phase = None
 
         # Clear abort signal for fresh run
-        AbortManager.get().clear()
+        AbortManager.get(self._thread_id).clear()
         print(
-            f"[Bridge.run_real] abort cleared, is_aborted={AbortManager.get().is_aborted}",
+            f"[Bridge.run_real] abort cleared, is_aborted={AbortManager.get(self._thread_id).is_aborted}",
             flush=True,
         )
 
