@@ -363,3 +363,116 @@ def test_discover_resume_payload_has_no_hil_count_increment():
     assert "discover_interview_done" in (update3 or {})
     assert "discover_hil_count" not in (update3 or {})
     assert "discover_hil_count" not in resume3
+
+
+# ── E12 PENDING FIX: counter-driven dispatch at the interview pause ─────
+#
+# Spec scenario "Two DISCOVER resumes" (human-in-the-loop delta): after the
+# second resume ``state['artifacts']['discover_hil_count'] == 2``, read from
+# state — the counter is a *record of completed pauses*, written by the
+# node's returned artifacts delta, NOT the dispatch signal at suspension
+# time.
+#
+# At the interview suspension the counter is still 0 (the node writes it
+# only when the whole execution finishes both pauses), so the executor's
+# CLI HIL handlers must dispatch on the interrupt payload's ``type`` field
+# (exposed as ``HilPause.hil_type`` by the runner) — not on the persisted
+# ``artifacts.discover_hil_count``. These tests pin the executor-level
+# dispatch contract: a DISCOVER pause with ``hil_type == "interview"`` is
+# routed to the interview branch even when the suspended state carries
+# ``discover_hil_count == 0`` / absent.
+
+
+def test_hil_cli_sync_dispatches_on_hil_type_not_counter():
+    """_hil_cli_sync at a DISCOVER interview pause (counter still 0) must
+    take the interview branch — not the setup branch — because the
+    dispatch key is the interrupt payload's type, not the persisted
+    counter (PENDING FIXES item, task 5.2)."""
+    from unittest.mock import patch
+    import graph.executor as ex
+
+    # A state snapshot as it exists at the interview suspension: the
+    # node has NOT yet written the counter (it only writes on full
+    # completion of both pauses in the node execution), so
+    # artifacts.discover_hil_count is 0 / absent.
+    state_at_interview_pause = {
+        "artifacts": {"discover_hil_count": 0},
+        "project_name": "P",
+        "project_description": "D",
+        "context_folder": "",
+        "spec_text": "spec",
+    }
+
+    runner = ex.WorkflowRunner.__new__(ex.WorkflowRunner)
+    runner.auto_approve = False
+
+    with (
+        patch.object(
+            ex.WorkflowRunner, "_cli_project_setup", return_value={"_pause": "project_setup"}
+        ) as setup_spy,
+        patch.object(
+            ex.WorkflowRunner, "_cli_interview", return_value={"_pause": "interview"}
+        ) as interview_spy,
+    ):
+        # Interview pause: hil_type="interview" but the suspended state's
+        # counter is 0 — must still dispatch to the interview branch.
+        result = runner._hil_cli_sync(
+            "DISCOVER", state_at_interview_pause, hil_type="interview"
+        )
+        assert result.get("_pause") == "interview", (
+            "interview pause must dispatch to the interview branch even "
+            "when the suspended counter is 0 (stale)"
+        )
+        interview_spy.assert_called_once()
+        setup_spy.assert_not_called()
+
+        # Setup pause (counter 0, hil_type=project_setup) still takes the
+        # setup branch — no regression.
+        setup_spy.reset_mock()
+        interview_spy.reset_mock()
+        result2 = runner._hil_cli_sync(
+            "DISCOVER", state_at_interview_pause, hil_type="project_setup"
+        )
+        assert result2.get("_pause") == "project_setup"
+        setup_spy.assert_called_once()
+        interview_spy.assert_not_called()
+
+
+def test_hil_auto_approve_dispatches_on_hil_type_not_counter():
+    """_hil_auto_approve at a DISCOVER interview pause (counter still 0)
+    must take the interview branch, keyed on hil_type — not on the
+    persisted counter (PENDING FIXES item, task 5.2)."""
+    from unittest.mock import patch
+    import graph.executor as ex
+
+    state_at_interview_pause = {
+        "artifacts": {"discover_hil_count": 0},
+        "project_name": "P",
+        "project_description": "D",
+        "context_folder": "",
+        "spec_text": "spec",
+    }
+
+    runner = ex.WorkflowRunner.__new__(ex.WorkflowRunner)
+    runner.auto_approve = True
+
+    with patch("graph.executor.safe_stream_writer") as writer_spy:
+        writer_spy.return_value = lambda *a, **kw: None
+
+        # Interview pause under auto-approve: must produce the interview
+        # payload even when the suspended counter is 0.
+        result = runner._hil_auto_approve(
+            "DISCOVER", state_at_interview_pause, hil_type="interview"
+        )
+        assert result.get("_pause") == "interview", (
+            "interview pause under auto-approve must produce the interview "
+            "payload even when the suspended counter is 0"
+        )
+        assert "interview_notes" in result
+
+        # setup pause still produces the setup payload.
+        result2 = runner._hil_auto_approve(
+            "DISCOVER", state_at_interview_pause, hil_type="project_setup"
+        )
+        assert result2.get("_pause") == "project_setup"
+
