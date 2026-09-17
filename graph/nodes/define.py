@@ -17,6 +17,7 @@ from feedback.chroma_client import get_chroma_client, query_patterns
 from graph.ui_bridge import SkillTimer
 from tools.acceptance import parse_acceptance_block
 from tools.audit_logger import AuditLog
+from tools.arckit_context import arckit_advisory_block
 from tools.context_manager import prepare_context_for_llm
 from tools.llm import invoke_skill, invoke_skill_async
 from tools.loader import build_skill_registry
@@ -45,10 +46,10 @@ def _arckit_advisory_context(state: dict) -> str:
     """W3 arckit-build-context — advisory build-context blocks for the
     parallel source-driven + api-design prompts.
 
-    Returns "" when neither key is set (prompts byte-identical to a
-    non-ArcKit run). Each block is capped by
-    ``bounds.context.arckit_advisory_max_chars`` (engineering-conventions
-    prompt capping). Advisory only — never a routing input.
+    Delegates to the shared :func:`tools.arckit_context.arckit_advisory_block`
+    helper (W3: scoped to the two build-context keys this node consumed);
+    returns "" when neither key is set (prompts byte-identical to a
+    non-ArcKit run). Advisory only — never a routing input.
     """
     arts = state.get("artifacts") or {}
     cap = bounds.context.arckit_advisory_max_chars
@@ -57,13 +58,12 @@ def _arckit_advisory_context(state: dict) -> str:
         ("arckit_integration_standards", "INTEGRATION STANDARDS"),
         ("arckit_nfr_constraints", "NFR CONSTRAINTS"),
     ):
-        raw = arts.get(key)
-        if not raw:
-            continue
-        blocks.append(
-            f"## ArcKit {header} (advisory context — conform to these "
-            f"standards where feasible)\n{str(raw)[:cap]}"
-        )
+        block = arckit_advisory_block({key: arts.get(key)}, max_chars=cap)
+        if block:
+            blocks.append(
+                f"## ArcKit {header} (advisory context — conform to these "
+                f"standards where feasible)\n{block}"
+            )
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 

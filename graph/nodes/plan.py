@@ -19,6 +19,7 @@ from config.bounds_loader import bounds
 from config.loader import config as _cfg
 from feedback.chroma_client import get_chroma_client, query_patterns
 from graph.ui_bridge import SkillTimer
+from tools.arckit_context import arckit_advisory_block
 from tools.audit_logger import AuditLog
 from tools.context_manager import prepare_context_for_llm
 from tools.llm import invoke_skill, invoke_skill_async
@@ -92,6 +93,12 @@ def plan_node(state: dict) -> dict:
         context_parts.append(f"Interview notes:\n{interview}")
     if feedback_context:
         context_parts.append(f"\n\n{feedback_context}\n")
+    # ArcKit advisory block (shared helper, skill-map-arckit-fit task 2):
+    # carries arckit_product_backlog + other set ArcKit advisory keys into
+    # the planning context. Byte-identical when no ArcKit keys are set.
+    advisory = arckit_advisory_block(state.get("artifacts", {}))
+    if advisory:
+        context_parts.append(advisory)
     base_context = "\n\n".join(context_parts)
 
     artifacts_delta: dict[str, Any] = {}
