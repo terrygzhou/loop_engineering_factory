@@ -132,14 +132,15 @@ def apply_yaml_diff(config_path: str, diffs: dict) -> bool:
     threshold updates, key additions/removals, and value modifications.
     Returns True on success.
     """
-    # Handle prompt template updates (Python file)
+    # Handle prompt template updates (Python file).  The structured
+    # shape ({section, key, op, value}) routes on the section name;
+    # the legacy changes-list shape routes on the skill name.
+    section = diffs.get("section", "")
+    if section in ("interview_me", "spec_generation", "api_and_interface_design"):
+        return apply_prompt_diff(section, diffs)
     for change in diffs.get("changes", []):
         skill_name = change.get("skill", "")
-        if skill_name in (
-            "interview_me",
-            "spec_generation",
-            "api_and_interface_design",
-        ):
+        if skill_name in ("interview_me", "spec_generation", "api_and_interface_design"):
             return apply_prompt_diff(skill_name, diffs)
 
     try:
@@ -224,49 +225,162 @@ def apply_yaml_diff(config_path: str, diffs: dict) -> bool:
         return False
 
 
+def _template_file_path() -> str:
+    """Return the absolute path to ``config/prompt_templates.py``.
+
+    Indirected so tests can monkeypatch the location.
+    """
+    import os
+
+    return os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "config", "prompt_templates.py"
+    )
+
+
+def _escape_template_body(value: str) -> str:
+    """Escape value so it is safe inside a triple-quoted assignment
+    in a .py source file.
+
+    Escapes backslashes first (order matters: an escaped backslash
+    must not re-escape the quote escapes that follow), then
+    double-quotes.  Newlines are left literal (triple-quoted
+    strings allow raw newlines, and they are the most readable form).
+
+    The result is always safe to splice into a triple-quoted
+    assignment.  Even a value containing a literal triple-quote
+    sequence cannot terminate the assignment early, because every
+    quote character in the value is escaped.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _quote_aware_template_regex(template_name: str) -> re.Pattern:
+    """Build a quote-aware regex that matches the existing
+    triple-quoted assignment for ``template_name`` in
+    ``config/prompt_templates.py``.
+
+    The body may contain double-quote characters — the previous
+    naive character-class body was broken for real templates.
+    This match uses a non-greedy body up to the closing
+    triple-quote, with ``re.DOTALL`` so newlines in the body
+    are handled.
+    """
+    return re.compile(
+        r"(?P<match>" + re.escape(template_name)
+        + r"\s*=\s*\"\"\".*?\"\"\")",
+        re.DOTALL,
+    )
+
+
+def _extract_structured_value(diffs: dict, template_name: str) -> str | None:
+    """Extract the new template body from ``diffs``.
+
+    Accepts two shapes (in priority order):
+    1. **Structured** — ``{"section": <template_name>,
+       "key": "template_body", "op": "replace",
+       "value": <new text>}`` (Decision 4, the W3 shape already
+       used for config diffs).  The ``section`` must name the
+       target template.
+    2. **Legacy** — ``{"changes": [{"skill": <template_name>,
+       "change": <new text>, "rationale": ..., ...}, ...]}``.
+       Each change is routed through the structured path.  This
+       shape is preserved for backward compatibility with existing
+       REFLECT call sites.
+
+    Returns the new body text, or ``None`` if no matching value is
+    present.
+    """
+    # Structured shape — same shape REFLECT emits for config diffs.
+    if (
+        diffs.get("section")
+        and diffs.get("key") == "template_body"
+        and diffs.get("op") == "replace"
+        and "value" in diffs
+        and diffs.get("section") == template_name
+    ):
+        return diffs.get("value")
+
+    # Legacy ``changes`` list shape — route each entry through the
+    # structured path.  Only the entry whose ``skill`` matches
+    # ``template_name`` is applied.
+    for change in diffs.get("changes", []):
+        if change.get("skill") == template_name:
+            return change.get("change", "")
+
+    return None
+
+
 def apply_prompt_diff(template_name: str, diffs: dict) -> bool:
     """
     Apply prompt template diffs from REFLECT analysis.
     Reads config/prompt_templates.py, finds the target template,
-    and applies the LLM-suggested changes.
+    and applies the structured (or legacy-routed) new body.
     Returns True on success.
     """
-    import os
+    import logging
 
+    log = logging.getLogger(__name__)
     try:
-        template_file = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)), "config", "prompt_templates.py"
-        )
+        template_file = _template_file_path()
         with open(template_file) as f:
             content = f.read()
 
-        # Find the target template in the file
-        pattern = rf'({template_name}\s*=\s*"""[^\"]*""")'
-        match = re.search(pattern, content, re.DOTALL)
+        new_value = _extract_structured_value(diffs, template_name)
+        if new_value is None:
+            print(f"  ✗ No template_body value for '{template_name}' in diffs")
+            log.warning(
+                "apply_prompt_diff: no template_body value for %r in diffs",
+                template_name,
+            )
+            return False
+
+        # Quote-aware regex: matches the existing triple-quoted
+        # body even when it contains double-quote characters.
+        pattern = _quote_aware_template_regex(template_name)
+        match = pattern.search(content)
         if not match:
             print(f"  ✗ Template '{template_name}' not found in {template_file}")
+            log.warning(
+                "apply_prompt_diff: template %r not found in %s",
+                template_name,
+                template_file,
+            )
             return False
 
         current_template = match.group(1)
-        for change in diffs.get("changes", []):
-            if change.get("skill") == template_name:
-                change_desc = change.get("change", "")
-                rationale = change.get("rationale", "")
-                # Replace the template content with the LLM's improved version
-                # The change description should contain the revised prompt text
-                new_template = f'{template_name} = """{change_desc}"""'
-                content = content.replace(current_template, new_template)
-                print(f"     → {template_name}: updated ({rationale})")
+
+        # Build the replacement by escaping the value (triple-quote-
+        # safe: backslashes first, then double-quotes; raw newlines
+        # are preserved inside the triple-quoted literal).
+        escaped_value = _escape_template_body(new_value)
+        new_template = f'{template_name} = """{escaped_value}"""'
+        candidate = content.replace(current_template, new_template, 1)
+
+        # Validate the candidate BEFORE writing to disk — a
+        # non-compiling replacement leaves the original file
+        # byte-identical (spec scenario "Bad replacement is
+        # rejected"; the rejection is logged, not raised).
+        try:
+            compile(candidate, template_file, "exec")
+        except SyntaxError as e:
+            print(
+                f"  ✗ Prompt diff for '{template_name}' rejected — "
+                f"candidate file does not compile: {e}"
+            )
+            log.warning(
+                "apply_prompt_diff: candidate for %r rejected by compile(): %s",
+                template_name,
+                e,
+            )
+            return False
 
         with open(template_file, "w") as f:
-            f.write(content)
+            f.write(candidate)
         print(f"  ✓ Prompt diff applied to {template_file}")
         return True
     except Exception as e:
         print(f"  ✗ Failed to apply prompt diff: {e}")
-        import traceback
-
-        traceback.print_exc()
+        log.exception("apply_prompt_diff: failed to apply diff for %r", template_name)
         return False
 
 
