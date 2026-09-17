@@ -64,7 +64,7 @@ No skills — human decision point only. Payload enriched with:
 
 | Skill | Status | Purpose |
 |-------|--------|---------|
-| `code-review-and-quality` | 📦 | Code quality review |
+| `pre-commit-review` | 🔧 | Code quality review (multi-axis quality gate; superseded `code-review-and-quality`) |
 | `security-and-hardening` | ✅ | Security audit |
 | `debugging-and-error-recovery` | 📦 | Debug verification failures |
 | `browser-testing-with-devtools` | 📦 | Browser-based E2E testing |
@@ -108,7 +108,7 @@ No skills — human decision point only. Payload enriched with:
 ## Wiring Priority
 
 1. **HIGH**: `planning-and-task-breakdown` → PLAN (replaces legacy `writing-plans`)
-2. **HIGH**: `code-review-and-quality` → VERIFY
+2. **HIGH**: `pre-commit-review` → VERIFY
 3. **MED**: `debugging-and-error-recovery` → SEED_DATA / VERIFY
 4. **MED**: `idea-refine` → DISCOVER
 5. **LOW**: Remaining 📦 skills — phase-dependent based on project type

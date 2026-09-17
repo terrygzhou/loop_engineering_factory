@@ -80,6 +80,6 @@ Called as an aggregate pass after IMPLEMENT completion in BUILD subgraph. Scans 
 
 ## Related Skills
 
-- `requesting-code-review` — post-security review pass
+- `pre-commit-review` — post-security review pass
 - `docker-compose-deployment` — container security (least-privilege users, read-only FS)
 - `production-deployment` — cloud security (WAF, VPC, secrets management)

@@ -7,7 +7,7 @@ category: github
 metadata:
   hermes:
     tags: [git, workflow, commits, branching, worktrees, gh-cli, debugging]
-    related_skills: [requesting-code-review, test-driven-development, subagent-driven-development]
+    related_skills: [pre-commit-review, test-driven-development, subagent-driven-development]
 ---
 
 # Git Workflow

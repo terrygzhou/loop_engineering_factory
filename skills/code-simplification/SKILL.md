@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [refactoring, simplification, code-quality, readability]
-    related_skills: [test-driven-development, requesting-code-review, fastapi-jinja2-feature-build]
+    related_skills: [test-driven-development, pre-commit-review, fastapi-jinja2-feature-build]
 ---
 
 # Code Simplification
@@ -213,7 +213,7 @@ Before declaring simplification complete:
 
 **test-driven-development:** Run tests before and after every simplification step. Never simplify without test coverage.
 
-**requesting-code-review:** Code review flags complexity issues — use this skill to fix them.
+**pre-commit-review:** Code review flags complexity issues — use this skill to fix them.
 
 **fastapi-jinja2-feature-build:** After Phase 4 (wiring up), do a simplification pass on the new code.
 
