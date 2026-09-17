@@ -111,11 +111,10 @@ No skills — human decision point only. Payload enriched with:
 
 ## Wiring Priority
 
-1. **HIGH**: `planning-and-task-breakdown` → PLAN (replaces legacy `writing-plans`)
-2. **HIGH**: `pre-commit-review` → VERIFY
-3. **MED**: `source-driven-development` → DEFINE
-4. **MED**: `context-engineering` → BUILD
-5. **MED**: `ci-cd-and-automation` → SHIP
-6. **MED**: `documentation-and-adrs` → PLAN
-7. **MED**: `browser-testing-with-devtools` → VERIFY
-8. **LOW**: Remaining 📦 skills — phase-dependent based on project type
+1. **HIGH**: `pre-commit-review` → VERIFY
+2. **HIGH**: `documentation-and-adrs` → PLAN
+3. **MED**: `context-engineering` → BUILD
+4. **MED**: `ci-cd-and-automation` → SHIP
+5. **MED**: `browser-testing-with-devtools` → VERIFY
+6. **LOW**: `code-simplification` → PLAN
+7. **LOW**: Remaining 📦 skills — phase-dependent based on project type
