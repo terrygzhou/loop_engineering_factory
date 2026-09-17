@@ -1219,7 +1219,7 @@ const SKILL_ICONS = {
   'spec-driven-development': '📝',
   'source-driven-development': '📚',
   'api-and-interface-design': '🔌',
-  'code-review-and-quality': '✅',
+  'pre-commit-review': '✅',
 };
 
 function getSkillIcon(skill) {

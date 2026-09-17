@@ -1,6 +1,6 @@
 """
 VERIFY node: runs code quality review on the generated project using the
-code-review-and-quality skill.
+pre-commit-review skill.
 
 Scans source files, invokes multi-axis review (correctness, readability,
 architecture, security, performance), writes report to build/code_review.md,
@@ -172,7 +172,7 @@ def verify_node(state: dict) -> dict:
     """
     VERIFY phase: Run multi-axis code quality review on the generated project.
 
-    Loads the code-review-and-quality skill, collects source files from
+    Loads the pre-commit-review skill, collects source files from
     state.project_path, sends them through the LLM for review, writes the
     report to build/code_review.md, and updates metrics.
 
@@ -218,7 +218,7 @@ def verify_node(state: dict) -> dict:
     if project_path and Path(project_path).exists():
         # ── Load skill registry ──
         skills = build_skill_registry(config.workflow.skill_registry_path)
-        cr_skill = skills.get("code-review-and-quality", {})
+        cr_skill = skills.get("pre-commit-review", {})
 
         if not cr_skill:
             writer(
@@ -226,7 +226,7 @@ def verify_node(state: dict) -> dict:
                     "type": "progress",
                     "phase": "VERIFY",
                     "step": "warning",
-                    "detail": "  ⚠ code-review-and-quality skill not found — running basic file scan",
+                    "detail": "  ⚠ pre-commit-review skill not found — running basic file scan",
                     "ts": time.time(),
                 }
             )
@@ -287,11 +287,11 @@ def verify_node(state: dict) -> dict:
                         "type": "progress",
                         "phase": "VERIFY",
                         "step": "progress",
-                        "detail": "  → Running code-review-and-quality review...",
+                        "detail": "  → Running pre-commit-review...",
                         "ts": time.time(),
                     }
                 )
-                cr_timer = SkillTimer("code-review-and-quality")
+                cr_timer = SkillTimer("pre-commit-review")
                 review_text = invoke_skill(
                     cr_skill["content"],
                     (
