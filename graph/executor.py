@@ -139,7 +139,6 @@ def get_project_path() -> str:
 def build_executor_state(
     cycle_id: str = "1",
     project_name: str = "",
-    spec_text: str = "",
     context_folder: str = "",
     improve_mode: bool = False,
     arckit_artifacts: list[str] | None = None,
@@ -239,7 +238,6 @@ class WorkflowRunner:
     def run_interactive(
         self,
         project_name: str,
-        spec_text: str = "",
         context_folder: str = "",
         auto_approve: bool = False,
         improve_mode: bool = False,
@@ -256,7 +254,6 @@ class WorkflowRunner:
         state = build_executor_state(
             cycle_id=cycle_id,
             project_name=project_name,
-            spec_text=spec_text,
             context_folder=context_folder,
             improve_mode=improve_mode,
         )

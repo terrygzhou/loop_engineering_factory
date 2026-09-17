@@ -1404,7 +1404,6 @@ class WorkflowBridge:
         state = build_executor_state(
             cycle_id=cycle_id,
             project_name=project_name,
-            spec_text=spec_text,
             context_folder=context_folder,
             arckit_artifacts=arckit_artifacts,
         )

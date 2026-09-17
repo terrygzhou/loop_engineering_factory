@@ -104,7 +104,6 @@ def main():
     runner = WorkflowRunner(auto_approve=args.auto_approve)
     result = runner.run_interactive(
         project_name=name,
-        spec_text=spec,
         context_folder=context,
         auto_approve=args.auto_approve,
         improve_mode=args.improve,
