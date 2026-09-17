@@ -361,3 +361,60 @@ def test_route_build_loops_when_uat_fails_and_budget_ok():
         "artifacts": {"loop_counts": {"BUILD": 0}},
     }
     assert route_phase(s) == "BUILD"
+
+
+# ── E1: increment_loop pure helper ─────────────────────────────────
+# (P0-A4, state-schema-contract §3.1)
+
+
+def test_increment_loop_increments_from_zero():
+    from graph.edges import increment_loop
+
+    new_artifacts, exceeded = increment_loop({}, "DEFINE")
+    assert not exceeded
+    assert new_artifacts["loop_counts"]["DEFINE"] == 1
+
+
+def test_increment_loop_0_to_1_not_exceeded():
+    from graph.edges import increment_loop
+
+    new_artifacts, exceeded = increment_loop({"loop_counts": {}}, "DEFINE")
+    assert not exceeded
+    assert new_artifacts["loop_counts"]["DEFINE"] == 1
+
+
+def test_increment_loop_halt_at_max():
+    from graph.edges import increment_loop
+
+    new_artifacts, exceeded = increment_loop({"loop_counts": {"DEFINE": 1}}, "DEFINE")
+    assert exceeded
+    assert new_artifacts["loop_counts"]["DEFINE"] == 2
+
+
+def test_increment_loop_stays_exceeded_beyond_max():
+    from graph.edges import increment_loop
+
+    new_artifacts, exceeded = increment_loop({"loop_counts": {"DEFINE": 2}}, "DEFINE")
+    assert exceeded
+    assert new_artifacts["loop_counts"]["DEFINE"] == 3
+
+
+def test_increment_loop_reset_on_success():
+    """Caller passes a fresh dict (no counter yet) -> back to 0 semantics."""
+    from graph.edges import increment_loop
+
+    new_artifacts, exceeded = increment_loop({}, "VERIFY")
+    assert not exceeded
+    assert new_artifacts["loop_counts"]["VERIFY"] == 1
+    assert "loop_counts" in new_artifacts
+
+
+def test_increment_loop_is_pure_input_unchanged():
+    from graph.edges import increment_loop
+
+    arts = {"loop_counts": {"DEFINE": 1}, "spec_text": "keep"}
+    new_arts, _ = increment_loop(arts, "DEFINE")
+    assert arts == {"loop_counts": {"DEFINE": 1}, "spec_text": "keep"}
+    assert new_arts is not arts
+    assert new_arts["loop_counts"]["DEFINE"] == 2
+    assert new_arts["spec_text"] == "keep"

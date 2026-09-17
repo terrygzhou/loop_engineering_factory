@@ -232,6 +232,50 @@ class TestRoutePhase:
         result = route_phase(state)
         assert result == "__end__" or result is not None
 
+    def test_verify_routing_never_mutates_state_artifacts(self):
+        """State invariance (P0-A4, state-schema-contract §3.2): after
+        route_phase(state) for VERIFY, state["artifacts"] is byte-identical
+        — edges never mutate state. Exercises all VERIFY outcomes
+        (pass → SHIP, fail → BUILD/ERROR, budget-exhausted → ERROR)."""
+        from graph.edges import route_phase
+
+        cases = [
+            # (verify_status, test_fail, loop_count, expected)
+            ("pass", 0, 0, "SHIP"),
+            ("fail", 0, 0, "BUILD"),  # gate failed, counter 0, no terminal error
+            ("fail", 0, 1, "BUILD"),  # gate failed, retry
+            ("fail", 3, 0, "BUILD"),  # pytest_fail signal, first failure
+            ("fail", 0, 2, "ERROR"),  # budget exhausted
+        ]
+        for verify_status, test_fail, loop_count, expected in cases:
+            artifacts = {
+                "verify_status": verify_status,
+                "loop_counts": {"VERIFY": loop_count},
+                "spec_refined": "the spec",
+            }
+            if test_fail:
+                import json as _json
+
+                artifacts["test_results"] = _json.dumps({"pytest_fail": test_fail})
+            state: dict = {
+                "phase": "VERIFY",
+                "metrics": MagicMock(),
+                "error": None,
+                "next_phase": None,
+                "artifacts": artifacts,
+            }
+            snapshot = _json_dump_artifacts(artifacts)
+            assert route_phase(state) == expected
+            assert _json_dump_artifacts(state["artifacts"]) == snapshot, (
+                "route_phase mutated state['artifacts'] for VERIFY"
+            )
+
+
+def _json_dump_artifacts(artifacts):
+    import json
+
+    return json.dumps(artifacts, sort_keys=True)
+
     def test_valid_phases_constant(self):
         from graph.edges import VALID_PHASES
         assert "DISCOVER" in VALID_PHASES
