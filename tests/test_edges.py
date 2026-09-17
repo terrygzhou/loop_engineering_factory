@@ -276,12 +276,13 @@ def _json_dump_artifacts(artifacts):
 
     return json.dumps(artifacts, sort_keys=True)
 
-    def test_valid_phases_constant(self):
-        from graph.edges import VALID_PHASES
-        assert "DISCOVER" in VALID_PHASES
-        assert "REFLECT" in VALID_PHASES
-        assert "ERROR" in VALID_PHASES
-        assert "UNKNOWN" not in VALID_PHASES
+
+def test_valid_phases_constant():
+    from graph.edges import VALID_PHASES
+    assert "DISCOVER" in VALID_PHASES
+    assert "REFLECT" in VALID_PHASES
+    assert "ERROR" in VALID_PHASES
+    assert "UNKNOWN" not in VALID_PHASES
 
 
 class TestForwardPaths:
