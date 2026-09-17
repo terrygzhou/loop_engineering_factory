@@ -19,23 +19,24 @@ All skills are in `skills/` and auto-discovered by `tools/loader.py`.
 | `fabric-prompts` | ✅ | Prompt optimization |
 | `coding-principles` | ✅ | Coding principles guidance |
 | `idea-refine` | ✅ | Clarify and refine vague ideas into concrete specs |
+| `interview-me` | ✅ | Structured user interview to extract requirements |
 
 ## DEFINE (specification)
 
 | Skill | Status | Purpose |
 |-------|--------|---------|
 | `spec-driven-development` | ✅ | Generate structured 6-section spec |
-| `source-driven-development` | 📦 | Base decisions on existing codebase analysis |
+| `source-driven-development` | ✅ | Base decisions on existing codebase analysis |
 | `api-and-interface-design` | ✅ | Design API contracts and interfaces |
 
 ## PLAN (implementation plan)
 
 | Skill | Status | Purpose |
 |-------|--------|---------|
-| `planning-and-task-breakdown` | 📦 | Generate task breakdown and milestones |
+| `planning-and-task-breakdown` | ✅ | Generate task breakdown and milestones |
 | `doubt-driven-development` | ✅ | Challenge architectural assumptions |
 | `documentation-and-adrs` | 📦 | Generate architecture decision records |
-| `code-simplification` | ✅ | Ensure plan stays lean |
+| `code-simplification` | 📦 | Ensure plan stays lean |
 
 ## ARCH_REVIEW (human gate)
 
@@ -104,8 +105,8 @@ No skills — human decision point only. Payload enriched with:
 
 - **Total agent-skills**: 24
 - **Downloaded to project**: 24/24
-- **Active in graph**: 15
-- **Ready to wire**: 5
+- **Active in graph**: 17
+- **Ready to wire**: 3
 - **Local custom**: 7
 
 ## Wiring Priority
