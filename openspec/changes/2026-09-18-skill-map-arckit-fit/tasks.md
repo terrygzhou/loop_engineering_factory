@@ -20,61 +20,60 @@ Steps:
 5. Wiring Priority: remove `context-engineering` / `debugging-and-error-recovery`
    entries that claim DISCOVER/SEED_DATA/VERIFY wiring that doesn't exist in code.
 
-## 2. Feed `arckit_product_backlog` into PLAN task-breakdown prompt
+## 2. Consolidate ArcKit advisory block into a shared helper, feed `arckit_product_backlog` into PLAN
 
 **Files:**
-- Modify: `graph/nodes/plan.py` (context_parts construction, ~L84–92)
-- Test: `tests/test_plan_arckit_backlog.py` (new)
+- Modify: `graph/nodes/define.py` — extract `_arckit_advisory_context` logic into `tools/arckit_context.py`
+- Create: `tools/arckit_context.py` — `arckit_advisory_block(state) -> str` returning "" when no ArcKit advisory keys are set, else a consolidated header + JSON
+- Modify: `graph/nodes/plan.py` — add `arckit_product_backlog` to the advisory block (via the shared helper), append to `context_parts` when non-empty
+- Test: `tests/test_arckit_context.py` (new)
 
 Steps:
-1. In `graph/nodes/plan_node()` context construction, after the interview
-   append, add an advisory block when
-   `state.get("artifacts", {}).get("arckit_product_backlog")` is set and non-empty:
+1. Create `tools/arckit_context.py`:
+   ```python
+   def arckit_advisory_block(artifacts: dict, max_chars: int = 4000) -> str:
+       """Return a consolidated advisory block for any ArcKit keys present in artifacts.
+       Returns "" when no advisory keys are set. Caps total JSON by max_chars."""
    ```
-   ## PRODUCT BACKLOG (advisory — from ArcKit OAPR; use to constrain task ordering)
-   <json>
-   ```
-   Cap the JSON by `bounds.context.arckit_advisory_max_chars` (existing bound,
-   default 4000) — same cap used by `_arckit_advisory_context` in
-   `graph/nodes/define.py:45-60`.
-2. When the key is absent or empty: `context_parts` is byte-identical to
-   today's (no new block) — test this explicitly.
-3. Test file `tests/test_plan_arckit_backlog.py`:
-   - `test_plan_prompt_includes_backlog_when_set`: monkeypatch
-     `invoke_skill` to capture context; seed `artifacts["arckit_product_backlog"]`
-     with a small JSON; assert the captured context contains the block header
-     `## PRODUCT BACKLOG` and the backlog JSON.
-   - `test_plan_prompt_unchanged_when_backlog_absent`: same setup without the
-     key; assert the block header is NOT in the captured context and the
-     context matches the pre-change baseline (spec + interview only).
-4. Run: `pytest tests/test_plan_arckit_backlog.py tests/test_plan.py tests/test_w2_wayforward.py -q` (plan.py
-   has existing coverage in `test_w2_wayforward.py`? check — use whichever
-   plan tests exist) → 0 new failures.
+   Keys it checks: `arckit_product_backlog`, `arckit_strategy_waves`,
+   `arckit_integration_standards`, `arckit_nfr_constraints`,
+   `arckit_security_controls`, `arckit_data_model`.
+   Each key present and non-empty → one `## <KEY_NAME>` section with the JSON.
+   Total output capped at `max_chars`.
+2. Refactor `graph/nodes/define.py::_arckit_advisory_context` to call
+   `arckit_advisory_block` (delete the inline logic).
+3. In `graph/nodes/plan.py` context_parts construction (~L84–92), call
+   `arckit_advisory_block(state.get("artifacts", {}))` and append to
+   `context_parts` when non-empty. Byte-identical when no ArcKit keys set.
+4. Test file `tests/test_arckit_context.py`:
+   - `test_block_empty_when_no_keys`: call with `{}` → `""`
+   - `test_block_includes_backlog_when_set`: seed `artifacts["arckit_product_backlog"]` → block contains `## arckit_product_backlog`
+   - `test_block_caps_at_max_chars`: seed large JSON → output ≤ max_chars
+   - `test_plan_prompt_includes_backlog_when_set`: monkeypatch `invoke_skill`;
+     seed `arckit_product_backlog`; assert `## PRODUCT BACKLOG` in captured context
+   - `test_plan_prompt_unchanged_when_absent`: no keys → byte-identical context
+5. Run: `pytest tests/test_arckit_context.py -q` → green.
 
-## 3. Feed `arckit_data_model` into SEED_DATA seed prompt
+## 3. Remove dead `spec_text` parameter from `build_executor_state` (review finding I-1)
 
 **Files:**
-- Modify: `graph/nodes/build_subgraph_legacy.py` `_seed_data_node`
-  (the `context = spec_text + data_models + api_specs` construction, ~L648–654)
-- Test: `tests/test_seed_data_arckit.py` (new)
+- Modify: `graph/executor.py` — remove `spec_text: str = ""` from `build_executor_state` signature (L142) and from the `WorkflowState(...)` call
+- Test: `tests/test_executor.py` (new or existing — add test if none exists)
 
 Steps:
-1. When `state.get("artifacts", {}).get("arckit_data_model")` is set and
-   non-empty, append to the seed prompt context:
-   ```
-   \n\nArcKit DATA model (advisory — prefer these entities/classification scheme):
-   <json>
-   ```
-   No cap needed here (the seed prompt is a single local LLM call, not a
-   parallel fan-out; the DATA model JSON is bounded by the ArcKit loader's
-   own size limits).
-2. When absent: context is byte-identical to today's.
-3. Test file `tests/test_seed_data_arckit.py`:
-   - `test_seed_prompt_includes_data_model_when_set`: monkeypatch
-     `invoke_skill`; seed `artifacts["arckit_data_model"]`; assert header
-     present in captured context.
-   - `test_seed_prompt_unchanged_when_data_model_absent`: assert header absent.
-4. Run: `pytest tests/test_seed_data_arckit.py -q` → green.
+1. Remove `spec_text: str = ""` from `build_executor_state` signature.
+   Remove the `spec_text=spec_text` kwarg from the `WorkflowState(...)` call
+   (P0-A1 already removed it from the schema; this is the residual).
+2. Remove `spec_text: str = ""` from `run_interactive` signature (L242) and
+   from the `build_executor_state(...)` call inside it.
+3. Remove `spec_text=spec_text` from `build_executor_state(...)` call at L259.
+4. Update any callers that pass `spec_text` — grep for `build_executor_state(`
+   and `run_interactive(` to find all call sites.
+5. Test: add `tests/test_executor.py::test_build_executor_state_has_no_spec_text`
+   asserting the function signature does not include `spec_text` (via
+   `inspect.signature`), and that calling `build_executor_state(cycle_id="1",
+   project_name="x")` works without error.
+6. Run: `pytest tests/test_executor.py -q` → green.
 
 ## 4. Close-out gate
 

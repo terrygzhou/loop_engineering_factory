@@ -1,41 +1,94 @@
 # Spec Delta: workflow-orchestration
 
-## MODIFIED: PLAN consumes `arckit_product_backlog` as advisory context
+## ADDED: ArcKit advisory block consolidated into `tools/arckit_context.py`
 
-When `artifacts["arckit_product_backlog"]` is set and non-empty, the PLAN
-node's task-breakdown LLM call MUST include an advisory block carrying the
-backlog JSON, capped by `bounds.context.arckit_advisory_max_chars` (4000).
-The block is advisory — it constrains task ordering but does not change the
-plan's schema or the phase's routing.
+A new shared helper `tools/arckit_context.py::arckit_advisory_block(
+artifacts: dict, max_chars: int = 4000) -> str` MUST provide a single
+entry point for building the consolidated ArcKit advisory block from the
+state's `artifacts` dict.
+
+Keys it checks (in order): `arckit_product_backlog`,
+`arckit_strategy_waves`, `arckit_integration_standards`,
+`arckit_nfr_constraints`, `arckit_security_controls`,
+`arckit_data_model`.
+
+For each key present and non-empty, the block includes one
+`## <KEY_NAME>` section with the JSON value. Total output is capped at
+`max_chars`.
+
+When no advisory keys are set, the helper returns `""` — callers that
+append the result to `context_parts` produce a byte-identical prompt to
+the pre-change behavior.
+
+### Scenarios
+
+**No ArcKit advisory keys**
+- `artifacts = {}` → `arckit_advisory_block(artifacts)` returns `""`.
+
+**Backlog set**
+- `artifacts["arckit_product_backlog"]` = valid JSON string → the
+  returned block contains `## arckit_product_backlog` + JSON.
+
+**Multiple keys set**
+- Two or more advisory keys present → block contains one section per
+  key, in the fixed key order, total output ≤ `max_chars`.
+
+**Larger than cap**
+- A single key's JSON exceeds `max_chars` → output is truncated to
+  `max_chars`.
+
+## MODIFIED: PLAN consumes ArcKit advisory block via shared helper
+
+The PLAN node's `context_parts` construction MUST call
+`arckit_advisory_block(state.get("artifacts", {}))` and append the result
+to `context_parts` when non-empty. When no ArcKit advisory keys are set,
+the prompt context is byte-identical to the pre-change behavior
+(spec + interview + rejection feedback only).
 
 ### Scenarios
 
 **Backlog present**
 - `artifacts["arckit_product_backlog"]` = valid JSON string → the
-  `planning-and-task-breakdown` prompt context contains a
-  `## PRODUCT BACKLOG` header + the (possibly capped) JSON.
+  `planning-and-task-breakdown` prompt context contains an
+  `## arckit_product_backlog` advisory header + JSON.
 
 **Backlog absent**
-- `artifacts["arckit_product_backlog"]` missing or empty → the prompt
-  context is byte-identical to the pre-change behavior (spec + interview +
-  rejection feedback only). No header, no placeholder.
+- No ArcKit advisory keys set → prompt context is byte-identical to
+  pre-change behavior. No header, no placeholder.
 
-## ADDED: SEED_DATA consumes `arckit_data_model` as advisory context
+## MODIFIED: `define.py::_arckit_advisory_context` delegates to shared helper
 
-When `artifacts["arckit_data_model"]` is set and non-empty, the SEED_DATA
-seed-script LLM call MUST include an advisory block carrying the DATA model
-JSON. When absent, the seed prompt is byte-identical to the pre-change
-behavior.
+`graph/nodes/define.py` MUST replace its inline `_arckit_advisory_context`
+logic with a call to `arckit_advisory_block`. The DEFINE node's prompt
+context for `arckit_nfr_constraints` + `arckit_integration_standards`
+remains byte-identical when those keys are absent.
 
 ### Scenarios
 
-**DATA model present**
-- `artifacts["arckit_data_model"]` = JSON string with entities → seed
-  prompt context contains an `ArcKit DATA model` advisory header + JSON.
+**NFR constraints absent**
+- No `arckit_nfr_constraints` / `arckit_integration_standards` in
+  `artifacts` → DEFINE prompt context unchanged.
 
-**DATA model absent**
-- key missing or empty → seed prompt context is byte-identical to today's
-  (`spec_text + data_models + api_specs`).
+**NFR constraints present**
+- Keys set → DEFINE prompt context includes the consolidated advisory
+  block (same as pre-refactor, but now via the shared helper).
+
+## ADDED: Dead `spec_text` parameter removed from `build_executor_state`
+
+`graph/executor.py::build_executor_state` MUST NOT have a `spec_text`
+parameter. The parameter was dead after P0-A1 removed `spec_text` from
+`WorkflowState`; nodes read `artifacts["spec_refined"]` instead.
+`run_interactive` MUST NOT pass `spec_text` to `build_executor_state`.
+
+### Scenarios
+
+**Call `build_executor_state` without `spec_text`**
+- `build_executor_state(cycle_id="1", project_name="x")` → works
+  without error; `WorkflowState` is constructed correctly.
+
+**Signature inspection**
+- `inspect.signature(build_executor_state).parameters` does not contain
+  `"spec_text"`.
 
 ## Non-goals (inherited)
 
@@ -48,3 +101,5 @@ behavior.
 - No routing / Decision-2 / loop-budget change.
 - `arckit_strategy_waves`, `arckit_open_questions`, `oaal_sprint_map`, and
   the four W3 build-context keys keep their existing consumers unchanged.
+- SEED_DATA already consumes `arckit_data_model` deterministically in the
+  active seed node; no change needed to the seed path.
