@@ -16,9 +16,9 @@ All skills are in `skills/` and auto-discovered by `tools/loader.py`.
 
 | Skill | Status | Purpose |
 |-------|--------|---------|
-| `interview-me` | ✅ | Structured user interview for requirements |
-| `idea-refine` | 📦 | Clarify and refine vague ideas into concrete specs |
-| `context-engineering` | 📦 | Build project context for downstream phases |
+| `fabric-prompts` | ✅ | Prompt optimization |
+| `coding-principles` | ✅ | Coding principles guidance |
+| `idea-refine` | ✅ | Clarify and refine vague ideas into concrete specs |
 
 ## DEFINE (specification)
 
@@ -77,14 +77,17 @@ No skills — human decision point only. Payload enriched with:
 | `ci-cd-and-automation` | 📦 | CI/CD pipeline setup |
 | `observability-and-instrumentation` | ✅ | Monitoring and observability |
 | `performance-optimization` | ✅ | Performance audit |
-| `git-workflow-and-versioning` | 📦 | Git operations and versioning |
+| `git-workflow` | ✅ | Git operations and versioning (supersedes `git-workflow-and-versioning` — see note below) |
+
+> Superseded: `git-workflow-and-versioning` is no longer referenced by any
+> graph node; the SHIP/REFLECT nodes call `git-workflow` instead. Kept in
+> `skills/` for reference.
 
 ## REFLECT (meta-reflection)
 
 | Skill | Status | Purpose |
 |-------|--------|---------|
-| `using-agent-skills` | 📦 | Agent skill usage analysis |
-| `deprecation-and-migration` | 📦 | Deprecation and migration strategy |
+| `git-workflow` | ✅ | Commit approved config diffs after REFLECT approval |
 
 ## Local Custom Skills (🔧)
 
@@ -94,21 +97,24 @@ No skills — human decision point only. Payload enriched with:
 | `uat-workflow` | VERIFY/SHIP | UAT test execution |
 | `production-deployment` | SHIP | Production deployment |
 | `docker-compose-deployment` | BUILD/SHIP | Docker build and deploy |
-| `fabric-prompts` | DEFINE | Prompt optimization |
-| `writing-plans` | PLAN | Legacy — superseded by `planning-and-task-breakdown` |
+| `fabric-prompts` | DISCOVER | Prompt optimization |
+| `writing-plans` | PLAN | ⚠️ Superseded by `planning-and-task-breakdown` — kept for reference, no longer wired into any phase |
 
 ## Coverage Summary
 
 - **Total agent-skills**: 24
-- **Downloaded to project**: 23/24 (all except `using-agent-skills` — meta-reference only)
-- **Active in graph**: 12
-- **Ready to wire**: 11
+- **Downloaded to project**: 24/24
+- **Active in graph**: 15
+- **Ready to wire**: 5
 - **Local custom**: 7
 
 ## Wiring Priority
 
 1. **HIGH**: `planning-and-task-breakdown` → PLAN (replaces legacy `writing-plans`)
 2. **HIGH**: `pre-commit-review` → VERIFY
-3. **MED**: `debugging-and-error-recovery` → SEED_DATA / VERIFY
-4. **MED**: `idea-refine` → DISCOVER
-5. **LOW**: Remaining 📦 skills — phase-dependent based on project type
+3. **MED**: `source-driven-development` → DEFINE
+4. **MED**: `context-engineering` → BUILD
+5. **MED**: `ci-cd-and-automation` → SHIP
+6. **MED**: `documentation-and-adrs` → PLAN
+7. **MED**: `browser-testing-with-devtools` → VERIFY
+8. **LOW**: Remaining 📦 skills — phase-dependent based on project type
