@@ -944,7 +944,7 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
         )
         state["uat_result"] = "skip"
         state["uat_output"] = "DEPLOY_GATE failed: container not running"
-        state["uat_pass_rate"] = 1.0  # skip counts as pass
+        state["uat_pass_rate"] = 0.0  # skip: deployment not verified; VERIFY gate (Decision 2) owns the pass/fail verdict
         state["sub_phase"] = "DEPLOY_GATE"
         return state
 
@@ -966,7 +966,7 @@ def deploy_gate_node(state: BuildSubState) -> BuildSubState:
         )
         state["uat_result"] = "skip"
         state["uat_output"] = f"DEPLOY_GATE failed: HTTP {health_out.strip()}"
-        state["uat_pass_rate"] = 1.0
+        state["uat_pass_rate"] = 0.0  # skip: deployment not verified; VERIFY gate (Decision 2) owns the pass/fail verdict
         state["sub_phase"] = "DEPLOY_GATE"
         return state
 
@@ -1385,6 +1385,25 @@ def build_output_mapping(child: BuildSubState) -> dict:
     artifacts["build_status"] = "pass"
     artifacts["implementation"] = "\n".join(all_code)
     artifacts["uat_results"] = uat_output
+    if uat_result == "skip":
+        # D2: skip is surfaced, not fatal — VERIFY (Decision 2) owns the verdict.
+        skip_errors = list(errors)
+        skip_errors.append(
+            "UAT skipped — deployment not verified; VERIFY gate owns the pass/fail verdict"
+        )
+        skip_errors = skip_errors[-bounds.feedback.max_error_entries :]
+        error_summary = "\n".join(skip_errors)
+        writer(
+            {
+                "type": "error",
+                "phase": "BUILD",
+                "step": "error",
+                "detail": f"\n  ⚠ BUILD: {error_summary}",
+                "ts": time.time(),
+            }
+        )
+    else:
+        error_summary = None
     artifacts["uat_pass_rate"] = uat_pass_rate
     for key in ("security_review", "code_review"):
         val = child.get(key, "")
@@ -1411,7 +1430,7 @@ def build_output_mapping(child: BuildSubState) -> dict:
 
     return {
         "phase": "BUILD",
-        "error": None,
+        "error": error_summary,
         "next_phase": "SHIP",
         "artifacts": artifacts,
         "metrics": metrics,
