@@ -9,6 +9,12 @@ Single async node with TWO sequential interrupt() calls:
 Both interrupts fire from the same node context, avoiding LangGraph's
 post-resume interrupt suppression (LangGraph 1.x: interrupt() in a
 downstream node after resume does not yield __interrupt__).
+
+When the context folder holds plain (non-ArcKit) documents, the interview
+interrupt payload is pre-filled with answers extracted from those docs so
+the user is not re-asked about information the docs already state; the
+human still confirms. No docs / LLM fatal → payload is byte-identical to
+the pre-prefill behavior. See `tests/test_discover_docs_prefill.py`.
 """
 
 import asyncio
@@ -223,15 +229,34 @@ async def discover_node(state: dict) -> dict:
             f"If a question is not applicable, skip it.\n\n"
         )
 
-        answers = interrupt(
-            {
-                "type": "interview",
-                "phase": "DISCOVER",
-                "project_description": project_description,
-                "instructions": interview_prompts if interview_skill else None,
-                "questions": interview_questions,
-            }
+        # Doc pre-fill: when the context folder holds plain documents, extract
+        # answers the docs already contain so the human is not re-asked about
+        # them. The interrupt still fires — the human confirms the pre-filled
+        # answers and answers the gaps. LLM fatal / no docs → no prefill key
+        # (today's behavior, byte-identical).
+        prefill, prefill_note = await asyncio.to_thread(
+            _extract_doc_prefill,
+            context_folder,
+            project_name,
+            project_description,
+            interview_questions,
+            interview_skill.get("content", ""),
         )
+        interrupt_payload = {
+            "type": "interview",
+            "phase": "DISCOVER",
+            "project_description": project_description,
+            "instructions": interview_prompts if interview_skill else None,
+            "questions": interview_questions,
+        }
+        if prefill:
+            interrupt_payload["prefill"] = prefill
+            interrupt_payload["questions"] = [
+                q for q in interview_questions if q["key"] not in prefill
+            ]
+            interrupt_payload["note"] = prefill_note
+
+        answers = interrupt(interrupt_payload)
         # LangGraph 1.x: if interrupt() is suppressed on resume (returns None),
         # auto-skip the interview and continue with empty notes.
         if answers is None:
@@ -527,6 +552,151 @@ def _generate_interview_questions(
             "prompt": "Any Docker, infrastructure, or hosting requirements?",
         },
     ]
+
+
+def _collect_plain_docs(context_folder: str) -> list:
+    """Collect plain (non-ArcKit) document files under `context_folder`.
+
+    Returns up to 20 files, each truncated to a total budget, so the
+    extraction prompt stays bounded. Excludes files whose names match the
+    ArcKit canonical pattern (those belong to the auto-populate path) and
+    common code/build directories.
+    """
+    import re as _re
+
+    base = Path(context_folder)
+    if not base.is_dir():
+        return []
+    arckit_re = _re.compile(r"^ARC-\d{3}-")
+    skip_dirs = {"node_modules", ".git", "__pycache__", ".venv", "venv"}
+    out: list[Path] = []
+    for p in sorted(base.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in {
+            ".md",
+            ".txt",
+            ".adoc",
+            ".yaml",
+            ".yml",
+        }:
+            continue
+        if arckit_re.match(p.name):
+            continue
+        if skip_dirs & set(p.parts):
+            continue
+        out.append(p)
+        if len(out) >= 20:
+            break
+    return out
+
+
+_DOC_PREFILL_MAX_CHARS = 40_000
+
+
+def _extract_doc_prefill(
+    context_folder: str,
+    project_name: str,
+    project_description: str,
+    interview_questions: list,
+    skill_content: str,
+) -> tuple[dict | None, str | None]:
+    """Extract interview answers from plain documents in `context_folder`.
+
+    Returns (seed_dict_or_None, note_or_None). `seed_dict` maps question key
+    → answer text for categories the docs already cover. On no docs, LLM
+    fatal, or unparseable output, returns (None, None) so the caller keeps
+    today's full-interview behavior unchanged.
+    """
+    files = _collect_plain_docs(context_folder)
+    if not files:
+        return None, None
+
+    chunks: list[str] = []
+    total = 0
+    for f in files:
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        room = _DOC_PREFILL_MAX_CHARS - total
+        if room <= 0:
+            break
+        text = text[:room]
+        chunks.append(f"### {f.name}\n{text}")
+        total += len(text)
+    if not chunks:
+        return None, None
+
+    doc_text = "\n\n".join(chunks)
+    cat_keys = [q["key"] for q in interview_questions] or [
+        "core_behavior",
+        "data_model",
+        "api_surface",
+        "integration",
+        "ui_template",
+        "validation",
+        "edge_cases",
+        "non_functional",
+    ]
+    framework = ""
+    if skill_content:
+        framework = (
+            f"The interview framework defines these categories: "
+            f"{', '.join(cat_keys)}.\n\n"
+        )
+    prompt = (
+        f"You are extracting interview answers from existing project documents "
+        f"so the user is not re-asked about information the docs already state.\n\n"
+        f"{framework}"
+        f"Project: {project_name}\nDescription: {project_description}\n\n"
+        f"Documents:\n{doc_text}\n\n"
+        f"Output ONLY a JSON object with this shape:\n"
+        f'{{"seed": {{"<category>": "<answer from docs>", ...}}, '
+        f'"unanswered": ["<category>", ...]}}\n\n'
+        f"Rules:\n"
+        f"- Only fill a category in `seed` if the documents clearly state it.\n"
+        f"- Keep each answer to 1-3 sentences, quoted or summarized from the docs.\n"
+        f"- List every category not answered by the docs in `unanswered`.\n"
+        f"- Use these category keys: {', '.join(cat_keys)}.\n"
+        f"- Output only the JSON object, nothing else."
+    )
+    try:
+        result = invoke_skill(
+            "You are an expert requirements extractor.",
+            prompt,
+            "",
+            llm=None,
+        )
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("discover").warning(
+            "Doc prefill extraction failed: %s", e
+        )
+        return None, None
+    if not result:
+        return None, None
+    try:
+        m = re.search(r"\{.*\}", result, re.DOTALL)
+        if not m:
+            return None, None
+        parsed = json.loads(m.group())
+        seed = parsed.get("seed") or {}
+        if not isinstance(seed, dict) or not seed:
+            return None, None
+        seed = {k: str(v) for k, v in seed.items() if str(v).strip()}
+        if not seed:
+            return None, None
+        note = (
+            f"{len(files)} document(s) under the context folder pre-filled "
+            f"{len(seed)} interview answer(s). Confirm or correct below; "
+            f"unanswered categories remain as questions."
+        )
+        return seed, note
+    except (json.JSONDecodeError, TypeError, ValueError) as e:
+        logging.getLogger("discover").warning(
+            "Doc prefill output unparseable: %s", e
+        )
+        return None, None
 
 
 def _scan_codebase(context_folder: str, project_name: str, project_folder: str) -> dict:
