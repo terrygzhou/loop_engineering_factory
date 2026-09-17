@@ -170,7 +170,6 @@ def build_executor_state(
         },
         feedback=[],
         error=None,
-        spec_text=spec_text,
         project_path=get_project_path(),
         skip_discover=skip_discover,
         context_folder=context_folder,
@@ -190,19 +189,7 @@ def build_executor_state(
         force_hil=False,
         trace_id="",
         superweb_mode="",
-        superweb_agent_report=None,
-        # Parent graph runtime keys (S-001)
-        project_context="",
-        spec_refined="",
-        plan="",
-        tasks="",
-        backlog=[],
-        diagram_pngs={},
         user_review_comments="",
-        status="",
-        retry_count=0,
-        tasks_text="",
-        solution_md="",
     )
 
 
@@ -568,7 +555,7 @@ class WorkflowRunner:
                 # Interview pause — generate answers from spec.
                 # E12: the DISCOVER node owns discover_hil_count; this
                 # auto-approve path no longer writes the counter.
-                spec = (state or {}).get("spec_text", "")
+                spec = (state or {}).get("project_description", "")
                 interview: dict = {
                     "core_behavior": "",
                     "data_model": "",

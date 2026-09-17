@@ -29,7 +29,13 @@ class CycleMetrics(BaseModel):
 
 
 class WorkflowState(TypedDict):
-    """LangGraph state for the self-improving AI loop."""
+    """LangGraph state for the self-improving AI loop.
+
+    P0-A1 (2026-09-18): trimmed to keys that are either (a) returned by an
+    active node / the HIL runner, or (b) input-only keys set at initial-state
+    seeding time. See tests/test_state_contract.py (structural guard) and
+    INPUT_ONLY_KEYS below.
+    """
 
     cycle_id: str
     phase: str
@@ -71,7 +77,6 @@ class WorkflowState(TypedDict):
 
     # ── BUILD subgraph state (carried through for merge) ──
     superweb_mode: str
-    superweb_agent_report: Optional[dict]
     artifacts: Annotated[Dict[str, Any], _dict_merge]
     # Contract artefact keys (merged into `artifacts` by nodes):
     #   achg_context           — ACHG context for ARCH_REVIEW (EYW-171 §8.3,
@@ -98,18 +103,24 @@ class WorkflowState(TypedDict):
     #   arckit_nfr_constraints   — OAA-ADM-lite use_cases + NFR fields (W3,
     #                            DISCOVER)
 
-    # ── Parent graph runtime keys (S-001: schema enforcement) ──
-    project_context: str
-    spec_text: str
-    spec_refined: str
-    plan: str
-    tasks: str
-    backlog: Annotated[List[dict], operator.add]
-    diagram_pngs: Annotated[Dict[str, str], _dict_merge]
     user_review_comments: str
-    status: str
-    retry_count: int
-    # NOTE: loop_counts is in artifacts (not top-level) — deduplicated S-003
-    # NOTE: spec_confidence is in metrics.spec_confidence (CycleMetrics) — deduplicated S-003
-    tasks_text: str
-    solution_md: str
+
+
+# P0-A1: top-level keys set ONLY at initial-state seeding time
+# (build_executor_state / WorkflowBridge._build_executor_state) — never
+# returned by a node. The schema contract test
+# (tests/test_state_contract.py) asserts every WorkflowState key is either
+# node-returned or listed here, and every entry here is declared in the
+# TypedDict. Overlap with node-returned keys is allowed (e.g.
+# ``config_version`` is returned by SHIP as a forward-compat seed;
+# ``cycle_id`` / ``trace_id`` are audit inputs).
+INPUT_ONLY_KEYS: frozenset[str] = frozenset({
+    "skip_discover",
+    "improve_mode",
+    "force_hil",
+    "auto_approve_override",
+    "arckit_artifacts",
+    "trace_id",
+    "cycle_id",
+    "config_version",
+})
