@@ -1386,6 +1386,10 @@ def build_output_mapping(child: BuildSubState) -> dict:
     artifacts["implementation"] = "\n".join(all_code)
     artifacts["uat_results"] = uat_output
     artifacts["uat_pass_rate"] = uat_pass_rate
+    for key in ("security_review", "code_review"):
+        val = child.get(key, "")
+        if val:  # Decision 3: omit empty/None, never a sentinel
+            artifacts[key] = val
 
     from graph.state import CycleMetrics
 
