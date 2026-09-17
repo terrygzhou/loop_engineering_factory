@@ -529,7 +529,9 @@ class WorkflowRunner:
                     "_pause": "project_setup",
                 }
             else:
-                # Interview pause — generate answers from spec
+                # Interview pause — generate answers from spec.
+                # E12: the DISCOVER node owns discover_hil_count; this
+                # auto-approve path no longer writes the counter.
                 spec = (state or {}).get("spec_text", "")
                 interview: dict = {
                     "core_behavior": "",
@@ -544,7 +546,6 @@ class WorkflowRunner:
                 }
                 if spec:
                     interview["core_behavior"] = spec
-                interview["discover_hil_count"] = hil_count + 1
                 return {
                     "interview_notes": json.dumps(interview),
                     "discover_interview_done": True,

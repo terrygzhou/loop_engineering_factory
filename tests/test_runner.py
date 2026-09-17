@@ -215,7 +215,11 @@ class TestBuildResumePayload:
         resume, update = build_resume_payload("DISCOVER", "project_setup", user)
         assert resume["human_approval_required"] is False
         assert resume["project_name"] == "P"
-        assert resume["artifacts"]["discover_hil_count"] == 1
+        # E12: the runner no longer pre-seeds or increments the HIL counter —
+        # the DISCOVER node owns it and writes it into its returned artifacts
+        # delta on every resume.
+        assert "artifacts" not in resume
+        assert "discover_hil_count" not in (update or {})
         assert update == {
             "discover_setup_done": True,
             "project_name": "P",
@@ -258,13 +262,15 @@ class TestBuildResumePayload:
         # then normalizes it to notes.
         assert resume["interview_notes"] == "project_name: P\nproject_description: D"
 
-    def test_discover_unknown_type_falls_back_on_hil_count(self):
-        # hil_count 0 → setup semantics
+    def test_discover_unknown_type_takes_interview_semantics(self):
+        # E12: an unknown/None DISCOVER hil_type unconditionally takes
+        # interview semantics — the legacy "fall back on the persisted count"
+        # dispatch branch is gone. The active Web path always knows hil_type
+        # from the interrupt payload.
         resume, update = build_resume_payload(
-            "DISCOVER", None, {"project_name": "P"}, state={}
+            "DISCOVER", None, {"interview_notes": "n"}, state={}
         )
-        assert update["discover_setup_done"] is True
-        # hil_count >= 1 → interview semantics
+        assert update == {"interview_notes": "n", "discover_interview_done": True}
         resume2, update2 = build_resume_payload(
             "DISCOVER", None, {"interview_notes": "n"},
             state={"artifacts": {"discover_hil_count": 1}},
@@ -309,12 +315,14 @@ class TestBuildResumePayload:
         assert resume == {"human_approval_required": False}
 
     def test_corrupt_hil_count_does_not_raise(self):
+        # E12: the runner no longer reads the persisted HIL counter, so a
+        # corrupt value is simply ignored — unknown/None hil_type takes
+        # interview semantics unconditionally.
         resume, update = build_resume_payload(
             "DISCOVER", None, {"interview_notes": "n"},
             state={"artifacts": {"discover_hil_count": "garbage"}},
         )
-        # corrupt counter → treated as 0 → setup fallback
-        assert update["discover_setup_done"] is True
+        assert update == {"interview_notes": "n", "discover_interview_done": True}
 
 
 # ── run_workflow loop mechanics ──────────────────────────────────────
