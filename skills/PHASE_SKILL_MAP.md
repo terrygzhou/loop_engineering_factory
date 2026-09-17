@@ -77,7 +77,7 @@ No skills — human decision point only. Payload enriched with:
 | `shipping-and-launch` | ✅ | Pre-launch checklist and rollback |
 | `ci-cd-and-automation` | 📦 | CI/CD pipeline setup |
 | `observability-and-instrumentation` | ✅ | Monitoring and observability |
-| `performance-optimization` | ✅ | Performance audit |
+| `performance-optimization` | 📦 | Performance audit |
 | `git-workflow` | ✅ | Git operations and versioning (supersedes `git-workflow-and-versioning` — see note below) |
 
 > Superseded: `git-workflow-and-versioning` is no longer referenced by any
@@ -105,8 +105,8 @@ No skills — human decision point only. Payload enriched with:
 
 - **Total agent-skills**: 24
 - **Downloaded to project**: 24/24
-- **Active in graph**: 17
-- **Ready to wire**: 3
+- **Active in graph**: 16
+- **Ready to wire**: 7
 - **Local custom**: 7
 
 ## Wiring Priority
@@ -117,4 +117,5 @@ No skills — human decision point only. Payload enriched with:
 4. **MED**: `ci-cd-and-automation` → SHIP
 5. **MED**: `browser-testing-with-devtools` → VERIFY
 6. **LOW**: `code-simplification` → PLAN
-7. **LOW**: Remaining 📦 skills — phase-dependent based on project type
+7. **LOW**: `performance-optimization` → SHIP
+8. **LOW**: Remaining 📦 skills — phase-dependent based on project type
