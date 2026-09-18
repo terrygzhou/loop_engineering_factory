@@ -520,6 +520,9 @@ def define_node(state: dict) -> dict:
             "ts": time.time(),
         }
     )
+    audit.log_node_output(
+        "DEFINE", {"status": "pass", "files": sorted(artifacts_delta.keys())}
+    )
     return update
 
 

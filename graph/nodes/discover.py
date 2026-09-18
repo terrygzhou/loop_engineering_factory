@@ -281,6 +281,13 @@ async def discover_node(state: dict) -> dict:
 
     # ── Scan existing codebase ──
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input(
+        "DISCOVER",
+        {
+            "context_folder": state.get("context_folder", ""),
+            "project_name": state.get("project_name", ""),
+        },
+    )
     context = _scan_codebase(context_folder, project_name, project_folder)
 
     # ── Idea refinement: sharpen interview notes into actionable concept ──

@@ -21,6 +21,7 @@ from typing import Any, cast
 import httpx
 
 from config.loader import config
+from tools.audit_logger import AuditLog
 from graph.nodes.build_subgraph_legacy import (
     BuildSubState,
     build_input_mapping,
@@ -641,6 +642,16 @@ def openhands_build_wrapper(state: dict) -> dict:
         "  -> [OPENHANDS] Starting BUILD via Gateway at %s",
         oh_cfg.url,
     )
+    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input(
+        "BUILD",
+        {"project_path": state.get("project_path", ""), "gateway_url": str(oh_cfg.url)},
+    )
+
+    def _finish(result: dict, route: str) -> dict:
+        status = (result.get("artifacts") or {}).get("build_status", "")
+        audit.log_node_output("BUILD", {"route": route, "status": status or "pass"})
+        return result
 
     # -- Health check --
     try:
@@ -653,17 +664,17 @@ def openhands_build_wrapper(state: dict) -> dict:
             "  -> [OPENHANDS] Health check failed: %s -- fallback",
             e,
         )
-        return _run_local_subgraph(state)
+        return _finish(_run_local_subgraph(state), "local-subgraph-fallback")
 
     # -- Delegate to OpenHands --
     try:
-        return _delegate_to_openhands(state, oh_cfg)
+        return _finish(_delegate_to_openhands(state, oh_cfg), "openhands")
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
         logger.warning(
             "  -> [OPENHANDS] Connection failed: %s -- fallback",
             e,
         )
-        return _run_local_subgraph(state)
+        return _finish(_run_local_subgraph(state), "local-subgraph-fallback")
     except httpx.HTTPStatusError as e:
         # UAT finding: a 5xx (e.g. OpenHands event_service PermissionError)
         # used to fall through to "raise" because only 4xx/5xx were listed.
@@ -675,8 +686,12 @@ def openhands_build_wrapper(state: dict) -> dict:
             "  -> [OPENHANDS] Server error %d -- fallback",
             e.response.status_code,
         )
-        return _run_local_subgraph(state)
-    raise
+        return _finish(_run_local_subgraph(state), "local-subgraph-fallback")
+    except BuildReportMissingError as e:
+        audit.log_node_output(
+            "BUILD", {"route": "openhands", "status": "fail", "error": str(e)}
+        )
+        raise
 
 
 # Backward compatibility alias — consumers that imported openhands_build_node

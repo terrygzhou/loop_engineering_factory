@@ -8,6 +8,7 @@ import json
 import time
 import yaml
 from config.loader import config
+from tools.audit_logger import AuditLog
 from tools.loader import build_skill_registry
 from tools.llm import get_llm, invoke_skill
 from feedback.aggregator import FeedbackAggregator
@@ -18,6 +19,9 @@ from tools.stream_writer import safe_stream_writer
 
 def reflect_node(state: dict) -> dict:
     writer = safe_stream_writer()  # fallback for tests/CLI
+    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input("REFLECT", {"cycle_id": state.get("cycle_id")})
+    diffs_applied = False
     """
     REFLECT phase: Analyze the completed cycle, compare against historical patterns,
     generate proposed skill config updates, request human approval, and archive.
@@ -215,6 +219,7 @@ def reflect_node(state: dict) -> dict:
             }
         )
         feedback_entries.append({"action": "dry_run_failed", "changes": len(changes)})
+        audit.log_node_output("REFLECT", {"status": "fail", "diffs_applied": False})
         return {
             "phase": "REFLECT",
             "feedback": feedback_entries,
@@ -305,6 +310,7 @@ def reflect_node(state: dict) -> dict:
             from feedback.diff_engine import apply_yaml_diff
 
             apply_yaml_diff(guardrails_path, diffs)
+            diffs_applied = True
 
             # Commit via git-workflow
             git_skill = skills.get("git-workflow", {})
@@ -388,4 +394,5 @@ def reflect_node(state: dict) -> dict:
             "ts": time.time(),
         }
     )
+    audit.log_node_output("REFLECT", {"status": "pass", "diffs_applied": diffs_applied})
     return update

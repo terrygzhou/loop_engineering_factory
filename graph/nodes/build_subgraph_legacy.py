@@ -23,6 +23,7 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from config.bounds_loader import bounds
+from tools.audit_logger import AuditLog
 from tools.llm import invoke_skill
 from tools.loader import build_skill_registry
 
@@ -1480,7 +1481,16 @@ def build_subgraph_node(state: dict) -> dict:
     Maps parent state to subgraph input, invokes the subgraph,
     then maps the result back to a parent state update.
     """
+    audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+    audit.log_node_input(
+        "BUILD_LEGACY", {"project_path": state.get("project_path", "")}
+    )
     child_state = build_input_mapping(state)
     compiled = get_compiled_subgraph()
     result = compiled.invoke(child_state)
-    return build_output_mapping(result)
+    result = build_output_mapping(result)
+    audit.log_node_output(
+        "BUILD_LEGACY",
+        {"status": (result.get("artifacts") or {}).get("build_status", "pass")},
+    )
+    return result
