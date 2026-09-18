@@ -552,7 +552,7 @@ def _merge_results(state: dict, parsed: dict) -> dict:
     update: dict = {
         "phase": "BUILD",
         "artifacts": {**artifacts_delta, "loop_counts": loop_counts},
-        "superweb_mode": "agent",
+        "superApp_mode": "agent",
     }
     if next_phase:
         update["next_phase"] = next_phase

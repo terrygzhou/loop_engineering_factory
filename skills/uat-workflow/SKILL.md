@@ -1,6 +1,6 @@
 ---
 name: uat-workflow
-description: UAT workflow — SuperWeb agent-mode testing (primary), Playwright fallback (secondary)
+description: UAT workflow — SuperApp agent-mode testing (primary), Playwright fallback (secondary)
 category: software-development
 ---
 
@@ -14,13 +14,13 @@ Or called automatically from the BUILD subgraph UAT node.
 
 ## Testing Strategy
 
-**Primary:** SuperWeb agent mode — the agent explores the app using the project codebase, discovers routes, and generates targeted tests dynamically.
+**Primary:** SuperApp agent mode — the agent explores the app using the project codebase, discovers routes, and generates targeted tests dynamically.
 
-**Secondary (fallback):** Playwright browser UAT — manual script-based testing when SuperWeb is unavailable.
+**Secondary (fallback):** Playwright browser UAT — manual script-based testing when SuperApp is unavailable.
 
-### SuperWeb Agent Mode (Primary)
+### SuperApp Agent Mode (Primary)
 
-SuperWeb runs an autonomous agent that:
+SuperApp runs an autonomous agent that:
 1. Reads the project source code (routes, templates, API specs)
 2. Discovers available endpoints and UI components
 3. Generates targeted test cases based on actual implementation
@@ -28,7 +28,7 @@ SuperWeb runs an autonomous agent that:
 5. Produces `agent_report.json` with pass/fail verdicts per test case
 
 ```bash
-superweb run \
+superApp run \
   --target http://localhost:<port> \
   --source /path/to/project \
   --output /path/to/output \
@@ -42,7 +42,7 @@ Output: `agent_report.json` with per-case results and overall verdict.
 
 ### Playwright Fallback (Secondary)
 
-When SuperWeb is not available, fall back to Playwright-based UAT.
+When SuperApp is not available, fall back to Playwright-based UAT.
 
 #### Steps
 
@@ -113,4 +113,4 @@ Lead with verdict (✅ PASS / ❌ FAIL), then tables. No intro paragraphs.
 ## Related Skills
 
 - `docker-compose-deployment` — for redeploying before UAT
-- `superweb-testing` — for agent-mode configuration
+- `superApp-testing` — for agent-mode configuration

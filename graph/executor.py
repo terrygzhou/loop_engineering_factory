@@ -187,7 +187,7 @@ def build_executor_state(
         auto_approve_override=None,
         force_hil=False,
         trace_id="",
-        superweb_mode="",
+        superApp_mode="",
         user_review_comments="",
     )
 

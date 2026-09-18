@@ -221,7 +221,7 @@ def test_deleted_dead_keys_gone_from_schema():
     dead = {
         "tasks", "tasks_text", "backlog", "solution_md", "plan",
         "status", "retry_count", "spec_text", "spec_refined",
-        "project_context", "diagram_pngs", "superweb_agent_report",
+        "project_context", "diagram_pngs", "superApp_agent_report",
     }
     leftovers = declared & dead
     assert not leftovers, (

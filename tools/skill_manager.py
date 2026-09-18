@@ -17,6 +17,7 @@ Design:
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -115,7 +116,11 @@ def register_skill(name: str, content: str, *, source: str = "manual") -> Dict[s
     Raises SkillRegistrationError on malformed input; any partial write is
     rolled back before the raise.
     """
-    if not name or not name.replace("-", "").replace("_", "").isalnum():
+    # A skill name must start with an ASCII letter, end with a letter or
+    # digit, and contain only ASCII letters, digits, '-' or '_' (UAT
+    # Finding 5: '7bad', '-leading', 'trailing-' and 'UPPER' previously
+    # slipped through the isalnum check).
+    if not name or not re.fullmatch(r"[a-z][a-z0-9_-]*[a-z0-9]|[a-z]", name):
         raise SkillRegistrationError(f"Invalid skill name: {name!r}")
 
     target_dir = _skills_dir() / name
@@ -173,8 +178,13 @@ def _git_clone_or_pull(repo: str, ref: str, dest: Path) -> None:
             ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", ref],
             check=True, capture_output=True, text=True, timeout=timeout,
         )
+        # fetch --depth 1 rewrites origin/<ref> (forced update), leaving the
+        # local <ref> branch diverged — `checkout <ref>` is then a no-op and
+        # the working tree silently keeps stale content. reset --hard to the
+        # ref we just fetched instead (works whether or not a local branch
+        # exists under that name).
         subprocess.run(
-            ["git", "-C", str(dest), "checkout", ref],
+            ["git", "-C", str(dest), "reset", "--hard", f"origin/{ref}"],
             check=True, capture_output=True, text=True, timeout=timeout,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired,

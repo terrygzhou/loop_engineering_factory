@@ -144,9 +144,14 @@ def _save_skills_index(registry: Dict[str, Dict[str, Any]]):
             "path": skill.get("path", ""),
             "mtime": os.path.getmtime(skill.get("path", __file__)),
         }
+    # Write the index next to the skills that produced it (the configured
+    # registry path), not the module-level LOCAL_SKILLS_DIR: a custom
+    # skill_registry_path would otherwise get no version index at all.
+    skills_dir = config.workflow.skill_registry_path
+    index_path = Path(skills_dir).expanduser() / "SKILLS_INDEX.json"
     try:
-        SKILLS_INDEX.parent.mkdir(parents=True, exist_ok=True)
-        with open(SKILLS_INDEX, "w") as f:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(index_path, "w") as f:
             json.dump(index, f, indent=2)
     except Exception as e:
         print(f"WARNING: Could not save skills index: {e}")

@@ -42,8 +42,8 @@ def _substate_at_implement(tmp_path, item_id="1", retry_count=2, backlog_len=2):
         "errors": [],
         "build_status": "pending",
         "parent_artifacts": {},
-        "superweb_mode": "agent",
-        "superweb_agent_report": {},
+        "superApp_mode": "agent",
+        "superApp_agent_report": {},
         "security_review": "",
         "code_review": "",
     }

@@ -76,7 +76,7 @@ class WorkflowState(TypedDict):
     trace_id: str
 
     # ── BUILD subgraph state (carried through for merge) ──
-    superweb_mode: str
+    superApp_mode: str
     artifacts: Annotated[Dict[str, Any], _dict_merge]
     # Contract artefact keys (merged into `artifacts` by nodes):
     #   achg_context           — ACHG context for ARCH_REVIEW (EYW-171 §8.3,

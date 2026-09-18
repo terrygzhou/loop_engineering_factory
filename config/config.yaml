@@ -40,7 +40,7 @@ workflow:
   hil_mode: auto
   max_retries: 2
   skill_registry_path: /app/skills
-superweb:
+superApp:
   mode: agent
   openhands_url: http://openhands-server:8000
   openhands_port: 8000

@@ -1,0 +1,6 @@
+sources:
+  - name: local-upstream
+    repo: /home/terry/projects/loop_engineering_factory/.uat/srcrepo
+    ref: main
+    skills:
+      - alpha

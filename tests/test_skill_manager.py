@@ -66,6 +66,16 @@ def test_register_skill_rejects_blank_content(skills_dir):
     assert not (skills_dir / "gamma").exists()
 
 
+@pytest.mark.parametrize("bad_name", ["", "7bad", "-leading", "a b", "x/y", "trailing-", "UPPER"])
+def test_register_skill_rejects_bad_names(bad_name, skills_dir):
+    """UAT Finding 5: skill names must start with an ASCII letter and may
+    only contain letters, digits, '-', '_' — so '7bad', '-leading', spaces,
+    '/', trailing hyphens and uppercase are all rejected.
+    """
+    with pytest.raises(skill_manager.SkillRegistrationError, match="Invalid skill name"):
+        skill_manager.register_skill(bad_name, "# x\n")
+
+
 def test_remove_skill_removes_directory(skills_dir, monkeypatch):
     import tools.loader as loader
 
@@ -116,6 +126,73 @@ def test_update_skill_pulls_from_source(skills_dir, monkeypatch):
     )
     # The cache dir is the sibling of the skills dir (never inside it).
     assert not (skills_dir / ".skill_cache").exists()
+
+
+def test_update_skill_pull_path_advances_cached_shallow_clone(tmp_path):
+    """Regression: a second update (cache already cloned) must pick up new upstream content.
+
+    _git_clone_or_pull's pull path runs ``fetch --depth 1 origin <ref>``; on a
+    cached shallow clone fetch rewrites the origin/<ref> ref while the local
+    <ref> branch diverges, so any command that only resolves the local branch
+    (e.g. `checkout <ref>`) leaves the working tree on stale content (UAT
+    Finding 1, 2026-09-18).
+
+    Uses a REAL local git repo (no monkeypatching of the git commands) so the
+    test exercises actual shallow-clone semantics.
+    """
+    import subprocess
+
+    # Upstream source repo at v1.0.0 (a single commit on main).
+    srcrepo = tmp_path / "srcrepo"
+    skill_md = srcrepo / "skills" / "alpha" / "SKILL.md"
+    skill_md.parent.mkdir(parents=True)
+    skill_md.write_text("---\nname: alpha\ndescription: alpha v1\nversion: 1.0.0\n---\n# v1\n")
+
+    def _commit(msg: str) -> None:
+        subprocess.run(["git", "add", "skills"], cwd=srcrepo, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-qm", msg],
+                       cwd=srcrepo, check=True, capture_output=True)
+
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=srcrepo, check=True, capture_output=True)
+    _commit("v1")
+
+    # Isolated skills dir + cache dir (never touch the repo's skills/ or /app/.skill_cache).
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    from config.loader import config as cfg
+    import tools.skill_manager as sm
+    old_registry, old_sources, old_cache = (
+        cfg.workflow.skill_registry_path, cfg.Skills.skill_sources_path, sm._cache_dir
+    )
+    cfg.workflow.skill_registry_path = str(skills_dir)
+    cfg.Skills.skill_sources_path = str(tmp_path / "skill_sources.yaml")
+    (tmp_path / "skill_sources.yaml").write_text(
+        "sources:\n"
+        f"  - name: local-upstream\n    repo: {srcrepo}\n    ref: main\n    skills:\n      - alpha\n"
+    )
+    sm._cache_dir = lambda: tmp_path / "skill_cache"
+    try:
+        # First update = clone path: sees the only commit (v1.0.0).
+        entry1 = sm.update_skill("alpha")
+        assert entry1["version"] == "1.0.0"
+
+        # Bump the upstream to v2.0.0 while the cache clone is at v1.
+        skill_md.write_text("---\nname: alpha\ndescription: alpha v2\nversion: 2.0.0\n---\n# v2\n")
+        _commit("v2")
+
+        # Second update = pull path: must see v2.0.0, not the stale v1.0.0.
+        entry2 = sm.update_skill("alpha")
+        assert entry2["version"] == "2.0.0", (
+            f"pull path served stale content: expected 2.0.0, got {entry2['version']}"
+        )
+        assert (skills_dir / "alpha" / "SKILL.md").read_text().startswith(
+            "---\nname: alpha\ndescription: alpha v2"
+        )
+    finally:
+        cfg.workflow.skill_registry_path = old_registry
+        cfg.Skills.skill_sources_path = old_sources
+        sm._cache_dir = old_cache
 
 
 def test_update_skill_unknown_skill_raises(skills_dir, monkeypatch):

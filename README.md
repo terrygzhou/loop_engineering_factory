@@ -419,7 +419,7 @@ workflow:
   max_retries: 2
   auto_approve: false
 
-superweb:
+superApp:
   mode: agent
   openhands_url: http://openhands-server:8000
   openhands_port: 8000

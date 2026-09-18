@@ -72,8 +72,8 @@ class BuildSubState(TypedDict):
     errors: list[str]  # Accumulated error messages
     build_status: str  # "pass" / "fail" / "partial"
     parent_artifacts: dict  # Reference to parent artifacts dict (for writing back)
-    superweb_mode: str  # "agent" (default) | "scripted"
-    superweb_agent_report: dict  # Parsed agent_report.json from agent mode
+    superApp_mode: str  # "agent" (default) | "scripted"
+    superApp_agent_report: dict  # Parsed agent_report.json from agent mode
     security_review: str  # Security audit result (security-and-hardening skill)
     code_review: str  # Code quality review result (pre-commit-review skill)
 
@@ -766,24 +766,24 @@ Requirements:
     return state
 
 
-def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
-    """Run SuperWeb in agent mode — OpenHands agent explores and tests."""
+def _run_superApp_agent(state: BuildSubState, base_url: str, output_dir: Path) -> dict:
+    """Run SuperApp in agent mode — OpenHands agent explores and tests."""
     agent_timeout = getattr(
-        getattr(bounds, "superweb", None), "agent_timeout_seconds", 3600
+        getattr(bounds, "superApp", None), "agent_timeout_seconds", 3600
     )
     # LLM config is in config.yaml, not bounds.yaml — use config loader
     from config.loader import config as _cfg
 
     llm_url = _cfg.services.llm.base_url
     llm_model = _cfg.services.llm.model
-    # SuperWeb root from config (default: pip-installed CLI runs from project dir)
-    superweb_config = getattr(_cfg, "superweb", None)
-    if superweb_config:
-        superweb_root = getattr(superweb_config, "root", state["project_path"])
+    # SuperApp root from config (default: pip-installed CLI runs from project dir)
+    superApp_config = getattr(_cfg, "superApp", None)
+    if superApp_config:
+        superApp_root = getattr(superApp_config, "root", state["project_path"])
     else:
-        superweb_root = state["project_path"]
+        superApp_root = state["project_path"]
     cmd = [
-        "superweb",
+        "superApp",
         "run",
         "--target",
         base_url,
@@ -806,7 +806,7 @@ def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -
             capture_output=True,
             text=True,
             timeout=agent_timeout + 120,
-            cwd=superweb_root,
+            cwd=superApp_root,
         )
         # Parse agent_report.json (agent mode writes to report/)
         report_path = output_dir / "report" / "agent_report.json"
@@ -823,24 +823,24 @@ def _run_superweb_agent(state: BuildSubState, base_url: str, output_dir: Path) -
         return {"status": "not_found", "verdict": "fail"}
 
 
-def _run_superweb_scripted(
+def _run_superApp_scripted(
     state: BuildSubState, base_url: str, output_dir: Path
 ) -> dict:
-    """Run SuperWeb in scripted mode — deterministic Playwright pipeline."""
-    timeout = getattr(getattr(bounds, "superweb", None), "timeout_seconds", 600)
-    variations = getattr(getattr(bounds, "superweb", None), "variations", 3)
+    """Run SuperApp in scripted mode — deterministic Playwright pipeline."""
+    timeout = getattr(getattr(bounds, "superApp", None), "timeout_seconds", 600)
+    variations = getattr(getattr(bounds, "superApp", None), "variations", 3)
     from config.loader import config as _cfg
 
     llm_url = _cfg.services.llm.base_url
     llm_model = _cfg.services.llm.model
-    superweb_config = getattr(_cfg, "superweb", None)
-    superweb_root = (
-        getattr(superweb_config, "root", state["project_path"])
-        if superweb_config
+    superApp_config = getattr(_cfg, "superApp", None)
+    superApp_root = (
+        getattr(superApp_config, "root", state["project_path"])
+        if superApp_config
         else state["project_path"]
     )
     cmd = [
-        "superweb",
+        "superApp",
         "run",
         "--target",
         base_url,
@@ -863,7 +863,7 @@ def _run_superweb_scripted(
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=superweb_root,
+            cwd=superApp_root,
         )
         results_path = output_dir / "data" / "test_results.json"
         if results_path.exists():
@@ -1016,8 +1016,8 @@ def uat_node(state: BuildSubState) -> BuildSubState:
 
     base_url = _cfg.services.product.url
 
-    output_dir = Path(state["project_path"]) / "superweb_output"
-    mode = state.get("superweb_mode", "agent")
+    output_dir = Path(state["project_path"]) / "superApp_output"
+    mode = state.get("superApp_mode", "agent")
     writer(
         {
             "type": "progress",
@@ -1032,12 +1032,12 @@ def uat_node(state: BuildSubState) -> BuildSubState:
     uat_result = "fail"
     uat_output = ""
 
-    # ── Try SuperWeb (agent mode default) ──────────────────────────
-    superweb_worked = False
+    # ── Try SuperApp (agent mode default) ──────────────────────────
+    superApp_worked = False
     if mode == "agent":
-        report = _run_superweb_agent(state, base_url, output_dir)
+        report = _run_superApp_agent(state, base_url, output_dir)
         if report.get("status") != "not_found":
-            superweb_worked = True
+            superApp_worked = True
             uat_output = json.dumps(report, indent=2)[
                 : bounds.build.max_seed_output_chars
             ]
@@ -1058,9 +1058,9 @@ def uat_node(state: BuildSubState) -> BuildSubState:
             else:
                 uat_pass_rate = 0.5
     else:
-        results = _run_superweb_scripted(state, base_url, output_dir)
+        results = _run_superApp_scripted(state, base_url, output_dir)
         if results:
-            superweb_worked = True
+            superApp_worked = True
             passed = sum(1 for r in results if r.get("status") == "passed")
             uat_pass_rate = passed / len(results)
             uat_output = json.dumps(results[:5], indent=2)[
@@ -1068,13 +1068,13 @@ def uat_node(state: BuildSubState) -> BuildSubState:
             ]
 
     # ── Fallback chain ─────────────────────────────────────────────
-    if not superweb_worked:
+    if not superApp_worked:
         writer(
             {
                 "type": "progress",
                 "phase": "BUILD",
                 "step": "warning",
-                "detail": "     ⚠ SuperWeb unavailable — falling back to LLM UAT",
+                "detail": "     ⚠ SuperApp unavailable — falling back to LLM UAT",
                 "ts": time.time(),
             }
         )
@@ -1312,8 +1312,8 @@ def build_input_mapping(parent: dict) -> BuildSubState:
             "errors": [],
             "build_status": "pending",
             "parent_artifacts": parent.get("artifacts", {}),
-            "superweb_mode": "agent",  # Default: agent mode
-            "superweb_agent_report": {},
+            "superApp_mode": "agent",  # Default: agent mode
+            "superApp_agent_report": {},
             "security_review": "",
             "code_review": "",
         }
