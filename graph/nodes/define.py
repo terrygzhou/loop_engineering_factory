@@ -67,6 +67,7 @@ def _arckit_advisory_context(state: dict) -> str:
     # Feature 2: prior REFLECT skill recommendations (advisory; "" when absent
     # so the helper stays byte-identical to the pre-feature behavior).
     from tools.skill_recommendations import skill_recommendations_block
+
     rec_block = skill_recommendations_block()
     if rec_block:
         blocks.append(f"## Skill Recommendations (advisory)\n{rec_block}")
