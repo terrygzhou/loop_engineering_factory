@@ -72,6 +72,9 @@ architecture.png
 # Auto-generated skill registry (rebuildable)
 skills/SKILLS_INDEX.json
 
+# UAT scratch directory (isolated skills/cache fixtures, discard after task)
+.uat/
+
 # README screenshot (large binary, not version-controlled)
 image.png
 
