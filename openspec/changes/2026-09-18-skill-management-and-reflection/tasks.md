@@ -203,9 +203,9 @@ tests `--deselect`ed → 0 failures; `ruff check .` clean.
 
 ## 6. S6 — docs + AGENTS.md count fix
 
-- [ ] 6.1 Update `AGENTS.md`: change "35 SKILL.md files" to
+- [x] 6.1 Update `AGENTS.md`: change "35 SKILL.md files" to
       "34 SKILL.md files" (the actual count on disk).
-- [ ] 6.2 Update the `Skill Loading` section in `AGENTS.md` to
+- [x] 6.2 Update the `Skill Loading` section in `AGENTS.md` to
       mention `tools/skill_manager.py` and
       `config/skill_sources.yaml` (one line each).
 - [ ] 6.3 Run the full close-out gate: `pytest tests/ -q` (with the

@@ -25,7 +25,7 @@ Two entry points share `graph/runner.py`:
 | **No PostgreSQL** | Pattern storage via ChromaDB (internal, no host port) |
 | **HIL gates** | DISCOVER (2 pauses), ARCH_REVIEW (1 pause); node-level `interrupt()` from `langgraph.types` |
 | **Artifacts** | Generated projects land in `output/` |
-| **Skills** | 35 SKILL.md files in `skills/`; loaded by `tools/loader.py` |
+| **Skills** | 34 SKILL.md files in `skills/`; loaded by `tools/loader.py`; lifecycle managed by `tools/skill_manager.py` (register/remove/update/sync); upstream sources declared in `config/skill_sources.yaml` |
 | **State** | Official `AsyncSqliteSaver` via `graph/checkpointer.py` (replaces deprecated langgraph checkpoint) |
 | **Auto-approve** | `auto_approve=true` in config bypasses HIL for headless runs |
 | **Compose name** | `loop_factory` (top-level `name:` in docker-compose.yml) — drives container names like `loop_factory-loop-1` |
