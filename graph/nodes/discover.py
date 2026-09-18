@@ -797,6 +797,10 @@ def _generate_requirement_via_fabric(
             f"Output: Markdown with sections: Project Overview, Core Behavior, "
             f"Data Model, API Surface, Integration Requirements, Non-Functional, Edge Cases, Constraints"
         )
+        # Feature 2: prior REFLECT skill recommendations (advisory; "" when
+        # absent so the prompt stays byte-identical to the pre-feature one).
+        from tools.skill_recommendations import skill_recommendations_block
+        fabric_prompt += skill_recommendations_block()
         fabric_timer = SkillTimer("fabric-prompts")
         result = invoke_skill(fabric_skill["content"], fabric_prompt, "", llm=None)
         fabric_timer.complete()
