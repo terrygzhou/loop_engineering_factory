@@ -113,6 +113,7 @@ def test_git_clone_failure_raises_skill_update_error(skills_dir, monkeypatch, tm
     real_run = subprocess.run
 
     def broken_run(cmd, *a, **k):
+        # cmd is a list (subprocess.run is called without shell=True).
         if "clone" in cmd:
             raise subprocess.CalledProcessError(128, cmd)
         return real_run(cmd, *a, **k)
@@ -145,6 +146,7 @@ def test_git_pull_failure_raises_skill_update_error(skills_dir, monkeypatch, tmp
     real_run = subprocess.run
 
     def broken_run(cmd, *a, **k):
+        # cmd is a list (subprocess.run is called without shell=True).
         if "fetch" in cmd:
             raise subprocess.CalledProcessError(1, cmd)
         return real_run(cmd, *a, **k)
