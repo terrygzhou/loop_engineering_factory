@@ -41,7 +41,12 @@ def client(monkeypatch):
     monkeypatch.setattr(
         "tools.skill_manager.sync_from_sources",
         lambda: [
-            {"name": "alpha", "source": "agent-skills", "ref": "main", "status": "updated (v2.0.0)"}
+            {
+                "name": "alpha",
+                "source": "agent-skills",
+                "ref": "main",
+                "status": "updated (v2.0.0)",
+            }
         ],
     )
     return TestClient(app_module.app)
@@ -85,7 +90,9 @@ def test_remove_skill(client):
 
 
 def test_update_skill(client):
-    r = client.post("/api/skills/update", json={"name": "alpha", "source": "agent-skills"})
+    r = client.post(
+        "/api/skills/update", json={"name": "alpha", "source": "agent-skills"}
+    )
     assert r.status_code == 200
     assert r.json()["version"] == "2.0.0"
 
