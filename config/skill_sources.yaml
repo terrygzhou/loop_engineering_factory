@@ -1,0 +1,34 @@
+# Config-driven GitHub sources for skill update/sync (Feature 1).
+# Each source lists the skills it provides. `sync_from_sources()` iterates
+# this file; `update_skill(name, source=...)` targets one source by name.
+#
+# `repo` is a GitHub URL. `ref` is a branch/tag/commit. `skills` is a list
+# of skill directory names inside the repo's `skills/` subtree (or `null`
+# to pull every skill found).
+sources:
+  - name: agent-skills
+    repo: https://github.com/addyosmani/agent-skills.git
+    ref: main
+    skills:
+      - spec-driven-development
+      - source-driven-development
+      - api-and-interface-design
+      - planning-and-task-breakdown
+      - doubt-driven-development
+      - documentation-and-adrs
+      - code-simplification
+      - incremental-implementation
+      - frontend-ui-engineering
+      - context-engineering
+      - test-driven-development
+      - debugging-and-error-recovery
+      - browser-testing-with-devtools
+      - ci-cd-and-automation
+      - observability-and-instrumentation
+      - performance-optimization
+      - shipping-and-launch
+      - security-and-hardening
+      - git-workflow
+      - uat-workflow
+      - production-deployment
+      - docker-compose-deployment
