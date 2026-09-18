@@ -22,11 +22,31 @@ def _state(**over):
             "arch_uncertainty": 0.7,
         },
         "feedback": [
-            {"type": "skill_progress", "skill": "doubt-driven-development", "event": "completed"},
-            {"type": "skill_progress", "skill": "planning-and-task-breakdown", "event": "completed"},
-            {"type": "skill_progress", "skill": "planning-and-task-breakdown", "event": "failed"},
-            {"type": "skill_progress", "skill": "planning-and-task-breakdown", "event": "running"},
-            {"type": "skill_progress", "skill": "planning-and-task-breakdown", "event": "completed"},
+            {
+                "type": "skill_progress",
+                "skill": "doubt-driven-development",
+                "event": "completed",
+            },
+            {
+                "type": "skill_progress",
+                "skill": "planning-and-task-breakdown",
+                "event": "completed",
+            },
+            {
+                "type": "skill_progress",
+                "skill": "planning-and-task-breakdown",
+                "event": "failed",
+            },
+            {
+                "type": "skill_progress",
+                "skill": "planning-and-task-breakdown",
+                "event": "running",
+            },
+            {
+                "type": "skill_progress",
+                "skill": "planning-and-task-breakdown",
+                "event": "completed",
+            },
             # Non-skill feedback entries must be ignored.
             {"type": "note", "text": "human note"},
         ],
@@ -35,11 +55,26 @@ def _state(**over):
             "test_errors": 3,
             "verify_status": "fail",
             "acceptance_results": json.dumps(
-                [{"id": "a1", "check": "pytest -x", "passed": False, "expect": "0 failed"}]
+                [
+                    {
+                        "id": "a1",
+                        "check": "pytest -x",
+                        "passed": False,
+                        "expect": "0 failed",
+                    }
+                ]
             ),
-            "proposed_diffs": json.dumps({"changes": [{"skill": "doubt-driven-development",
-                                                       "change": "add contrarian pass",
-                                                       "risk_level": "medium"}]}),
+            "proposed_diffs": json.dumps(
+                {
+                    "changes": [
+                        {
+                            "skill": "doubt-driven-development",
+                            "change": "add contrarian pass",
+                            "risk_level": "medium",
+                        }
+                    ]
+                }
+            ),
         },
     }
     base.update(over)
@@ -48,8 +83,14 @@ def _state(**over):
 
 def test_build_context_collects_skill_usage():
     ctx = build_skill_review_context(_state())
-    assert ctx["skill_usage"]["doubt-driven-development"] == {"completed": 1, "failed": 0}
-    assert ctx["skill_usage"]["planning-and-task-breakdown"] == {"completed": 2, "failed": 1}
+    assert ctx["skill_usage"]["doubt-driven-development"] == {
+        "completed": 1,
+        "failed": 0,
+    }
+    assert ctx["skill_usage"]["planning-and-task-breakdown"] == {
+        "completed": 2,
+        "failed": 1,
+    }
     assert ctx["loop_counts"] == {"BUILD": 1, "VERIFY": 1}
     assert ctx["test_errors"] == 3
     assert ctx["verify_status"] == "fail"
@@ -74,9 +115,18 @@ def test_store_and_load_roundtrip(tmp_path):
     review = {
         "cycle_id": "c-1",
         "ts": 1,
-        "verdicts": [{"skill": "x", "verdict": "keep", "signal": "s", "rationale": "r"}],
-        "recommendations": [{"skill": "x", "action": "keep", "target": None,
-                             "suggestion": "none", "priority": "low"}],
+        "verdicts": [
+            {"skill": "x", "verdict": "keep", "signal": "s", "rationale": "r"}
+        ],
+        "recommendations": [
+            {
+                "skill": "x",
+                "action": "keep",
+                "target": None,
+                "suggestion": "none",
+                "priority": "low",
+            }
+        ],
     }
     p = store_skill_review(review, str(tmp_path))
     assert p.exists()
@@ -91,8 +141,10 @@ def test_load_absent_returns_empty(tmp_path):
 
 def test_run_review_degrades_when_llm_none(tmp_path, monkeypatch):
     """Decision 3: LLM None -> review is recorded as unavailable, no raise."""
-    monkeypatch.setattr("feedback.skill_review._recommendations_path",
-                        lambda d: Path(d) / "skill_recommendations.json")
+    monkeypatch.setattr(
+        "feedback.skill_review._recommendations_path",
+        lambda d: Path(d) / "skill_recommendations.json",
+    )
     out = run_skill_review(_state(), llm=None, storage_dir=str(tmp_path))
     assert out["status"] == "unavailable"
     assert "reason" in out
@@ -102,16 +154,33 @@ def test_run_review_degrades_when_llm_none(tmp_path, monkeypatch):
 
 def test_run_review_parses_llm_json(tmp_path, monkeypatch):
     """A well-formed LLM response is stored and returned."""
-    monkeypatch.setattr("feedback.skill_review._recommendations_path",
-                        lambda d: Path(d) / "skill_recommendations.json")
+    monkeypatch.setattr(
+        "feedback.skill_review._recommendations_path",
+        lambda d: Path(d) / "skill_recommendations.json",
+    )
 
     class FakeMsg:
-        content = json.dumps({
-            "verdicts": [{"skill": "x", "verdict": "improve", "signal": "s", "rationale": "r"}],
-            "recommendations": [{"skill": "x", "action": "rewrite_section",
-                                 "target": "challenges", "suggestion": "add substep",
-                                 "priority": "high"}],
-        })
+        content = json.dumps(
+            {
+                "verdicts": [
+                    {
+                        "skill": "x",
+                        "verdict": "improve",
+                        "signal": "s",
+                        "rationale": "r",
+                    }
+                ],
+                "recommendations": [
+                    {
+                        "skill": "x",
+                        "action": "rewrite_section",
+                        "target": "challenges",
+                        "suggestion": "add substep",
+                        "priority": "high",
+                    }
+                ],
+            }
+        )
 
     class FakeLLM:
         def invoke(self, messages):
@@ -121,13 +190,17 @@ def test_run_review_parses_llm_json(tmp_path, monkeypatch):
     assert out["status"] == "ok"
     assert out["verdicts"][0]["verdict"] == "improve"
     # Persisted file has the same shape.
-    assert load_skill_recommendations(str(tmp_path))["verdicts"][0]["verdict"] == "improve"
+    assert (
+        load_skill_recommendations(str(tmp_path))["verdicts"][0]["verdict"] == "improve"
+    )
 
 
 def test_run_review_degrades_when_llm_fails(tmp_path, monkeypatch):
     """Decision 3: a raising LLM is caught, degraded, never raises."""
-    monkeypatch.setattr("feedback.skill_review._recommendations_path",
-                        lambda d: Path(d) / "skill_recommendations.json")
+    monkeypatch.setattr(
+        "feedback.skill_review._recommendations_path",
+        lambda d: Path(d) / "skill_recommendations.json",
+    )
 
     class BadLLM:
         def invoke(self, messages):

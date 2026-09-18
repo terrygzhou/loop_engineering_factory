@@ -45,8 +45,11 @@ def build_skill_review_context(state: dict) -> Dict[str, Any]:
             slot["failed"] += 1
 
     artifacts = state.get("artifacts", {})
-    metrics = state.get("metrics", {}) if isinstance(state.get("metrics"), dict) \
+    metrics = (
+        state.get("metrics", {})
+        if isinstance(state.get("metrics"), dict)
         else getattr(state.get("metrics"), "model_dump", lambda: {})()
+    )
 
     return {
         "cycle_id": state.get("cycle_id", ""),
@@ -68,16 +71,16 @@ def render_skill_review_prompt(context: Dict[str, Any]) -> str:
     next iteration. Output is JSON (parsed by run_skill_review).
     """
     m = context.get("metrics", {})
-    return f"""You are the REFLECT meta-agent reviewing the skills used in development cycle {context.get('cycle_id', '?')}.
+    return f"""You are the REFLECT meta-agent reviewing the skills used in development cycle {context.get("cycle_id", "?")}.
 
 SIGNALS:
 - Metrics: {json.dumps(m, default=str)}
-- Skill usage (per-skill completed/failed counts from skill_progress feedback): {json.dumps(context.get('skill_usage', {}))}
-- Loop counters (retries per phase): {json.dumps(context.get('loop_counts', {}))}
-- Test errors: {context.get('test_errors', 0)}
-- VERIFY status: {context.get('verify_status')}
-- Acceptance results: {str(context.get('acceptance_results'))[:800]}
-- Proposed config diffs (from this cycle's REFLECT): {str(context.get('proposed_diffs'))[:800]}
+- Skill usage (per-skill completed/failed counts from skill_progress feedback): {json.dumps(context.get("skill_usage", {}))}
+- Loop counters (retries per phase): {json.dumps(context.get("loop_counts", {}))}
+- Test errors: {context.get("test_errors", 0)}
+- VERIFY status: {context.get("verify_status")}
+- Acceptance results: {str(context.get("acceptance_results"))[:800]}
+- Proposed config diffs (from this cycle's REFLECT): {str(context.get("proposed_diffs"))[:800]}
 
 TASK:
 For EACH skill in the usage map, emit a verdict:
@@ -153,10 +156,14 @@ def run_skill_review(state: dict, llm, storage_dir: str) -> dict:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        resp = llm.invoke([
-            SystemMessage(content="You are a meta-agent reviewing AI development skills. Output JSON only."),
-            HumanMessage(content=prompt),
-        ])
+        resp = llm.invoke(
+            [
+                SystemMessage(
+                    content="You are a meta-agent reviewing AI development skills. Output JSON only."
+                ),
+                HumanMessage(content=prompt),
+            ]
+        )
         parsed = json.loads(resp.content)
         review["verdicts"] = parsed.get("verdicts", [])
         review["recommendations"] = parsed.get("recommendations", [])
