@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -256,6 +256,90 @@ async def submit_input(user_input: UserInput):
     if user_input.phase in bridge._input_events:
         bridge._input_events[user_input.phase].set()
     return {"status": "received", "phase": user_input.phase}
+
+
+# ─── Skill management API (Feature 1) ─────────────────────────────────────
+
+
+class SkillRegisterRequest(BaseModel):
+    name: str
+    content: str
+    source: str = "manual"
+
+
+class SkillRemoveRequest(BaseModel):
+    name: str
+
+
+class SkillUpdateRequest(BaseModel):
+    name: str
+    source: Optional[str] = None
+    ref: Optional[str] = None
+
+
+@app.get("/api/skills")
+async def api_skills_list():
+    """List every skill under the configured skills dir."""
+    from tools.skill_manager import list_skills
+
+    return {"skills": list_skills()}
+
+
+@app.post("/api/skills/register")
+async def api_skills_register(req: SkillRegisterRequest):
+    """Register a new skill from raw SKILL.md text."""
+    from tools.skill_manager import SkillRegistrationError, register_skill
+
+    try:
+        entry = register_skill(req.name, req.content, source=req.source)
+    except SkillRegistrationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return entry
+
+
+@app.post("/api/skills/remove")
+async def api_skills_remove(req: SkillRemoveRequest):
+    """Remove a skill by name."""
+    from tools.skill_manager import remove_skill
+
+    return {"removed": remove_skill(req.name)}
+
+
+@app.post("/api/skills/update")
+async def api_skills_update(req: SkillUpdateRequest):
+    """Update a skill from a configured GitHub source."""
+    from tools.skill_manager import SkillUpdateError, update_skill
+
+    try:
+        entry = update_skill(req.name, source=req.source, ref=req.ref)
+    except SkillUpdateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return entry
+
+
+@app.post("/api/skills/sync")
+async def api_skills_sync():
+    """Sync every skill from every configured GitHub source."""
+    from tools.skill_manager import sync_from_sources
+
+    return {"results": sync_from_sources()}
+
+
+@app.get("/api/skills/recommendations")
+async def api_skills_recommendations():
+    """Read the persistent skill-review recommendations written by REFLECT.
+
+    Returns ``{"recommendations": [...]}``; an absent file yields ``[]``.
+    """
+    import json
+
+    from config.loader import config
+
+    path = Path(config.paths.storage_dir).expanduser() / "skill_recommendations.json"
+    if not path.exists():
+        return {"recommendations": []}
+    data = json.loads(path.read_text())
+    return {"recommendations": data.get("recommendations", [])}
 
 
 @app.websocket("/ws/progress")
