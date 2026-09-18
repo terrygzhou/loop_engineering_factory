@@ -38,13 +38,20 @@ def test_list_skills_returns_all(skills_dir):
     assert all("category" in s for s in skills)
 
 
-def test_register_skill_creates_file(skills_dir):
+def test_register_skill_creates_file(skills_dir, monkeypatch):
     entry = skill_manager.register_skill(
         "gamma",
         "---\nname: gamma\ndescription: 'gamma skill'\nversion: 1.0.0\n---\n\n# Gamma\n",
     )
     assert entry["name"] == "gamma"
     assert (skills_dir / "gamma" / "SKILL.md").exists()
+    # A fresh build_skill_registry call MUST include the new skill — the
+    # refresh must defeat the loader's non-empty-cache short-circuit.
+    import tools.loader as loader
+    loader.build_skill_registry(str(skills_dir))  # populate cache
+    monkeypatch.setattr(loader, "load_skills", lambda *a, **k: [])
+    rebuilt = loader.build_skill_registry(str(skills_dir))
+    assert "gamma" in rebuilt
 
 
 def test_register_skill_rejects_missing_frontmatter_name(skills_dir):
@@ -59,9 +66,16 @@ def test_register_skill_rejects_blank_content(skills_dir):
     assert not (skills_dir / "gamma").exists()
 
 
-def test_remove_skill_removes_directory(skills_dir):
+def test_remove_skill_removes_directory(skills_dir, monkeypatch):
+    import tools.loader as loader
+
+    loader.build_skill_registry(str(skills_dir))  # populate cache
     assert skill_manager.remove_skill("alpha") is True
     assert not (skills_dir / "alpha").exists()
+    # A fresh build_skill_registry call must no longer see "alpha".
+    monkeypatch.setattr(loader, "load_skills", lambda *a, **k: [])
+    rebuilt = loader.build_skill_registry(str(skills_dir))
+    assert "alpha" not in rebuilt
 
 
 def test_remove_skill_missing_returns_false(skills_dir):

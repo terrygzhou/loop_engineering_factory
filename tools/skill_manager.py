@@ -63,12 +63,14 @@ def _refresh_registry() -> None:
     """Force the loader's mtime-cached registry to rebuild from disk.
 
     The loader caches on the newest SKILL.md mtime, so a file written in the
-    same second can be skipped; bumping ``_registry_mtime`` guarantees the
-    next ``build_skill_registry`` call re-scans.
+    same second can be skipped; clearing the cache (``_registry = {}``)
+    guarantees the next ``build_skill_registry`` call re-scans. (Setting
+    ``_registry_mtime`` alone is not enough — the ``if _registry and ...``
+    guard short-circuits on a non-empty cache.)
     """
     import tools.loader as loader
 
-    loader._registry_mtime = 0.0
+    loader._registry = {}
     loader.build_skill_registry(str(_skills_dir()))
 
 
