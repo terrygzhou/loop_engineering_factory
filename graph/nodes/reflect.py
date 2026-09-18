@@ -13,6 +13,7 @@ from tools.loader import build_skill_registry
 from tools.llm import get_llm, invoke_skill
 from feedback.aggregator import FeedbackAggregator
 from feedback.diff_engine import generate_config_diffs, dry_run_validation
+from feedback.skill_review import run_skill_review
 from feedback.chroma_client import get_chroma_client, store_pattern, query_patterns
 from tools.stream_writer import safe_stream_writer
 
@@ -227,6 +228,43 @@ def reflect_node(state: dict) -> dict:
             "artifacts": artifacts_delta,
             "error": None,
         }
+
+    # Step 5.5: Skill performance review (skill-management-and-reflection)
+    # Review each skill used this cycle and emit next-iteration
+    # recommendations. Persisted to storage/skill_recommendations.json
+    # (read by the next DISCOVER/DEFINE cycle) and artifacts.skill_review.
+    # Degrades per Decision 3 when the LLM is unavailable.
+    writer(
+        {
+            "type": "progress",
+            "phase": "REFLECT",
+            "step": "progress",
+            "detail": "  → Running skill performance review...",
+            "ts": time.time(),
+        }
+    )
+    skill_review = run_skill_review(
+        state, llm=llm, storage_dir=config.paths.storage_dir
+    )
+    artifacts_delta["skill_review"] = json.dumps(skill_review, default=str)
+    feedback_entries.append(
+        {
+            "action": "skill_reviewed",
+            "status": skill_review.get("status", "?"),
+            "verdict_count": len(skill_review.get("verdicts", [])),
+        }
+    )
+    writer(
+        {
+            "type": "progress",
+            "phase": "REFLECT",
+            "step": "progress",
+            "detail": f"     Skill review: {skill_review.get('status')} — "
+            f"{len(skill_review.get('verdicts', []))} verdicts, "
+            f"{len(skill_review.get('recommendations', []))} recommendations",
+            "ts": time.time(),
+        }
+    )
 
     # Step 6: Human approval gate — auto-approve or CLI interrupt
     if changes:
