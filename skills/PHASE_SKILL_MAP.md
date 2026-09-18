@@ -119,3 +119,30 @@ No skills — human decision point only. Payload enriched with:
 6. **LOW**: `code-simplification` → PLAN
 7. **LOW**: `performance-optimization` → SHIP
 8. **LOW**: Remaining 📦 skills — phase-dependent based on project type
+
+## Skill Management (Feature 1)
+
+Skills are managed through the Web API (`tools/skill_manager.py` is the single
+source of truth; the loader auto-picks up add/remove on disk):
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/skills` | GET | List every skill + version + active-in-graph flag |
+| `/api/skills/register` | POST | Register a new skill from raw SKILL.md text |
+| `/api/skills/remove` | POST | Remove a skill by name |
+| `/api/skills/update` | POST | Pull one skill from a configured GitHub source |
+| `/api/skills/sync` | POST | Sync every skill from every source in `config/skill_sources.yaml` |
+| `/api/skills/recommendations` | GET | Read the persistent skill-review output |
+
+GitHub sources are config-driven (`config/skill_sources.yaml`); no repo is
+hardcoded in the manager.
+
+## REFLECT Skill Review (Feature 2)
+
+REFLECT now runs a skill-performance review (after config diffs, before the
+HIL gate). Signals: per-skill usage counts, loop counters, test_errors,
+acceptance_results, proposed config diffs. Output: per-skill verdicts
+(keep/improve/retire) + 1–3 next-iteration recommendations, stored in
+`artifacts.skill_review` and `storage/skill_recommendations.json`. The next
+DISCOVER/DEFINE cycle injects the recommendations as advisory prompt context.
+LLM failure degrades to `status: unavailable` (Decision 3), never raises.

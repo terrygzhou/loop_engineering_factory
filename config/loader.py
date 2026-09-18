@@ -274,10 +274,22 @@ class Config:
             "SKILLS_DIR", _config, "workflow.skill_registry_path", "~/.hermes/skills"
         )
 
+    class Skills:
+        skill_sources_path: str = _resolve(
+            "SKILL_SOURCES_PATH",
+            _config,
+            "skills.skill_sources_path",
+            "./config/skill_sources.yaml",
+        )
+        update_timeout_s: int = int(
+            _resolve("SKILL_UPDATE_TIMEOUT_S", _config, "skills.update_timeout_s", "120")
+        )
+
     paths = Paths()
     services = Services()
     observability = Observability()
     workflow = Workflow()
+    skills = Skills()
 
     def set_project_name(self, name: str):
         """Update project name and persist to config.yaml."""

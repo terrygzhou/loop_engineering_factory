@@ -102,6 +102,11 @@ class WorkflowState(TypedDict):
     #                            DISCOVER)
     #   arckit_nfr_constraints   — OAA-ADM-lite use_cases + NFR fields (W3,
     #                            DISCOVER)
+    #   skill_review             — REFLECT skill-performance review: the
+    #                            review dict (cycle_id, ts, verdicts,
+    #                            recommendations, status) as a JSON string,
+    #                            matching the proposed_diffs convention
+    #                            (written by graph/nodes/reflect.py)
 
     user_review_comments: str
 
