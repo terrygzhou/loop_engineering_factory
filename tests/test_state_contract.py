@@ -55,12 +55,16 @@ NODE_FILES = {
 # deliberately excluded — it returns a normalized build_report dict (a file
 # artifact), which _merge_results then folds into the `artifacts` sub-dict,
 # never into the top-level WorkflowState.
+# S7 seam split: _run_local_subgraph / _merge_results moved to
+# openhands_merge.py; _delegate_to_openhands stays in openhands_build.py.
 BUILD_CALLEES = {
     "graph/nodes/openhands_build.py": {
-        "_run_local_subgraph",
         "_delegate_to_openhands",
+    },
+    "graph/nodes/openhands_merge.py": {
+        "_run_local_subgraph",
         "_merge_results",
-    }
+    },
 }
 
 

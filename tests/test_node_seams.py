@@ -144,3 +144,76 @@ def test_define_estimate_spec_confidence_pure():
         )
         <= 1.0
     )
+
+
+# ── S7 openhands siblings ─────────────────────────────────────────────
+
+
+def test_openhands_parse_build_report_valid(tmp_path):
+    import json as _json
+
+    from graph.nodes.openhands_report import _parse_build_report
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "build_report.json").write_text(
+        _json.dumps(
+            {"status": "pass", "test_results": "12/12", "files": ["a.py"], "errors": []}
+        )
+    )
+    r = _parse_build_report(str(proj))
+    assert r is not None
+    assert r["build_status"] == "pass"
+    assert r["files_created"] == ["a.py"]
+    assert r["test_results"] == "12/12"
+
+
+def test_openhands_parse_build_report_invalid(tmp_path):
+    from graph.nodes.openhands_report import _parse_build_report
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    # No file at all → None
+    assert _parse_build_report(str(proj)) is None
+    # Invalid JSON → None
+    (proj / "build_report.json").write_text("{not json")
+    assert _parse_build_report(str(proj)) is None
+    # Missing "status" key → None
+    (proj / "build_report.json").write_text('{"files": ["a.py"]}')
+    assert _parse_build_report(str(proj)) is None
+
+
+def test_openhands_write_generated_files_traversal_rejected(tmp_path):
+    from graph.nodes.openhands_merge import _write_generated_files
+
+    state = {"project_path": str(tmp_path)}
+    files = [
+        {"path": "a.py", "content": "print('ok')"},
+        {"path": "../../etc/passwd", "content": "evil"},
+        {"path": "/abs/path.py", "content": "abs"},
+    ]
+    written = _write_generated_files(state, files)
+    assert written == ["a.py"]
+    assert not (tmp_path.parent / "etc" / "passwd").exists()
+
+
+def test_openhands_merge_results_halt_on_exhausted_budget():
+    from graph.nodes.openhands_merge import _merge_results
+
+    state = {
+        "phase": "BUILD",
+        "project_path": "/tmp/never",
+        "artifacts": {"loop_counts": {"BUILD": 2}},  # already at max
+    }
+    parsed = {
+        "build_status": "fail",
+        "build_log": "log",
+        "test_results": "0/10",
+        "files_created": [],
+        "errors": ["boom"],
+        "generated_code": [],
+    }
+    result = _merge_results(state, parsed)
+    assert result["next_phase"] is None
+    assert "error" in result and "3 times" in result["error"]
+    assert result["artifacts"]["loop_counts"]["BUILD"] == 3
