@@ -43,7 +43,7 @@ skill_view(name='subagent-driven-development') # Tasks spanning 3+ files
 | Directory | Purpose | Key Files |
 |-----------|---------|-----------|
 | `graph/` | LangGraph workflow | `main.py` (graph), `state.py` (TypedDict + CycleMetrics), `edges.py` (routing), `runner.py` (shared HIL/resume runner), `checkpointer.py` (AsyncSqliteSaver) |
-| `graph/nodes/` | Phase nodes | `discover.py`, `define.py`, `plan.py`, `openhands_build.py` (active BUILD), `build_subgraph_legacy.py` (fallback), `verify.py` (conditional gate) |
+| `graph/nodes/` | Phase nodes | `discover.py`, `define.py`, `plan.py`, `openhands_build.py` (active BUILD), `build_subgraph_legacy.py` (fallback), `verify.py` (conditional gate). Sibling modules (seam split, node-module-split OpenSpec): `discover_scan.py`, `discover_prefill.py`, `discover_interview.py`, `define_prompts.py`, `define_confidence.py`, `verify_review.py`, `verify_tooling.py`, `verify_acceptance.py`, `openhands_client.py`, `openhands_report.py`, `openhands_prompt.py`, `openhands_merge.py`, `plan_diagrams.py`, `plan_confidence.py`, `build_legacy_nodes.py`, `build_legacy_superapp.py`, `review_payload.py` — each sibling is imported only by its owning node file or by tests that target the moved helper directly; the node file re-exports all moved names (re-export shims keep existing test imports resolving) |
 | `frontend/` | Web UI backend | `backend/app.py` :48011, `backend/workflow_bridge.py` |
 | `tools/` | Shared utilities | `llm.py` (invoke_skill + invoke_skill_async + LLMError retry), `loader.py` (skills), `context_manager.py` |
 | `config/` | Configuration | `config.yaml`, `guardrails.yaml`, `bounds.yaml` |

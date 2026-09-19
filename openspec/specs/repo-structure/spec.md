@@ -14,7 +14,7 @@ excluded from the Docker build context).
 | Path | Purpose |
 |---|---|
 | `graph/` | LangGraph workflow: main.py, state.py, edges.py, runner.py, executor.py, checkpointer.py, ui_bridge.py, review_contract.py, achg_scanner.py, nodes/ |
-| `graph/nodes/` | discover, define, plan, review, openhands_build, build_subgraph_legacy, build_helpers, seed_data, verify, ship, reflect |
+| `graph/nodes/` | discover, define, plan, review, openhands_build, build_subgraph_legacy, build_helpers, seed_data, verify, ship, reflect. Sibling modules (seam split): `review_payload.py`, `define_prompts.py`, `define_confidence.py`, `verify_review.py`, `verify_tooling.py`, `verify_acceptance.py`, `openhands_client.py`, `openhands_report.py`, `openhands_prompt.py`, `openhands_merge.py`, `plan_diagrams.py`, `plan_confidence.py`, `discover_scan.py`, `discover_prefill.py`, `discover_interview.py`, `build_legacy_nodes.py`, `build_legacy_superapp.py`. Each sibling is imported only by its owning node file or by tests that target the moved helper directly; the node file re-exports all moved names so existing test imports keep resolving |
 | `frontend/` | backend/ (FastAPI app.py, workflow_bridge.py, abort_manager.py), nginx/, static/ |
 | `config/` | loader.py, guardrails.py, bounds_loader.py, config.yaml, guardrails.yaml, bounds.yaml |
 | `tools/` | llm.py, loader.py, distiller.py, arckit_loader.py, context_manager.py, audit_logger.py, prompt_logger.py, stream_writer.py |
