@@ -24,6 +24,7 @@ from service.px_gate import PxGate
 
 import json
 
+from graph.achg_scanner import scan_achg_context  # noqa: F401  — re-exported for existing test monkeypatch targets
 from graph.nodes.review_payload import (
     _parse_json_artifact,
     _missing_build_inputs,
