@@ -7,9 +7,7 @@ Skill chain:
 """
 
 import asyncio
-import json
 import os
-import re
 import time
 from pathlib import Path
 from typing import Any
@@ -17,7 +15,6 @@ from typing import Any
 
 from config.bounds_loader import bounds
 from config.loader import config as _cfg
-from feedback.chroma_client import get_chroma_client, query_patterns
 from graph.ui_bridge import SkillTimer
 from tools.arckit_context import arckit_advisory_block
 from tools.audit_logger import AuditLog
@@ -25,6 +22,25 @@ from tools.context_manager import prepare_context_for_llm
 from tools.llm import invoke_skill, invoke_skill_async
 from tools.loader import build_skill_registry
 from tools.stream_writer import safe_stream_writer
+
+# Re-exports for the seam-split sibling modules (node-module-seams spec S8).
+from graph.nodes.plan_diagrams import (  # noqa: F401
+    _DIAGRAM_SKILL_INSTRUCTIONS,
+    _build_diagram_context,
+    _extract_use_cases,
+    _get_diagram_skill,
+    _load_local_diagram_skill,
+    _slugify,
+)
+from graph.nodes.plan_confidence import (  # noqa: F401
+    _estimate_arch_uncertainty,
+    _generate_solution_md,
+    _load_feedback_context,
+)
+
+# get_chroma_client / query_patterns are now called inside plan_confidence._load_feedback_context,
+# but the test suite monkeypatches plan_mod.get_chroma_client directly.
+from feedback.chroma_client import get_chroma_client, query_patterns  # noqa: F401
 
 
 def plan_node(state: dict) -> dict:
@@ -303,99 +319,6 @@ def plan_node(state: dict) -> dict:
     return update
 
 
-def _load_feedback_context(state: dict) -> str:
-    """Query ChromaDB for historical patterns relevant to this project type."""
-    try:
-        client = get_chroma_client()
-        if client is None:
-            return ""
-        project_name = state.get("project_name", "unknown")
-        query_text = f"project: {project_name} phase: plan"
-        results = query_patterns(
-            client,
-            {"project": project_name, "context": query_text},
-            top_k=bounds.feedback.max_chroma_patterns,
-        )
-        if not results:
-            return ""
-        parts = ["== Historical Planning Lessons =="]
-        for i, pat in enumerate(results, 1):
-            doc = pat.get("document", "")
-            parts.append(
-                f"\n[Past Cycle {i}] (distance: {pat.get('distance', '?'):.3f})\n{doc[: bounds.feedback.max_pattern_doc_chars]}"
-            )
-        parts.append("\n== End Historical Lessons ==")
-        return "\n".join(parts)
-    except Exception:
-        return ""
-
-
-def _estimate_arch_uncertainty(artifacts: dict) -> float:
-    score = 0.6
-    plan_text = artifacts.get("plan", "")
-    doubt_text = artifacts.get("doubt_resolution", "")
-    diagrams = artifacts.get("diagrams", {})
-
-    if len(plan_text) > 200:
-        score -= 0.15
-    if len(doubt_text) > 50:
-        score -= 0.1
-    if diagrams:
-        score -= 0.1
-    return max(0.0, min(1.0, score))
-
-
-# ── Inline skill instructions for diagram generation (fallback) ──
-_DIAGRAM_SKILL_INSTRUCTIONS = """You are an architecture diagram generator. Your job is to produce valid Mermaid syntax diagrams.
-
-Rules:
-- Output ONLY a Mermaid code block, nothing else.
-- Use the appropriate Mermaid diagram type for the request.
-- Include all components, relationships, and data flows mentioned in the context.
-- Mark assumed components with a note.
-
-Diagram type mappings:
-- "component" → use `graph TD` with subgraphs for modules/boundaries
-- "sequence" → use `sequenceDiagram` with participant interactions
-- "data flow" → use `graph LR` or `graph TD` showing entity relationships and data movement
-- "deployment" → use `graph TD` with infrastructure nodes (servers, containers, networks)"""
-
-
-def _load_local_diagram_skill() -> str | None:
-    """Load architecture-diagram-generator skill from local project skills dir."""
-    local_path = (
-        Path(__file__).resolve().parent.parent.parent
-        / "skills"
-        / "architecture-diagram-generator"
-        / "SKILL.md"
-    )
-    if local_path.exists():
-        return local_path.read_text().split("---", 2)[-1].strip()
-    return None
-
-
-def _get_diagram_skill(skills: dict) -> str:
-    """Resolve diagram skill content: registry → local → inline fallback."""
-    arch_skill = skills.get("architecture-diagram-generator", {})
-    skill_content = arch_skill.get("content", "") if arch_skill else ""
-    if not skill_content:
-        local = _load_local_diagram_skill()
-        if local:
-            skill_content = local
-    if not skill_content:
-        skill_content = _DIAGRAM_SKILL_INSTRUCTIONS
-    return skill_content
-
-
-def _build_diagram_context(state: dict) -> str:
-    """Build truncated context string for diagram generation."""
-    spec = state.get("artifacts", {}).get("spec_refined", "")
-    plan = state.get("artifacts", {}).get("plan", "")
-    tasks = state.get("artifacts", {}).get("tasks", "")
-    doubt = state.get("artifacts", {}).get("doubt_resolution", "")
-    return f"Spec:\n{spec[: bounds.context.diagram_spec_chars]}\n\nPlan:\n{plan[: bounds.context.diagram_plan_chars]}\n\nTasks:\n{tasks[: bounds.context.diagram_tasks_chars]}\n\nDoubt Resolution:\n{doubt[: bounds.context.diagram_doubt_chars]}"
-
-
 def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     _DIAGRAM_PLACEHOLDER = (
         'flowchart TD\n    NOTE["⚠ Insufficient context for diagram generation."]'
@@ -472,62 +395,6 @@ def _generate_diagram(skills: dict, diagram_type: str, state: dict) -> str:
     return diagram
 
 
-# ── W4 plan-sequence-view: use-case-driven sequence views ─────────────
-# Extraction order (spec plan-architecture-diagrams): arckit_nfr_constraints
-# use_cases first, then user-flow lines from interview/spec, else none.
-_UC_PREFIX_RE = re.compile(
-    r"^\s*(?:[-*+]\s*)?(?:user\s+(?:story|flow|journey)|scenario)\s*[:\-]?\s*(.+?)\s*$",
-    re.IGNORECASE,
-)
-_UC_AS_A_RE = re.compile(
-    r"^\s*(?:[-*+]\s*)?as\s+(?:a|an|the)\s+[^.;]{0,80}?\s+I\s+(?:want|need|can)\s+.+?\s*$",
-    re.IGNORECASE,
-)
-
-
-def _extract_use_cases(artifacts: dict) -> list[str]:
-    """Extract use cases: NFR key first, else user-flow lines, else []."""
-    raw = artifacts.get("arckit_nfr_constraints")
-    if raw:
-        try:
-            nfr = json.loads(raw)
-        except (TypeError, ValueError):
-            nfr = None
-        if isinstance(nfr, dict):
-            ucs = nfr.get("use_cases")
-            if isinstance(ucs, list):
-                names = [str(u).strip() for u in ucs if str(u).strip()]
-                if names:
-                    return names
-    text = "\n".join(
-        part
-        for part in (
-            artifacts.get("interview_notes", "") or "",
-            artifacts.get("spec_refined", "") or "",
-        )
-        if part
-    )
-    found: list[str] = []
-    seen: set[str] = set()
-    for line in text.splitlines():
-        m = _UC_PREFIX_RE.match(line)
-        cand = m.group(1).strip() if m else None
-        if cand is None:
-            m2 = _UC_AS_A_RE.match(line)
-            cand = m2.group(0).strip() if m2 else None
-        if cand and cand.lower() not in seen:
-            seen.add(cand.lower())
-            found.append(cand)
-    return found
-
-
-def _slugify(text: str, limit: int = 40) -> str:
-    """URL/identifier-safe slug for diagram keys (sequence_<slug>)."""
-    slug = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
-    slug = re.sub(r"-{2,}", "-", slug)[:limit].rstrip("-")
-    return slug or "uc"
-
-
 def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     project_folder = state.get("project_folder", state.get("project_path", ""))
     diagrams_dir = Path(project_folder) / "build" / "diagrams"
@@ -592,8 +459,12 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
     diagrams = {}
 
     # ── Parallel LLM calls: base views + one sequence view per use case ──
-    spec_cap = state.get("artifacts", {}).get("spec_refined", "")[: bounds.context.diagram_spec_chars]
-    plan_cap = state.get("artifacts", {}).get("plan", "")[: bounds.context.diagram_plan_chars]
+    spec_cap = state.get("artifacts", {}).get("spec_refined", "")[
+        : bounds.context.diagram_spec_chars
+    ]
+    plan_cap = state.get("artifacts", {}).get("plan", "")[
+        : bounds.context.diagram_plan_chars
+    ]
 
     async def _run_parallel():
         tasks = []
@@ -638,8 +509,7 @@ def _generate_all_diagrams(skills: dict, state: dict) -> dict[str, str]:
                         f"flows involved. Use the spec and plan as the primary source of truth."
                     ),
                     context=(
-                        f"Spec:\n{spec_cap}\n\nPlan:\n{plan_cap}\n\n"
-                        f"Use case:\n{uc}"
+                        f"Spec:\n{spec_cap}\n\nPlan:\n{plan_cap}\n\nUse case:\n{uc}"
                     ),
                     llm=None,
                     workflow_id=state.get("project_name", ""),
@@ -769,164 +639,3 @@ def _convert_diagrams_to_png(diagrams: dict[str, str]) -> dict[str, str]:
         except OSError:
             pass
     return result
-
-
-def _generate_solution_md(state: dict, artifacts_delta: dict) -> str:
-    """Generate comprehensive solution.md from all PLAN artifacts.
-
-    Always produces meaningful output — falls back to state-level data
-    (project_description, project_context, interview_notes, requirement_md)
-    when LLM-generated artifacts are missing or empty.
-    """
-    merged = {**state.get("artifacts", {}), **artifacts_delta}
-
-    # ── Diagnostic logging ──
-    artifact_keys = [
-        "spec_refined",
-        "plan",
-        "tasks",
-        "analysis",
-        "doubt_resolution",
-        "checklist",
-    ]
-    available = [k for k in artifact_keys if merged.get(k)]
-    missing = [k for k in artifact_keys if not merged.get(k)]
-    if missing:
-        w = safe_stream_writer()
-        w(
-            {
-                "type": "progress",
-                "phase": "PLAN",
-                "step": "solution",
-                "detail": f"Solution.md: missing artifacts: {', '.join(missing)}",
-                "ts": time.time(),
-            }
-        )
-    if available:
-        w = safe_stream_writer()
-        w(
-            {
-                "type": "progress",
-                "phase": "PLAN",
-                "step": "solution",
-                "detail": f"Solution.md: has artifacts: {', '.join(available)}",
-                "ts": time.time(),
-            }
-        )
-
-    lines = ["# Solution Design", ""]
-
-    project_name = state.get("project_name", "Project")
-    lines.append(f"## {project_name} — Solution Design")
-    lines.append("")
-
-    # ── Always include project description ──
-    project_desc = state.get("project_description", "")
-    if project_desc:
-        lines.extend(["## Project Description", project_desc, ""])
-
-    # ── Always include interview notes (source requirements from DISCOVER) ──
-    interview = merged.get("interview_notes", "")
-    if interview:
-        lines.extend(["## Interview Notes", interview, ""])
-
-    # ── Always include project context from DISCOVER (if spec not generated) ──
-    project_context = merged.get("project_context", "")
-    if project_context and not merged.get("spec_refined"):
-        lines.extend(["## Project Context (from DISCOVER)", project_context, ""])
-
-    # ── Always include requirement_md (if spec not generated) ──
-    requirement_md = merged.get("requirement_md", "")
-    if requirement_md and not merged.get("spec_refined"):
-        lines.extend(["## Requirements", requirement_md, ""])
-
-    # ── LLM-generated artifacts (spec, plan, tasks, etc.) ──
-    spec = merged.get("spec_refined", "")
-    if spec:
-        lines.extend(["## Specification", spec, ""])
-
-    plan = merged.get("plan", "")
-    if plan:
-        lines.extend(["## Implementation Plan", plan, ""])
-
-    tasks = merged.get("tasks", "")
-    if tasks:
-        lines.extend(["## Task Breakdown", tasks, ""])
-
-    analysis = merged.get("analysis", "")
-    if analysis:
-        lines.extend(["## Cross-Artifact Analysis", analysis, ""])
-
-    doubt = merged.get("doubt_resolution", "")
-    if doubt:
-        lines.extend(["## Doubt Resolution", doubt, ""])
-
-    checklist = merged.get("checklist", "")
-    if checklist:
-        lines.extend(["## Implementation Checklist", checklist, ""])
-
-    # ── API contract (from DEFINE phase) ──
-    api_contract = merged.get("api_contract", "")
-    if api_contract:
-        lines.extend(["## API Contract", api_contract, ""])
-
-    # ── Architecture diagrams ──
-    diagrams = merged.get("diagrams", {})
-    if diagrams:
-        lines.extend(["## Architecture Diagrams", ""])
-        _DIAGRAM_PLACEHOLDER_MARKER = "Insufficient context for diagram generation"
-        has_placeholder = False
-        for dtype, filepath in diagrams.items():
-            lines.append(f"### {dtype.replace('-', ' ').title()}")
-            lines.append("```mermaid")
-            try:
-                diagram_content = Path(filepath).read_text()
-                if _DIAGRAM_PLACEHOLDER_MARKER in diagram_content:
-                    has_placeholder = True
-                lines.append(diagram_content)
-            except Exception:
-                lines.append(f"(diagram file: {filepath})")
-            lines.append("```")
-            lines.append("")
-        if has_placeholder:
-            lines.extend(
-                [
-                    "> **Note:** Architecture diagrams could not be generated — insufficient project context from DISCOVER/DEFINE phases.",
-                    "",
-                ]
-            )
-
-    # ── Metrics (safe formatting — handles non-numeric values) ──
-    lines.extend(["## Metrics", ""])
-    metrics = state.get("metrics")
-    if metrics is not None and hasattr(metrics, "model_dump"):
-        md = metrics.model_dump()
-    else:
-        md = metrics or {}
-
-    arch_unc = md.get("arch_uncertainty", "N/A")
-    if isinstance(arch_unc, (int, float)):
-        lines.append(f"- **Architectural Uncertainty**: {arch_unc:.2f}")
-    else:
-        lines.append(f"- **Architectural Uncertainty**: {arch_unc}")
-
-    task_count = md.get("task_count", "N/A")
-    lines.append(f"- **Task Count**: {task_count}")
-    diagram_count = md.get("diagram_count", "N/A")
-    lines.append(f"- **Diagram Count**: {diagram_count}")
-    lines.append("")
-
-    # ── Note about missing artifacts ──
-    if missing:
-        lines.extend(
-            [
-                "## Notes",
-                f"*Artifacts not generated (may need LLM connection or skill configuration):* {', '.join(missing)}",
-                "",
-            ]
-        )
-
-    lines.append("---")
-    lines.append("*Generated by Loop Engineering PLAN phase*")
-
-    return "\n".join(lines)
