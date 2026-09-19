@@ -8,6 +8,7 @@ def test_node_seams_module_importable():
 
 def test_review_parse_json_artifact():
     from graph.nodes.review_payload import _parse_json_artifact
+
     assert _parse_json_artifact('{"a": 1}') == {"a": 1}
     assert _parse_json_artifact("not json") is None
     assert _parse_json_artifact("") is None
@@ -16,6 +17,7 @@ def test_review_parse_json_artifact():
 
 def test_review_spec_summary_truncation():
     from graph.nodes.review_payload import _spec_summary
+
     assert _spec_summary("short") == "short"
     assert _spec_summary("") == ""
     out = _spec_summary("x" * 600, 500)
@@ -24,6 +26,7 @@ def test_review_spec_summary_truncation():
 
 def test_review_extract_task_breakdown():
     from graph.nodes.review_payload import _extract_task_breakdown
+
     plan = "- [ ] task one\n- [x] task two\n1. task three\nsome milestone line\n"
     tasks = _extract_task_breakdown(plan)
     # NB: the cleanup regex in _extract_task_breakdown is
@@ -38,6 +41,7 @@ def test_review_extract_task_breakdown():
 
 def test_verify_parse_review_result_counts():
     from graph.nodes.verify_review import _parse_review_result
+
     r = _parse_review_result(
         "Critical: broken import at a.py:3\nRequired: missing error handling\n"
         "- [x] item\n**Nit: style thing here**\n"
@@ -49,14 +53,18 @@ def test_verify_parse_review_result_counts():
 
 def test_verify_find_venv_python(tmp_path):
     from graph.nodes.verify_tooling import _find_venv_python
+
     assert _find_venv_python(str(tmp_path)) is None
     (tmp_path / ".venv" / "bin").mkdir(parents=True)
     (tmp_path / ".venv" / "bin" / "python3").write_text("#!/usr/bin/env python3")
-    assert _find_venv_python(str(tmp_path)) == str(tmp_path / ".venv" / "bin" / "python3")
+    assert _find_venv_python(str(tmp_path)) == str(
+        tmp_path / ".venv" / "bin" / "python3"
+    )
 
 
 def test_verify_collect_source_files(tmp_path):
     from graph.nodes.verify_review import _collect_source_files
+
     (tmp_path / "a.py").write_text("x = 1\n")
     (tmp_path / "build").mkdir()
     (tmp_path / "build" / "b.py").write_text("y = 2\n")
@@ -66,12 +74,14 @@ def test_verify_collect_source_files(tmp_path):
 
 def test_verify_build_review_context():
     from graph.nodes.verify_review import _build_review_context
+
     ctx = _build_review_context([{"path": "a.py", "content": "x"}], "SPEC")
     assert "a.py" in ctx and "SPEC" in ctx
 
 
 def test_discover_detect_project_type(tmp_path):
     from graph.nodes.discover_scan import _detect_project_type
+
     assert _detect_project_type(str(tmp_path)) == "unknown"
     (tmp_path / "pyproject.toml").write_text("[project]")
     assert _detect_project_type(str(tmp_path)) == "python"
@@ -82,6 +92,7 @@ def test_discover_detect_project_type(tmp_path):
 
 def test_discover_inventory_tree(tmp_path):
     from graph.nodes.discover_scan import _inventory_tree
+
     (tmp_path / "src" / "a.py").parent.mkdir(parents=True)
     (tmp_path / "src" / "a.py").write_text("x")
     (tmp_path / ".git").mkdir()
@@ -92,13 +103,44 @@ def test_discover_inventory_tree(tmp_path):
 
 def test_discover_git_status_no_repo(tmp_path):
     from graph.nodes.discover_scan import _get_git_status
+
     out = _get_git_status(str(tmp_path))
     assert set(out) == {"branch", "dirty"}
 
 
 def test_discover_collect_plain_docs(tmp_path):
     from graph.nodes.discover_scan import _collect_plain_docs
+
     (tmp_path / "notes.md").write_text("hello")
     (tmp_path / "ARC-001-REQ.md").write_text("arckit")
     out = _collect_plain_docs(str(tmp_path))
     assert [p.name for p in out] == ["notes.md"]
+
+
+def test_define_build_spec_context_pure():
+    from graph.nodes.define_prompts import _build_spec_context
+
+    state = {"spec_path": "/x", "artifacts": {"project_context": "ctx"}}
+    out = _build_spec_context(state, "notes", "", "")
+    assert "Existing project context" in out and "ctx" in out
+    # byte-identical: NFR block only when artifact set
+    state2 = {"spec_path": "/x", "artifacts": {"arckit_nfr_constraints": "NFR-1"}}
+    assert "NFR constraints" in _build_spec_context(state2, "n", "", "")
+    assert "NFR constraints" not in _build_spec_context(state, "n", "", "")
+
+
+def test_define_estimate_spec_confidence_pure():
+    from graph.nodes.define_confidence import _estimate_spec_confidence
+
+    assert _estimate_spec_confidence({}) == 0.0
+    assert (
+        0
+        < _estimate_spec_confidence(
+            {
+                "spec_refined": "x" * 200,
+                "api_contract": "y" * 100,
+                "interview_notes": "z" * 100,
+            }
+        )
+        <= 1.0
+    )
