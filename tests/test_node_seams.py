@@ -62,3 +62,37 @@ def test_verify_build_review_context():
     from graph.nodes.verify_review import _build_review_context
     ctx = _build_review_context([{"path": "a.py", "content": "x"}], "SPEC")
     assert "a.py" in ctx and "SPEC" in ctx
+
+
+def test_discover_detect_project_type(tmp_path):
+    from graph.nodes.discover_scan import _detect_project_type
+    assert _detect_project_type(str(tmp_path)) == "unknown"
+    (tmp_path / "pyproject.toml").write_text("[project]")
+    assert _detect_project_type(str(tmp_path)) == "python"
+    (tmp_path / "package.json").write_text("{}")
+    # pyproject wins (checked first)
+    assert _detect_project_type(str(tmp_path)) == "python"
+
+
+def test_discover_inventory_tree(tmp_path):
+    from graph.nodes.discover_scan import _inventory_tree
+    (tmp_path / "src" / "a.py").parent.mkdir(parents=True)
+    (tmp_path / "src" / "a.py").write_text("x")
+    (tmp_path / ".git").mkdir()
+    tree = _inventory_tree(str(tmp_path))
+    assert "src" in tree and ".git" not in tree
+    assert tree["src"]["type"] == "dir"
+
+
+def test_discover_git_status_no_repo(tmp_path):
+    from graph.nodes.discover_scan import _get_git_status
+    out = _get_git_status(str(tmp_path))
+    assert set(out) == {"branch", "dirty"}
+
+
+def test_discover_collect_plain_docs(tmp_path):
+    from graph.nodes.discover_scan import _collect_plain_docs
+    (tmp_path / "notes.md").write_text("hello")
+    (tmp_path / "ARC-001-REQ.md").write_text("arckit")
+    out = _collect_plain_docs(str(tmp_path))
+    assert [p.name for p in out] == ["notes.md"]
