@@ -28,3 +28,37 @@ def test_review_extract_task_breakdown():
     tasks = _extract_task_breakdown(plan)
     assert "task one" in tasks and "task two" in tasks
     assert _extract_task_breakdown("") == []
+
+
+def test_verify_parse_review_result_counts():
+    from graph.nodes.verify_review import _parse_review_result
+    r = _parse_review_result(
+        "Critical: broken import at a.py:3\nRequired: missing error handling\n"
+        "- [x] item\n**Nit: style thing here**\n"
+    )
+    assert r["critical"] == 1 and r["verdict"] == "changes"
+    r2 = _parse_review_result("All good, no issues found at all here")
+    assert r2["verdict"] in ("approve", "changes")
+
+
+def test_verify_find_venv_python(tmp_path):
+    from graph.nodes.verify_tooling import _find_venv_python
+    assert _find_venv_python(str(tmp_path)) is None
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python3").write_text("#!/usr/bin/env python3")
+    assert _find_venv_python(str(tmp_path)) == str(tmp_path / ".venv" / "bin" / "python3")
+
+
+def test_verify_collect_source_files(tmp_path):
+    from graph.nodes.verify_review import _collect_source_files
+    (tmp_path / "a.py").write_text("x = 1\n")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "b.py").write_text("y = 2\n")
+    files = _collect_source_files(str(tmp_path))
+    assert [f["path"] for f in files] == ["a.py"]
+
+
+def test_verify_build_review_context():
+    from graph.nodes.verify_review import _build_review_context
+    ctx = _build_review_context([{"path": "a.py", "content": "x"}], "SPEC")
+    assert "a.py" in ctx and "SPEC" in ctx
