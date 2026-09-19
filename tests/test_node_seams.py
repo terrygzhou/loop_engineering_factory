@@ -252,3 +252,138 @@ def test_discover_build_context_json_shape():
     assert parsed["type"] == "python"
     assert "interview_focus" in parsed
 
+
+# ── S10 build_legacy siblings ──────────────────────────────────────
+
+
+def test_build_legacy_route_build_four_paths():
+    """route_build: 4 distinct sub_phase → next-node paths (W2-mirror)."""
+    from graph.nodes.build_subgraph_legacy import route_build
+    from langgraph.graph import END
+
+    base = {
+        "sub_phase": "IMPL_PLAN",
+        "backlog": [],
+        "backlog_idx": 0,
+    }
+    # IMPL_PLAN → CREATE_BACKLOG
+    assert route_build({**base, "sub_phase": "IMPL_PLAN"}) == "CREATE_BACKLOG"
+    # CREATE_BACKLOG → IMPLEMENT
+    assert route_build({**base, "sub_phase": "CREATE_BACKLOG"}) == "IMPLEMENT"
+    # UNIT_TEST with all items done → INT_TEST
+    assert route_build(
+        {**base, "sub_phase": "UNIT_TEST", "backlog": [], "backlog_idx": 0}
+    ) == "INT_TEST"
+    # UNIT_TEST with items remaining → IMPLEMENT (loop)
+    assert route_build(
+        {**base, "sub_phase": "UNIT_TEST", "backlog": [{"status": "pending"}], "backlog_idx": 0}
+    ) == "IMPLEMENT"
+    # SEED → DEPLOY_GATE
+    assert route_build({**base, "sub_phase": "SEED"}) == "DEPLOY_GATE"
+    # UAT → END
+    assert route_build({**base, "sub_phase": "UAT"}) == END
+
+
+def test_build_legacy_build_output_mapping(tmp_path):
+    """build_output_mapping: pass/fail/skip paths produce correct artifacts."""
+    from graph.nodes.build_subgraph_legacy import build_output_mapping, BuildSubState
+
+    # Pass: all items completed, UAT green
+    child = BuildSubState(
+        {
+            "sub_phase": "UAT",
+            "project_path": str(tmp_path),
+            "docker_proj": str(tmp_path),
+            "spec_text": "",
+            "tasks_text": "",
+            "skills": {},
+            "backlog": [{"id": 1, "description": "task", "status": "completed"}],
+            "backlog_idx": 0,
+            "impl_plan": "",
+            "current_code": "",
+            "test_code": "",
+            "test_result": "",
+            "test_output": "",
+            "retry_count": 0,
+            "int_test_result": "",
+            "int_test_output": "",
+            "seed_result": "",
+            "seed_output": "",
+            "uat_result": "pass",
+            "uat_output": "ok",
+            "uat_pass_rate": 1.0,
+            "all_generated_code": ["print(1)"],
+            "errors": [],
+            "build_status": "pending",
+            "parent_artifacts": {},
+            "superApp_mode": "agent",
+            "superApp_agent_report": {},
+            "security_review": "",
+            "code_review": "",
+        }
+    )
+    out = build_output_mapping(child)
+    assert out["artifacts"]["build_status"] == "pass"
+    assert out["next_phase"] == "SHIP"
+    assert out["artifacts"]["uat_pass_rate"] == 1.0
+
+    # Skip: uat_result = "skip"
+    child_skip = dict(child, uat_result="skip", uat_pass_rate=0.0)
+    out_skip = build_output_mapping(child_skip)
+    assert out_skip["artifacts"]["build_status"] == "pass"  # skip is not fatal
+    assert out_skip["next_phase"] == "SHIP"
+
+    # Fail: errors + incomplete items
+    child_fail = dict(
+        child,
+        errors=["boom"],
+        uat_result="fail",
+        uat_pass_rate=0.0,
+        backlog=[{"id": 1, "description": "task", "status": "failed"}],
+    )
+    out_fail = build_output_mapping(child_fail)
+    assert out_fail["artifacts"]["build_status"] == "fail"
+    assert out_fail["next_phase"] == "BUILD"  # loop back
+    assert out_fail["error"] is not None
+
+
+def test_build_legacy_superapp_scripted_no_cases(tmp_path, monkeypatch):
+    """_run_superApp_scripted with no test-cases.json → generates minimal cases."""
+    from graph.nodes.build_legacy_superapp import _run_superApp_scripted
+
+    import json as _json
+    from pathlib import Path as _P
+
+    # Create the project dir structure
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / "build").mkdir()
+    # Write a minimal test-cases.json
+    cases = [
+        {"name": "home", "type": "endpoint", "path": "/", "method": "GET", "expected": {"status_code": 200}}
+    ]
+    (project_dir / "build" / "test-cases.json").write_text(_json.dumps(cases))
+
+    state = {
+        "project_path": str(project_dir),
+        "spec_text": "",
+        "tasks_text": "",
+        "skills": {},
+    }
+
+    # Monkeypatch _run_command_safe to return HTTP 200
+    def fake_run(cmd, timeout=60):
+        return 0, "200", ""
+
+    import graph.nodes.build_legacy_superapp as _bg
+
+    monkeypatch.setattr(_bg, "_run_command_safe", fake_run)
+
+    output_dir = project_dir / "superApp_output"
+    results = _run_superApp_scripted(state, "http://localhost:4080", output_dir)
+    assert len(results) == 1
+    assert results[0]["status"] == "passed"
+    # Results file written
+    assert (output_dir / "test_results.json").exists()
+
+
