@@ -1,5 +1,5 @@
 """
-LLM integration via local vLLM (Qwen3.6-27B) using OpenAI-compatible API.
+LLM integration via local vLLM (Qwen3.8-27B) using OpenAI-compatible API.
 Uses distilled skill instructions (Purpose + Process only) for fast context windows.
 """
 

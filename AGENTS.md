@@ -21,7 +21,7 @@ Two entry points share `graph/runner.py`:
 |------|--------|
 | **Build command** | `docker compose up -d --build loop` |
 | **Ports** | nginx :4080, FastAPI :48011, health :48081, OpenHands Gateway :43005, Phoenix :46006 |
-| **LLM** | `LLM_BASE_URL=http://pop-os:8080/v1` (local SGLang Qwen3.6-27B-NVFP4) |
+| **LLM** | `LLM_BASE_URL=http://pop-os:8080/v1` (local SGLang Qwen3.8-27B-NVFP4) |
 | **No PostgreSQL** | Pattern storage via ChromaDB (internal, no host port) |
 | **HIL gates** | DISCOVER (2 pauses), ARCH_REVIEW (1 pause); node-level `interrupt()` from `langgraph.types` |
 | **Artifacts** | Generated projects land in `output/` |

@@ -40,7 +40,7 @@ reflection:
   auto_apply_low_risk: true # Auto-apply low-risk changes when confidence >= 0.95 AND security_findings == 0
 
 llm:
-  model: Qwen3.6-27B
+  model: Qwen3.8-27B
   base_url: ${LLM_BASE_URL:-http://pop-os:8080/v1}
   temperature: 0.1 # Low temp for deterministic output
   max_retries: 3

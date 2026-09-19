@@ -2,7 +2,7 @@
 Phoenix LLM-evaluator for Loop Factory workflow phases.
 
 Architecture:
-    Phase output → LLM-as-judge (Qwen3.6-35B-A3B) → OTel span → Phoenix UI
+    Phase output → LLM-as-judge (Qwen3.8-27B) → OTel span → Phoenix UI
 
 Context-aware evaluation: the LLM first extracts project domain/context
 from the spec, then scores against criteria tailored to that domain.

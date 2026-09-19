@@ -133,9 +133,15 @@ services:
 
   # ── OpenHands: AI agent for Gateway API (OpenAI-compatible) ──
   openhands:
-    image: ghcr.io/openhands/agent-server:1.30.0-python
+    image: ghcr.io/openhands/agent-server:main-python
     container_name: openhands-server
-    restart: "no"
+    restart: "unless-stopped"
+    # main-python binds to 127.0.0.1 when no session API key is set (security
+    # default), which breaks the host port-forward on :43005. Override the
+    # entrypoint to bind all interfaces so the gateway is reachable from the
+    # host (loop_factory-loop connects via the internal network anyway, but
+    # host-side tooling / manual debugging also reach :43005).
+    command: ["--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "43005:8000"
     volumes:
@@ -148,11 +154,11 @@ services:
       - ./output:/output
     environment:
       - LLM_BASE_URL=http://host.docker.internal:8080/v1
-      - LLM_MODEL=Qwen3.6-35B-A3B
+      - LLM_MODEL=Qwen3.8-27B
       - OH_SECRET_KEY=${OH_SECRET_KEY}
       - SANDBOX_USER_ID=1000
       - AGENT_SERVER_IMAGE_REPOSITORY=ghcr.io/openhands/agent-server
-      - AGENT_SERVER_IMAGE_TAG=1.30.0-python
+      - AGENT_SERVER_IMAGE_TAG=main-python
       - WORKSPACE_BASE=/opt/workspace_base
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -172,6 +178,65 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # ── OpenHands Agent Canvas: all-in-one UI (agent-server + automation + frontend) ──
+  # The agent-canvas image bundles its OWN agent-server (port 18000 inside the
+  # container) plus the automation backend (18001) and the static frontend, all
+  # unified behind a single ingress on :8000 and exposed at /canvas. This is a
+  # SEPARATE, independent agent-server from the headless `openhands` service
+  # above (which the loop_factory BUILD node drives via REST). They do not share
+  # conversation state; the canvas is the visible multi-agent dashboard / ACP
+  # layer the headless gateway lacks. The canvas's own agent-server is reachable
+  # from the host at :43100/api when you want to poke its REST API directly.
+  canvas:
+    image: ghcr.io/openhands/agent-canvas:main
+    container_name: openhands-canvas
+    restart: "unless-stopped"
+    ports:
+      - "43006:8000"   # unified ingress: /canvas (UI), /api, /api/automation, /vscode
+    volumes:
+      # Canvas's own agent-server persists here (separate from openhands-server's ~/.openhands).
+      # The agent-canvas image declares /home/openhands/.openhands as a volume, so the bind
+      # targets that exact path (not /.openhands, which the image also declares but doesn't
+      # use as its config root). Host source must be owned by the container user (uid 1000).
+      - ~/.openhands/canvas:/home/openhands/.openhands
+      # Projects the canvas agent can read/edit
+      - ./projects:/projects
+      # Shared generated-output dir so the canvas agent can see loop builds
+      - ./output:/output
+    environment:
+      # LLM — canvas's own agent-server needs the provider + key env that the
+      # headless openhands service is missing (it relies on inline LLM config
+      # from the BUILD node). Pointed at the local SGLang endpoint.
+      - LLM_BASE_URL=http://host.docker.internal:8080/v1
+      - LLM_MODEL=Qwen3.8-27B
+      - LLM_API_KEY=not-needed
+      - LLM_PROVIDER=openai
+      # Session API key (secures /api and the automation backend; auto-generated
+      # + persisted to the volume if unset). Provide your own to lock it down.
+      - LOCAL_BACKEND_API_KEY=${LOCAL_BACKEND_API_KEY}
+      - OH_SECRET_KEY=${OH_SECRET_KEY}
+      # Disable telemetry to the OpenHands cloud (self-hosted)
+      - VITE_DO_NOT_TRACK=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "pop-os:host-gateway"
+    depends_on:
+      - openhands
+    networks:
+      - loop_factory_network
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
+    healthcheck:
+      # The ingress proxy serves the agent-server's /health on the unified port
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
   promtail:
     image: grafana/promtail:3.0.0
     volumes:

@@ -284,7 +284,7 @@ skills/
 ### Prerequisites
 
 - **Docker** + **Docker Compose** (v2.20+)
-- **LLM endpoint** (OpenAI-compatible, e.g., SGLang Qwen3.6-27B on `:8080`)
+- **LLM endpoint** (OpenAI-compatible, e.g., SGLang Qwen3.8-27B on `:8080`)
 
 ### Configuration
 
@@ -293,7 +293,7 @@ All external parameters are centralized in `config/config.yaml`. Override via en
 ```bash
 # Quick override — no code changes needed
 export LLM_BASE_URL="http://host.docker.internal:8080/v1"
-export LLM_MODEL="Qwen3.6-27B"
+export LLM_MODEL="Qwen3.8-27B"
 export LOG_LEVEL="info"
 ```
 
@@ -303,7 +303,7 @@ Or edit `config/config.yaml` directly:
 services:
   llm:
     base_url: http://host.docker.internal:8080/v1
-    model: Qwen3.6-27B
+    model: Qwen3.8-27B
     temperature: 0.1
     max_tokens: 65535
 
@@ -406,7 +406,7 @@ paths:
 services:
   llm:
     base_url: http://host.docker.internal:8080/v1
-    model: Qwen3.6-27B
+    model: Qwen3.8-27B
   chroma:
     url: http://chromadb:8000
   loop_api:
@@ -462,7 +462,7 @@ At phase-completion, `service/evaluator.py` runs LLM-as-judge on phase outputs. 
 ### How It Works
 
 1. Phase completes → `_run_phase_eval()` called in `graph/executor.py`
-2. Evaluator sends context + output to LLM (`Qwen3.6-27B`)
+2. Evaluator sends context + output to LLM (`Qwen3.8-27B`)
 3. LLM returns scores (0.0–1.0) with rationale
 4. Results attached as OTel span attributes → Phoenix UI at `:46006`
 

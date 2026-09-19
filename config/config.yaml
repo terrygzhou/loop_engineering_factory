@@ -8,7 +8,7 @@ paths:
 services:
   llm:
     base_url: http://pop-os:8080/v1
-    model: Qwen3.6-27B
+    model: Qwen3.8-27B
     api_key: not-needed
     temperature: 0.1
     max_tokens: 65535

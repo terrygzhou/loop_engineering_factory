@@ -131,7 +131,7 @@ class Config:
                 "http://pop-os:8080/v1",
             )
             model: str = _resolve(
-                "LLM_MODEL", _config, "services.llm.model", "Qwen3.6-27B"
+                "LLM_MODEL", _config, "services.llm.model", "Qwen3.8-27B"
             )
             api_key: str = _resolve(
                 "OPENAI_API_KEY", _config, "services.llm.api_key", "not-needed"

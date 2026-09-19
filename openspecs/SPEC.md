@@ -34,7 +34,7 @@ Reconstructed 2025-07-28 from the live codebase, `AGENTS.md`, `CLAUDE.md`, and t
 |---|---|---|
 | Orchestration | LangGraph ≥1.x (`langgraph` OOTB) | Checkpointing + `interrupt()` HIL gates + `Command(resume=…)` |
 | Checkpointer | `langgraph-checkpoint-sqlite` (`AsyncSqliteSaver`) | Official, serializable; replaces hand-written `SqliteSaver` (EYW-235) |
-| LLM | Local SGLang/OpenAI-compatible `Qwen3.6-27B` via `ChatOpenAI` (langchain-openai) | Deterministic local model, no external API |
+| LLM | Local SGLang/OpenAI-compatible `Qwen3.8-27B` via `ChatOpenAI` (langchain-openai) | Deterministic local model, no external API |
 | Build agent | OpenHands agent-server v1.30.0 (`/api/conversations`) | Remote, Docker-isolated, 4 CPU / 4 GB |
 | Vector store | ChromaDB (HTTP, internal, no host port) | Pattern + feedback embeddings; no PostgreSQL |
 | Web backend | FastAPI + WebSocket (single shared `WorkflowBridge`) | SSE/WS event stream to the static UI |
@@ -55,7 +55,7 @@ Reconstructed 2025-07-28 from the live codebase, `AGENTS.md`, `CLAUDE.md`, and t
 | 8000 (internal) | ChromaDB |
 | 8081 (internal) | observability |
 
-**LLM:** `http://pop-os:8080/v1`, model `Qwen3.6-27B`, `temperature=0.1`, `max_tokens=65535`.
+**LLM:** `http://pop-os:8080/v1`, model `Qwen3.8-27B`, `temperature=0.1`, `max_tokens=65535`.
 
 ---
 
