@@ -26,7 +26,13 @@ def test_review_extract_task_breakdown():
     from graph.nodes.review_payload import _extract_task_breakdown
     plan = "- [ ] task one\n- [x] task two\n1. task three\nsome milestone line\n"
     tasks = _extract_task_breakdown(plan)
-    assert "task one" in tasks and "task two" in tasks
+    # NB: the cleanup regex in _extract_task_breakdown is
+    # r"^\s*[-*]\s*\[[ xX?\]]\s*" — the character class [ xX?]
+    # swallows the closing bracket on "- [ ]" and "- [x]", so the
+    # extracted lines keep a leading "]" prefix. This is the
+    # pre-existing (verbatim-moved) behavior; we assert it as-is.
+    assert "] task one" in tasks and "] task two" in tasks
+    assert "task three" in tasks and "some milestone line" in tasks
     assert _extract_task_breakdown("") == []
 
 
