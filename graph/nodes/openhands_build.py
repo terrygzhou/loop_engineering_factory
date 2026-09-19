@@ -630,13 +630,34 @@ def openhands_build_wrapper(state: dict) -> dict:
     """
     LangGraph node: wrapper for BUILD subgraph.
 
-    1. Health-check OpenHands agent-server
-    2. If available, delegate to OpenHands via Gateway API
-    3. Otherwise, run the local BUILD subgraph (proper compiled LangGraph)
+    1. If artifacts.build_mode == "subgraph", run the local BUILD subgraph directly.
+    2. Otherwise, health-check OpenHands agent-server; delegate if available.
+    3. If health check or delegation fails, fall back to the local BUILD subgraph.
 
     Returns partial update dict (LangGraph reducer merges).
     """
     oh_cfg = config.services.openhands
+
+    # HIL BUILD-mode choice: "subgraph" forces the local subgraph;
+    # "openhands" (default) uses the agent-server when reachable.
+    build_mode = (state.get("artifacts") or {}).get("build_mode", "openhands")
+
+    if build_mode == "subgraph":
+        logger.info(
+            "  -> [OPENHANDS] build_mode=subgraph — running local BUILD subgraph directly"
+        )
+        audit_sub = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
+        audit_sub.log_node_input(
+            "BUILD",
+            {
+                "project_path": state.get("project_path", ""),
+                "route": "local-subgraph-forced",
+            },
+        )
+        result = _run_local_subgraph(state)
+        status = (result.get("artifacts") or {}).get("build_status", "")
+        audit_sub.log_node_output("BUILD", {"route": "local-subgraph-forced", "status": status or "pass"})
+        return result
 
     logger.info(
         "  -> [OPENHANDS] Starting BUILD via Gateway at %s",

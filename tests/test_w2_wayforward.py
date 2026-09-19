@@ -418,3 +418,195 @@ def test_increment_loop_is_pure_input_unchanged():
     assert new_arts is not arts
     assert new_arts["loop_counts"]["DEFINE"] == 2
     assert new_arts["spec_text"] == "keep"
+
+
+# ── BUILD mode choice (HIL) ─────────────────────────────────────────
+
+
+class _NoopAudit:
+    def log_node_input(self, *a, **kw):
+        pass
+
+    def log_node_output(self, *a, **kw):
+        pass
+
+    def log_node_transition(self, *a, **kw):
+        pass
+
+
+def test_wrapper_subgraph_mode_skips_gateway(monkeypatch, tmp_path):
+    """build_mode='subgraph' forces local subgraph — no HTTP health check."""
+
+    def _fake_local_subgraph(state):
+        return {
+            "phase": "BUILD",
+            "artifacts": {"build_status": "pass", "loop_counts": {"BUILD": 0}},
+            "next_phase": "SEED_DATA",
+            "superApp_mode": "agent",
+        }
+
+    monkeypatch.setattr(ob, "_run_local_subgraph", _fake_local_subgraph)
+    monkeypatch.setattr(ob, "AuditLog", lambda *a, **kw: _NoopAudit())
+
+    state = {
+        "project_path": str(tmp_path),
+        "cycle_id": "1",
+        "artifacts": {"build_mode": "subgraph"},
+    }
+    out = ob.openhands_build_wrapper(state)
+    assert out["artifacts"]["build_status"] == "pass"
+    assert out["next_phase"] == "SEED_DATA"
+
+
+def test_wrapper_openhands_mode_default_when_no_build_mode(monkeypatch, tmp_path):
+    """Absent build_mode defaults to openhands — health check is attempted,
+    then falls back to local subgraph on connection failure."""
+    import httpx
+
+    called = {"local": False}
+
+    def _fake_local_subgraph(state):
+        called["local"] = True
+        return {
+            "phase": "BUILD",
+            "artifacts": {"build_status": "pass", "loop_counts": {"BUILD": 0}},
+            "next_phase": "SEED_DATA",
+        }
+
+    monkeypatch.setattr(ob, "_run_local_subgraph", _fake_local_subgraph)
+    monkeypatch.setattr(ob, "AuditLog", lambda *a, **kw: _NoopAudit())
+
+    # Simulate unreachable gateway: httpx.Client(...) context manager's .get()
+    # raises ConnectError → wrapper catches it → falls back to local subgraph
+    class _FakeHttpModule:
+        ConnectError = httpx.ConnectError
+        ConnectTimeout = httpx.ConnectTimeout
+        HTTPError = httpx.HTTPError
+        HTTPStatusError = httpx.HTTPStatusError
+        RemoteProtocolError = httpx.RemoteProtocolError
+
+        class Client:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get(self, *a, **kw):
+                raise httpx.ConnectError("refused")
+
+            def post(self, *a, **kw):
+                raise httpx.ConnectError("refused")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+    monkeypatch.setattr(ob, "httpx", _FakeHttpModule)
+
+    state = {
+        "project_path": str(tmp_path),
+        "cycle_id": "1",
+        "artifacts": {},
+    }
+    out = ob.openhands_build_wrapper(state)
+    # Gateway unreachable → local subgraph fallback was used
+    assert called["local"] is True
+    assert out["artifacts"]["build_status"] == "pass"
+
+
+def test_review_interrupt_payload_includes_build_mode(monkeypatch):
+    """The ARCH_REVIEW interrupt payload carries build_mode options."""
+    from graph.nodes import review as review_module
+
+    # Capture the interrupt payload via monkeypatch
+    captured = {}
+
+    def _fake_interrupt(payload):
+        captured["payload"] = payload
+        return {"approved": True}
+
+    monkeypatch.setattr(review_module, "interrupt", _fake_interrupt)
+    monkeypatch.setattr(review_module, "get_arch_review_gate", lambda: {})
+    monkeypatch.setattr(review_module, "PxGate", _FakePxGate)
+    monkeypatch.setattr(review_module, "scan_achg_context", lambda root: {})
+    monkeypatch.setattr(review_module, "pending_achg_ids", lambda ctx: [])
+    monkeypatch.setattr(
+        review_module, "AuditLog", lambda *a, **kw: _NoopAudit()
+    )
+
+    state = {
+        "cycle_id": "1",
+        "trace_id": "t1",
+        "artifacts": {"plan": "p", "spec_refined": "s"},
+    }
+    review_module.review_node(state)
+
+    payload = captured["payload"]
+    assert payload.get("build_mode") == {
+        "default": "openhands",
+        "options": ["openhands", "subgraph"],
+    }
+
+
+def test_review_resume_writes_build_mode_to_artifacts(monkeypatch):
+    """Resume with build_mode='subgraph' writes it into artifacts."""
+    from graph.nodes import review as review_module
+
+    captured = {}
+
+    def _fake_interrupt(payload):
+        captured["payload"] = payload
+        return {"approved": True, "build_mode": "subgraph"}
+
+    monkeypatch.setattr(review_module, "interrupt", _fake_interrupt)
+    monkeypatch.setattr(review_module, "get_arch_review_gate", lambda: {})
+    monkeypatch.setattr(review_module, "PxGate", _FakePxGate)
+    monkeypatch.setattr(review_module, "scan_achg_context", lambda root: {})
+    monkeypatch.setattr(review_module, "pending_achg_ids", lambda ctx: [])
+    monkeypatch.setattr(review_module, "AuditLog", lambda *a, **kw: _NoopAudit())
+
+    state = {
+        "cycle_id": "1",
+        "trace_id": "t1",
+        "artifacts": {"plan": "p", "spec_refined": "s"},
+    }
+    out = review_module.review_node(state)
+    assert out["artifacts"]["build_mode"] == "subgraph"
+
+
+def test_review_resume_default_build_mode_openhands(monkeypatch):
+    """Resume without build_mode defaults to 'openhands'."""
+    from graph.nodes import review as review_module
+
+    def _fake_interrupt(payload):
+        return {"approved": True}  # no build_mode key
+
+    monkeypatch.setattr(review_module, "interrupt", _fake_interrupt)
+    monkeypatch.setattr(review_module, "get_arch_review_gate", lambda: {})
+    monkeypatch.setattr(review_module, "PxGate", _FakePxGate)
+    monkeypatch.setattr(review_module, "scan_achg_context", lambda root: {})
+    monkeypatch.setattr(review_module, "pending_achg_ids", lambda ctx: [])
+    monkeypatch.setattr(review_module, "AuditLog", lambda *a, **kw: _NoopAudit())
+
+    state = {
+        "cycle_id": "1",
+        "trace_id": "t1",
+        "artifacts": {"plan": "p", "spec_refined": "s"},
+    }
+    out = review_module.review_node(state)
+    assert out["artifacts"]["build_mode"] == "openhands"
+
+
+class _FakePxGate:
+    enabled = False
+
+    def __init__(self, **kw):
+        pass
+
+    def evaluate_review_gate(self, spec, plan):
+        class _R:
+            passed = True
+            failures = []
+            def to_artifact(self):
+                return {"passed": True, "failures": []}
+        return _R()

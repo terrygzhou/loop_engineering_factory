@@ -289,6 +289,14 @@ def review_node(state: dict) -> dict:
             "Review the implementation plan, tasks, analysis, and architecture diagrams.\n"
             "Approve to proceed to BUILD, or reject with feedback to send back to PLAN."
         ),
+        # BUILD mode choice (openhands agent-server vs. local subgraph)
+        "build_mode": {
+            "default": "openhands",
+            "options": [
+                "openhands",
+                "subgraph",
+            ],
+        },
         # Artifacts for display
         "solution_md": artifacts.get("solution_md", ""),
         "spec_refined": artifacts.get("spec_refined", ""),
@@ -357,6 +365,12 @@ def review_node(state: dict) -> dict:
         "feedback", resume_data.get("user_review_comments", "")
     )
 
+    # BUILD mode choice: "openhands" (default) or "subgraph".
+    # Stored in artifacts.build_mode so the BUILD node can read it.
+    build_mode = resume_data.get("build_mode", "openhands")
+    if build_mode not in ("openhands", "subgraph"):
+        build_mode = "openhands"
+
     # P0.5: optional `answers` mapping (HIL UI response to
     # missing_build_inputs). Accept a dict or a JSON-encoded string.
     answers = resume_data.get("answers")
@@ -408,6 +422,7 @@ def review_node(state: dict) -> dict:
             "review_approved": True,
             "achg_context": achg_context,
             "px_gate_result": gate_result.to_artifact(),
+            "build_mode": build_mode,
         }
         if answers:
             review_artifacts["arch_review_answers"] = json.dumps(answers, indent=2)
@@ -449,6 +464,7 @@ def review_node(state: dict) -> dict:
             "loop_counts": loop_counts,
             "achg_context": achg_context,
             "px_gate_result": gate_result.to_artifact(),
+            "build_mode": build_mode,
         }
         if answers:
             reject_artifacts["arch_review_answers"] = json.dumps(answers, indent=2)
