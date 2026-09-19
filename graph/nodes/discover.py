@@ -21,17 +21,13 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from pathlib import Path
 
-import httpx
 from langgraph.types import interrupt
 
 from config.loader import config as _cfg
-from graph.ui_bridge import SkillTimer
 from tools.audit_logger import AuditLog
-from tools.llm import invoke_skill
 from tools.loader import build_skill_registry
 from tools.stream_writer import safe_stream_writer
 
@@ -47,6 +43,27 @@ from graph.nodes.discover_scan import _get_docker_status  # noqa: F401
 from graph.nodes.discover_scan import _get_git_status  # noqa: F401
 from graph.nodes.discover_scan import _inventory_tree  # noqa: F401
 from graph.nodes.discover_scan import _scan_codebase  # noqa: F401
+
+# Re-exports used by discover_interview sibling; test monkeypatch targets
+# ("graph.nodes.discover.SkillTimer") must resolve through this module.
+from graph.ui_bridge import SkillTimer  # noqa: F401
+
+# Re-exports for the seam-split sibling modules (node-module-seams spec S9).
+from graph.nodes.discover_prefill import _DOC_PREFILL_MAX_CHARS  # noqa: F401
+from graph.nodes.discover_prefill import _extract_doc_prefill  # noqa: F401
+from graph.nodes.discover_interview import _build_context  # noqa: F401
+from graph.nodes.discover_interview import _generate_interview_questions  # noqa: F401
+from graph.nodes.discover_interview import (  # noqa: F401
+    _generate_requirement_template,
+    _generate_requirement_via_fabric,
+)
+from graph.nodes.discover_interview import _load_improve_telemetry  # noqa: F401
+from graph.nodes.discover_interview import _refine_idea  # noqa: F401
+
+# Re-export invoke_skill at module level so existing test monkeypatch
+# targets ("graph.nodes.discover.invoke_skill") still resolve. The actual
+# call site now lives in discover_interview._generate_interview_questions.
+from tools.llm import invoke_skill  # noqa: F401
 
 
 async def discover_node(state: dict) -> dict:
@@ -376,9 +393,7 @@ async def discover_node(state: dict) -> dict:
         # written only when the corresponding valid artefact exists; absent
         # artefacts leave the key unset (never sentinel values).
         if arckit_ctx.data_model:
-            artifacts["arckit_data_model"] = json.dumps(
-                arckit_ctx.data_model, indent=2
-            )
+            artifacts["arckit_data_model"] = json.dumps(arckit_ctx.data_model, indent=2)
         if arckit_ctx.integration_standards:
             artifacts["arckit_integration_standards"] = json.dumps(
                 arckit_ctx.integration_standards, indent=2
@@ -423,434 +438,3 @@ async def discover_node(state: dict) -> dict:
         # the authoritative ingestion source (Option 1+2).
         result["arckit_artifacts"] = arckit_files
     return result
-
-
-# ── Helpers ──
-
-
-def _generate_interview_questions(
-    project_name: str, project_description: str, skill_content: str = ""
-) -> list:
-    """Generate domain-specific interview questions from the project description.
-
-    Uses the interview-me skill (when available) as the structured question
-    framework, then tailors each category to the project domain via LLM.
-    Falls back to generic questions if description is too short or LLM fails.
-    """
-    generic_questions = [
-        {
-            "key": "core_behavior",
-            "label": "Core Behavior",
-            "prompt": "What does this feature do? What are the primary user actions?",
-        },
-        {
-            "key": "data_model",
-            "label": "Data Model",
-            "prompt": "What entities and fields are involved? Any relationships between them?",
-        },
-        {
-            "key": "api_surface",
-            "label": "API Surface",
-            "prompt": "What endpoints, HTTP methods, and auth requirements do you need?",
-        },
-        {
-            "key": "integration",
-            "label": "Integration",
-            "prompt": "Does this integrate with external services, databases, or third-party APIs?",
-        },
-        {
-            "key": "ui_template",
-            "label": "UI",
-            "prompt": "Any specific UI requirements, templates, or styling preferences?",
-        },
-        {
-            "key": "validation",
-            "label": "Validation",
-            "prompt": "What input validation rules or data integrity constraints apply?",
-        },
-        {
-            "key": "edge_cases",
-            "label": "Edge Cases",
-            "prompt": "Are there known edge cases, error paths, or failure modes to handle?",
-        },
-        {
-            "key": "non_functional",
-            "label": "Non-Functional",
-            "prompt": "Any performance, security, or monitoring requirements?",
-        },
-    ]
-
-    # If description is too short, just use generic questions
-    if len(project_description.strip()) < 20:
-        return generic_questions
-
-    # Build LLM prompt — grounded in the skill's interview framework
-    skill_framework = ""
-    if skill_content:
-        skill_framework = (
-            f"The following skill defines the interview framework. Use its "
-            f"categories (Core Behavior, Data Model, API Surface, Integration, "
-            f"Validation, UI/Template, Deployment, Edge Cases, Non-Functional) "
-            f"as the structure, then tailor each question to this project's domain.\n\n"
-            f"Interview framework:\n{skill_content}\n\n"
-        )
-
-    prompt = (
-        f"You are designing an interview for a new software project.\n\n"
-        f"{skill_framework}"
-        f"Project: {project_name}\n"
-        f"Description: {project_description}\n\n"
-        f"Generate 6-8 interview questions that cover the key categories above, "
-        f"but make each question specific to this project's domain.\n"
-        f"For example, if the project mentions Google Calendar integration,\n"
-        f"ask about OAuth scopes, sync direction, conflict resolution, etc.\n\n"
-        f"Output ONLY a JSON array of question objects with this structure:\n"
-        f'[{{"key": "area_name", "label": "Display Label", "prompt": "The specific question?"}}, ...]\n\n'
-        f"Rules:\n"
-        f"- Use the 'key' field as a short snake_case identifier (e.g. calendar_sync)\n"
-        f"- Map each question to one of the framework categories above\n"
-        f"- Make each question specific to the project, not generic\n"
-        f"- Include at least one question about data model, integration/APIs, and user workflow\n"
-        f"- Keep labels to 2-4 words\n"
-        f"- Output only the JSON array, nothing else"
-    )
-
-    try:
-        from tools.llm import invoke_skill
-
-        result = invoke_skill(
-            "You are an expert software requirements interviewer.",
-            prompt,
-            "",
-            llm=None,
-        )
-        # Parse the JSON array from LLM output
-        json_match = re.search(r"\[.*\]", result, re.DOTALL)
-        if json_match:
-            parsed = json.loads(json_match.group())
-            if isinstance(parsed, list) and len(parsed) >= 3:
-                # Ensure each question has required fields
-                cleaned = []
-                for q in parsed:
-                    if isinstance(q, dict) and q.get("key") and q.get("prompt"):
-                        cleaned.append(
-                            {
-                                "key": q["key"],
-                                "label": q.get(
-                                    "label", q["key"].replace("_", " ").title()
-                                ),
-                                "prompt": q["prompt"],
-                            }
-                        )
-                if cleaned:
-                    return cleaned
-    except Exception as e:
-        logging.getLogger("discover").warning(
-            "Interview question generation failed: %s", e
-        )
-
-    # Fall back to generic questions with project context
-    return [
-        {
-            "key": "core_behavior",
-            "label": "Core Behavior",
-            "prompt": f"For '{project_name}', what are the primary user actions and workflows?",
-        },
-        {
-            "key": "data_model",
-            "label": "Data Model",
-            "prompt": "What entities does this project manage? What fields and relationships?",
-        },
-        {
-            "key": "integration",
-            "label": "Integration",
-            "prompt": "The description mentions specific services — which external APIs or databases need integration?",
-        },
-        {
-            "key": "api_surface",
-            "label": "API Surface",
-            "prompt": "What REST endpoints or GraphQL queries should this expose?",
-        },
-        {
-            "key": "auth_security",
-            "label": "Auth & Security",
-            "prompt": "Does this require authentication, authorization, or data encryption?",
-        },
-        {
-            "key": "ui_template",
-            "label": "UI",
-            "prompt": "What does the user interface look like? Any existing design system or templates?",
-        },
-        {
-            "key": "edge_cases",
-            "label": "Edge Cases",
-            "prompt": "What are the trickiest scenarios or failure modes for this project?",
-        },
-        {
-            "key": "deployment",
-            "label": "Deployment",
-            "prompt": "Any Docker, infrastructure, or hosting requirements?",
-        },
-    ]
-
-
-_DOC_PREFILL_MAX_CHARS = 40_000
-
-
-def _extract_doc_prefill(
-    context_folder: str,
-    project_name: str,
-    project_description: str,
-    interview_questions: list,
-    skill_content: str,
-) -> tuple[dict | None, str | None]:
-    """Extract interview answers from plain documents in `context_folder`.
-
-    Returns (seed_dict_or_None, note_or_None). `seed_dict` maps question key
-    → answer text for categories the docs already cover. On no docs, LLM
-    fatal, or unparseable output, returns (None, None) so the caller keeps
-    today's full-interview behavior unchanged.
-    """
-    files = _collect_plain_docs(context_folder)
-    if not files:
-        return None, None
-
-    chunks: list[str] = []
-    total = 0
-    for f in files:
-        try:
-            text = f.read_text(errors="replace")
-        except OSError:
-            continue
-        if not text.strip():
-            continue
-        room = _DOC_PREFILL_MAX_CHARS - total
-        if room <= 0:
-            break
-        text = text[:room]
-        chunks.append(f"### {f.name}\n{text}")
-        total += len(text)
-    if not chunks:
-        return None, None
-
-    doc_text = "\n\n".join(chunks)
-    cat_keys = [q["key"] for q in interview_questions] or [
-        "core_behavior",
-        "data_model",
-        "api_surface",
-        "integration",
-        "ui_template",
-        "validation",
-        "edge_cases",
-        "non_functional",
-    ]
-    framework = ""
-    if skill_content:
-        framework = (
-            f"The interview framework defines these categories: "
-            f"{', '.join(cat_keys)}.\n\n"
-        )
-    prompt = (
-        f"You are extracting interview answers from existing project documents "
-        f"so the user is not re-asked about information the docs already state.\n\n"
-        f"{framework}"
-        f"Project: {project_name}\nDescription: {project_description}\n\n"
-        f"Documents:\n{doc_text}\n\n"
-        f"Output ONLY a JSON object with this shape:\n"
-        f'{{"seed": {{"<category>": "<answer from docs>", ...}}, '
-        f'"unanswered": ["<category>", ...]}}\n\n'
-        f"Rules:\n"
-        f"- Only fill a category in `seed` if the documents clearly state it.\n"
-        f"- Keep each answer to 1-3 sentences, quoted or summarized from the docs.\n"
-        f"- List every category not answered by the docs in `unanswered`.\n"
-        f"- Use these category keys: {', '.join(cat_keys)}.\n"
-        f"- Output only the JSON object, nothing else."
-    )
-    try:
-        result = invoke_skill(
-            "You are an expert requirements extractor.",
-            prompt,
-            "",
-            llm=None,
-        )
-    except Exception as e:  # noqa: BLE001
-        logging.getLogger("discover").warning(
-            "Doc prefill extraction failed: %s", e
-        )
-        return None, None
-    if not result:
-        return None, None
-    try:
-        m = re.search(r"\{.*\}", result, re.DOTALL)
-        if not m:
-            return None, None
-        parsed = json.loads(m.group())
-        seed = parsed.get("seed") or {}
-        if not isinstance(seed, dict) or not seed:
-            return None, None
-        seed = {k: str(v) for k, v in seed.items() if str(v).strip()}
-        if not seed:
-            return None, None
-        note = (
-            f"{len(files)} document(s) under the context folder pre-filled "
-            f"{len(seed)} interview answer(s). Confirm or correct below; "
-            f"unanswered categories remain as questions."
-        )
-        return seed, note
-    except (json.JSONDecodeError, TypeError, ValueError) as e:
-        logging.getLogger("discover").warning(
-            "Doc prefill output unparseable: %s", e
-        )
-        return None, None
-
-
-def _generate_requirement_via_fabric(
-    project_name,
-    project_description,
-    interview_notes,
-    context,
-    project_folder,
-    state: dict | None = None,
-):
-    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    fabric_skill = skills.get("fabric-prompts", {})
-
-    # Wire coding-principles as context-aware refinement
-    principles_skill = skills.get("coding-principles", {})
-    principles_context = ""
-    if principles_skill and project_description and state:
-        principles_prompt = (
-            f"Given this project context, extract relevant coding principles:\n"
-            f"Project: {project_name}\n"
-            f"Description: {project_description}\n"
-            f"Type: {context.get('project_type', 'greenfield')}\n\n"
-            "Output key technical principles and conventions that should guide implementation."
-        )
-        timer = SkillTimer("coding-principles")
-        principles_context = (
-            invoke_skill(principles_skill["content"], principles_prompt, "", llm=None)
-            or ""
-        )
-        timer.complete()
-        principles_context = f"\n\n## Coding Principles\n{principles_context[:1000]}\n"
-
-    if fabric_skill:
-        fabric_prompt = (
-            f"Generate a structured discovery report for DEFINE phase.\n\n"
-            f"Project: {project_name}\nDescription: {project_description}\n"
-            f"Interview notes:\n{interview_notes}\n"
-            f"{principles_context}\n\n"
-            f"Output: Markdown with sections: Project Overview, Core Behavior, "
-            f"Data Model, API Surface, Integration Requirements, Non-Functional, Edge Cases, Constraints"
-        )
-        # Feature 2: prior REFLECT skill recommendations (advisory; "" when
-        # absent so the prompt stays byte-identical to the pre-feature one).
-        from tools.skill_recommendations import skill_recommendations_block
-        fabric_prompt += skill_recommendations_block()
-        fabric_timer = SkillTimer("fabric-prompts")
-        result = invoke_skill(fabric_skill["content"], fabric_prompt, "", llm=None)
-        fabric_timer.complete()
-        if not result:
-            # LLM fatal (None) — degrade to the deterministic template
-            return _generate_requirement_template(
-                project_name,
-                project_description,
-                interview_notes,
-                context,
-                project_folder,
-            )
-        md = result.strip()
-        if md.startswith("```"):
-            md = re.sub(r"^```[a-z]*\n", "", md).rstrip("`")
-            if md.endswith("\n```"):
-                md = md[:-4]
-        return md
-    return _generate_requirement_template(
-        project_name, project_description, interview_notes, context, project_folder
-    )
-
-
-def _generate_requirement_template(
-    project_name, project_description, interview_notes, context, project_folder
-):
-    return (
-        f"# {project_name} — Discovery Report\n\n"
-        f"## Project Overview\n{project_description or '(none)'}\n\n"
-        f"## Core Behavior\n{interview_notes.split(chr(10))[0] if interview_notes else '(none)'}\n\n"
-        f"## Data Model\n- (from context or interview)\n\n"
-        f"## API Surface\n- (to be determined)\n\n"
-        f"## Non-Functional\n- (from interview)\n\n"
-        f"## Edge Cases\n- (to be determined)\n\n"
-        f"## Constraints\n- `{project_folder}`\n- {context.get('project_type', 'greenfield')}\n"
-    )
-
-
-def _load_improve_telemetry(state, project_name):
-    try:
-        from config.loader import config as _cfg
-
-        _live_path = Path(_cfg.paths.storage_dir) / "live.json"
-        if not _live_path.exists():
-            return None
-        telemetry = json.loads(_live_path.read_text())
-        from config.loader import config as _cfg
-
-        url = telemetry.get("product_url", _cfg.services.product.url)
-        health = telemetry.get("health_endpoint", "/health")
-        try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.get(f"{url.rstrip('/')}/{health.lstrip('/')}")
-                telemetry["health_status"] = resp.status_code
-                telemetry["healthy"] = 200 <= resp.status_code < 400
-        except (httpx.RequestError, OSError):
-            telemetry["healthy"] = False
-        deployed = telemetry.get("project_path", "")
-        if deployed and Path(deployed).is_dir():
-            return telemetry
-        return None
-    except Exception:
-        return None
-
-
-
-def _refine_idea(
-    interview_notes, project_name, project_description, context, state=None
-):
-    """Sharpen interview notes into a focused concept for DEFINE."""
-    skills = build_skill_registry(_cfg.workflow.skill_registry_path)
-    refine_skill = skills.get("idea-refine", {})
-    if not refine_skill or not interview_notes:
-        return (
-            "No refinement available (missing interview notes "
-            "or idea-refine skill)."
-        )
-
-    prompt = (
-        f"Refine these interview notes into a sharp, actionable concept for the DEFINE phase.\n\n"
-        f"Project: {project_name}\nDescription: {project_description}\n"
-        f"Interview Notes:\n{interview_notes}\n\n"
-        f"Output: A concise tech + UX concept (2-3 sentences) highlighting core innovation,"
-        f" key trade-offs, and the most important design decision."
-    )
-    timer = SkillTimer("idea-refine")
-    result = invoke_skill(refine_skill["content"], prompt, "", llm=None)
-    timer.complete()
-    return result or ""
-
-
-def _build_context(
-    interview_notes, project_name, project_description, context, state=None
-):
-    """Engineer focused project context for DEFINE phase."""
-    return json.dumps(
-        {
-            "project_name": project_name,
-            "description": project_description[:500],
-            "type": context.get("project_type", "greenfield"),
-            "interview_focus": interview_notes[:1000] if interview_notes else "",
-            "tree_summary": {k: v["type"] for k, v in context.get("tree", {}).items()},
-            "dependencies": context.get("dependencies", {}),
-            "specs": context.get("specs", {}),
-        },
-        indent=2,
-    )

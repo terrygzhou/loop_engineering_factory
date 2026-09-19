@@ -217,3 +217,38 @@ def test_openhands_merge_results_halt_on_exhausted_budget():
     assert result["next_phase"] is None
     assert "error" in result and "3 times" in result["error"]
     assert result["artifacts"]["loop_counts"]["BUILD"] == 3
+
+
+# ── S9 discover siblings ──────────────────────────────────────────────
+
+
+def test_discover_extract_doc_prefill_no_docs(tmp_path):
+    from graph.nodes.discover_prefill import _extract_doc_prefill
+
+    assert _extract_doc_prefill(str(tmp_path), "P", "d", [], "") == (None, None)
+
+
+def test_discover_extract_doc_prefill_no_files(tmp_path):
+    # Empty dir → no plain docs → (None, None)
+    from graph.nodes.discover_prefill import _extract_doc_prefill
+
+    assert _extract_doc_prefill(str(tmp_path), "P", "d", [], "") == (None, None)
+
+
+def test_discover_build_context_json_shape():
+    from graph.nodes.discover_interview import _build_context
+
+    import json
+
+    ctx = _build_context(
+        "notes here",
+        "Proj",
+        "desc",
+        {"project_type": "python", "tree": {"src": {"type": "dir"}}, "dependencies": {"x": "1"}, "specs": {}},
+        None,
+    )
+    parsed = json.loads(ctx)
+    assert parsed["project_name"] == "Proj"
+    assert parsed["type"] == "python"
+    assert "interview_focus" in parsed
+
