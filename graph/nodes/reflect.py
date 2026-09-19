@@ -23,12 +23,6 @@ def reflect_node(state: dict) -> dict:
     audit = AuditLog(state.get("cycle_id", "0"), state.get("trace_id"))
     audit.log_node_input("REFLECT", {"cycle_id": state.get("cycle_id")})
     diffs_applied = False
-    """
-    REFLECT phase: Analyze the completed cycle, compare against historical patterns,
-    generate proposed skill config updates, request human approval, and archive.
-
-    Returns partial update dict (LangGraph reducer merges).
-    """
     writer(
         {
             "type": "progress",
