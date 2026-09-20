@@ -26,7 +26,6 @@ VALID_PHASES = {
 }
 
 # Error node for unhandled exceptions — terminal state
-ERROR_NODE = "ERROR"
 
 # Per-cycle loop counts stored in state["artifacts"]["loop_counts"] — never global.
 # Forward paths for forced progression after max retries (prevents livelock).

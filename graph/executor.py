@@ -123,14 +123,6 @@ def _run_phase_eval(phase: str, chunk: dict) -> None:
             px_evaluator.eval_ship(ship_artifacts, spec_ref=spec_ref)
 
 
-def get_skills_dir() -> str:
-    """Resolve skills directory — config > Docker mount > local default."""
-    sd = config.paths.skills_dir
-    if Path(sd).exists():
-        return sd
-    return config.paths.project_path
-
-
 def get_project_path() -> str:
     """Resolve project output directory from config."""
     return config.paths.project_path

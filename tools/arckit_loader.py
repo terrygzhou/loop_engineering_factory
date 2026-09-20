@@ -60,9 +60,6 @@ PLACEHOLDER_RE = re.compile(
     r"^\[.*\]$"
 )  # unfilled template placeholders, e.g. [PROJECT_NAME]
 
-#: Status values DISCOVER will consume; SUPERSEDED is skipped (§3.3).
-CONSUMABLE_STATUS = {"DRAFT", "APPROVED"}
-
 # State truncation limits (§3.4.1 ADMP → 500 chars; §3.4.5 PRIN → 1000 chars).
 MAX_DESCRIPTION_CHARS = 500
 MAX_PRINCIPLES_CHARS = 1000

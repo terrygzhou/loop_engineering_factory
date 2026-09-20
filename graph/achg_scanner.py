@@ -52,7 +52,6 @@ ACHG_NOTE = (
     "human decision is required (EYW-171 §7.4)."
 )
 
-BOARD_STATUSES = ("APPROVED", "PENDING", "REJECTED", "CONDITIONAL")
 
 
 # ── Parsing helpers ─────────────────────────────────────────────────────────

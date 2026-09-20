@@ -155,38 +155,3 @@ def _save_skills_index(registry: Dict[str, Dict[str, Any]]):
             json.dump(index, f, indent=2)
     except Exception as e:
         print(f"WARNING: Could not save skills index: {e}")
-
-
-def check_skills_changed(registry: Dict[str, Dict[str, Any]]) -> bool:
-    """Check if any skill files have changed since last load."""
-    if not SKILLS_INDEX.exists():
-        return True
-    try:
-        with open(SKILLS_INDEX, "r") as f:
-            index = json.load(f)
-        for name, skill in registry.items():
-            path = skill.get("path", "")
-            if path and path in index:
-                current_mtime = os.path.getmtime(path)
-                if current_mtime != index[path]["mtime"]:
-                    return True
-        return False
-    except Exception:
-        return True
-
-
-def find_skills_by_trigger(
-    trigger_keyword: str, skills: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    """Find skills that match a trigger keyword."""
-    matches = []
-    keyword = trigger_keyword.lower()
-    for skill in skills:
-        triggers = [t.lower() for t in skill.get("triggers", [])]
-        if (
-            keyword in triggers
-            or keyword in skill["name"].lower()
-            or keyword in skill["description"].lower()
-        ):
-            matches.append(skill)
-    return matches

@@ -41,21 +41,6 @@ def get_chroma_client(url: str | None = None):
             return None
 
 
-def init_collections(client):
-    """Initialize ChromaDB collections for the loop engine."""
-    if client is None:
-        return {}
-    collections = {}
-    for name in ["patterns", "feedback", "artifacts"]:
-        try:
-            collections[name] = client.get_or_create_collection(
-                name=name, metadata={"hnsw:space": "cosine"}
-            )
-        except Exception as e:
-            print(f"WARNING: Failed to init collection '{name}': {e}")
-    return collections
-
-
 def store_pattern(
     client, pattern_id: str, metrics: dict, feedback: list, tags: list | None = None
 ) -> bool:

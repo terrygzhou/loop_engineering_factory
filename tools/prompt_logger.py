@@ -65,36 +65,3 @@ def log_llm_call(
         user_prompt_len=len(user_prompt),
         response_len=len(response),
     )
-
-
-def get_logs(workflow_id: str = "", phase: str = "") -> list[dict]:
-    """Retrieve prompt logs, optionally filtered by workflow or phase."""
-    logs: list[dict] = []
-    if not PROMPT_LOG_DIR.exists():
-        return logs
-
-    for log_file in sorted(PROMPT_LOG_DIR.glob("*.json")):
-        try:
-            with open(log_file, "r") as f:
-                entry = json.load(f)
-            if workflow_id and entry.get("workflow_id") != workflow_id:
-                continue
-            if phase and entry.get("phase") != phase:
-                continue
-            # Strip large fields for listing
-            light = {
-                "ts": entry.get("ts"),
-                "workflow_id": entry.get("workflow_id"),
-                "phase": entry.get("phase"),
-                "skill": entry.get("skill"),
-                "model": entry.get("model"),
-                "duration_s": entry.get("duration_s"),
-                "error": entry.get("error"),
-                "system_prompt_len": len(entry.get("system_prompt", "")),
-                "user_prompt_len": len(entry.get("user_prompt", "")),
-                "response_len": len(entry.get("response", "")),
-            }
-            logs.append(light)
-        except Exception:
-            continue
-    return logs
