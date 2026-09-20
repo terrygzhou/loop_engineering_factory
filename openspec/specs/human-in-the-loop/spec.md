@@ -4,6 +4,20 @@
 Human approval gates that pause the pipeline for operator decisions, a
 headless auto-approve mode, and the ACHG safety interlock.
 
+## Guidelines
+
+### Guideline: Visibility and control over standalone agents
+LEF's differentiation from standalone coding agents (Codex, OpenHands,
+Claude) is the visibility and controllability provided by the LangGraph
+state machine, not the build capability itself (BUILD is delegated to
+OpenHands). Design SHALL therefore favour making the process inspectable
+and pausable: structured phase state with typed artifacts, a live event
+stream to the Web UI, and `interrupt()` gates at which a human can
+review, comment (reject-with-feedback), pause, or skip/abort. New
+features SHALL NOT trade a visibility or control surface for
+autonomy (e.g. removing a HIL pause or suppressing an event stream)
+without an explicit decision recorded in this spec.
+
 ## Requirements
 
 ### Requirement: HIL gates

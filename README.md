@@ -93,6 +93,22 @@ Each cycle runs through these phases with quality gates, HIL (Human-in-the-Loop)
 
 ---
 
+## Why LEF?
+
+Standalone coding agents (Codex, OpenHands, Claude) generate code quickly — and stop explaining. Loop Engineering Factory (LEF) keeps the agent (it delegates BUILD to OpenHands) and wraps it in a **LangGraph state machine** that makes the process **visible** and **controllable**.
+
+| | Standalone agent | LEF |
+|---|---|---|
+| **Visibility** | Streaming chat text; outcome appears at the end | Every phase emits typed artifacts and audit records (`AuditLog`), streamed live to the Web UI dashboard |
+| **Control** | One-shot or ad-hoc steering; no structured pause points | Deterministic HIL `interrupt()` gates: a human can **review**, **comment** (reject with feedback, loops back to PLAN), **pause**, or **skip/abort** |
+| **State** | Ephemeral — the agent's context dies with the session | `AsyncSqliteSaver` checkpoints each phase; a run can be resumed from a gate |
+| **Verification** | Agent asserts it did the work | Deterministic VERIFY gate (Decision 2): machine-checkable acceptance tests, never a "trust me" |
+| **Improvement** | None across runs | REFLECT stores patterns in ChromaDB; next cycles start smarter |
+
+LEF is not a rival to OpenHands — it is a governed, observable, pausable workflow around it.
+
+---
+
 ## Architecture
 
 ### Container Architecture
