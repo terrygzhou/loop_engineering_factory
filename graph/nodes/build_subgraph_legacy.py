@@ -26,6 +26,7 @@ because the test files monkeypatch them on this module
 at call time so the patches reach the call sites.
 """
 
+import logging
 import time
 
 from langgraph.graph import END, START, StateGraph
@@ -63,6 +64,27 @@ from .build_legacy_superapp import (  # noqa: F401
     _run_superApp_agent,
     _run_superApp_scripted,
 )
+
+logger = logging.getLogger(__name__)
+
+# Retry guard (Decision 5): BUILD hard/partial failure counter in
+# artifacts.loop_counts, shared semantics with the OpenHands path
+# (openhands_merge.BUILD_MAX_RETRIES) and the max_loops cap in
+# graph.edges.route_phase. Kept local here: openhands_merge imports this
+# module, so a cross-import would be circular.
+BUILD_MAX_RETRIES = 2
+
+
+def _increment_build_fail(artifacts: dict) -> int:
+    """Increment artifacts.loop_counts["BUILD"] in-place (init if absent).
+
+    Returns the new count; budget-exhausted once it reaches BUILD_MAX_RETRIES.
+    """
+    loop_counts = dict(artifacts.get("loop_counts", {}))
+    new_count = int(loop_counts.get("BUILD", 0)) + 1
+    loop_counts["BUILD"] = new_count
+    artifacts["loop_counts"] = loop_counts
+    return new_count
 
 
 # ── Conditional routing ────────────────────────────────────────────
@@ -189,16 +211,22 @@ def build_output_mapping(child: BuildSubState) -> dict:
     backlog_path = build_dir / "backlog.md"
     backlog_path.write_text(generate_backlog_md(backlog, project_folder))
 
-    # ── Determine pass/fail ──
+    # ── Determine pass/fail (D4 + D5) ──
+    # D4: hard failure — UAT failed or the integration-test gate failed.
+    # D5: partial — some backlog items incomplete, but UAT + INT_TEST green.
+    int_test_result = child.get("int_test_result", "")
     all_completed = (
         all(i["status"] == "completed" for i in backlog) if backlog else False
     )
-    has_errors = bool(errors) or uat_result == "fail"
+    incomplete_items = sorted(
+        str(i.get("id")) for i in backlog if i.get("status") != "completed"
+    )
+    hard_fail = uat_result == "fail" or int_test_result == "fail"
 
     # ── Build updated artifacts dict ──
     artifacts = dict(child.get("parent_artifacts", {}))
-    if has_errors and not all_completed:
-        # ── FAILURE ──
+    if hard_fail:
+        # ── FAILURE (D4: UAT or INT_TEST failed) ──
         error_summary = "\n".join(errors[:10])
         incomplete = sum(1 for i in backlog if i["status"] != "completed")
         writer(
@@ -212,6 +240,23 @@ def build_output_mapping(child: BuildSubState) -> dict:
         )
         artifacts["build_status"] = "fail"
 
+        # Retry guard (Decision 5): count the hard failure so the max_loops
+        # cap in route_phase becomes reachable; at budget exhaustion signal
+        # a terminal halt (error + next_phase=None -> route to ERROR) instead
+        # of looping back to BUILD forever.
+        fail_count = _increment_build_fail(artifacts)
+        budget_exhausted = fail_count >= BUILD_MAX_RETRIES
+        if budget_exhausted:
+            logger.warning(
+                "  -> [BUILD-LEGACY] D4 hard fail reached retry budget (%d/%d) "
+                "-- halting",
+                fail_count,
+                BUILD_MAX_RETRIES,
+            )
+            halt_next_phase: "str | None" = None
+        else:
+            halt_next_phase = "BUILD"  # Loop back
+
         from graph.state import CycleMetrics
 
         metrics = CycleMetrics(
@@ -221,14 +266,19 @@ def build_output_mapping(child: BuildSubState) -> dict:
         return {
             "phase": "BUILD",
             "error": error_summary,
-            "next_phase": "BUILD",  # Loop back
+            "next_phase": halt_next_phase,
             "artifacts": artifacts,
             "metrics": metrics,
         }
 
-    # ── SUCCESS ──
+    # ── SUCCESS / PARTIAL ──
     items_completed = sum(1 for i in backlog if i["status"] == "completed")
-    artifacts["build_status"] = "pass"
+    if not all_completed or bool(errors):
+        # D5: partial — items incomplete, but UAT + INT_TEST green.
+        artifacts["build_status"] = "partial"
+        artifacts["incomplete_items"] = incomplete_items
+    else:
+        artifacts["build_status"] = "pass"
     artifacts["implementation"] = "\n".join(all_code)
     artifacts["uat_results"] = uat_output
     if uat_result == "skip":
@@ -274,10 +324,45 @@ def build_output_mapping(child: BuildSubState) -> dict:
         }
     )
 
+    if all_completed:
+        # Reset the retry counter on a clean pass so a later failure starts
+        # fresh (mirrors the OpenHands-path reset in openhands_merge).
+        loop_counts = dict(artifacts.get("loop_counts", {}))
+        loop_counts["BUILD"] = 0
+        artifacts["loop_counts"] = loop_counts
+        next_phase = "SHIP"
+        return {
+            "phase": "BUILD",
+            "error": error_summary,
+            "next_phase": next_phase,
+            "artifacts": artifacts,
+            "metrics": metrics,
+        }
+
+    # D5: partial — count it toward the retry budget so a permanently
+    # incomplete build halts instead of livelocking.
+    fail_count = _increment_build_fail(artifacts)
+    if fail_count >= BUILD_MAX_RETRIES:
+        logger.warning(
+            "  -> [BUILD-LEGACY] D5 partial reached retry budget (%d/%d) -- halting",
+            fail_count,
+            BUILD_MAX_RETRIES,
+        )
+        # The terminal gate fires on `error and not next_phase`, so a
+        # budget-exhausted partial must carry a real error message.
+        if not error_summary:
+            error_summary = (
+                f"BUILD incomplete: {len(incomplete_items)} items unfinished "
+                f"({incomplete_items[:5]}); retry budget exhausted "
+                f"({fail_count}/{BUILD_MAX_RETRIES})"
+            )
+        next_phase = None
+    else:
+        next_phase = "BUILD"  # Loop back
     return {
         "phase": "BUILD",
         "error": error_summary,
-        "next_phase": "SHIP",
+        "next_phase": next_phase,
         "artifacts": artifacts,
         "metrics": metrics,
     }

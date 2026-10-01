@@ -191,6 +191,109 @@ class TestRoutePhase:
         with patch("graph.edges.get_threshold"):
             assert route_phase(state) == "REFLECT"
 
+    def test_build_budget_exhausted_d5_partial_halt_no_longer_livelocks(self):
+        """End-to-end (D5): the legacy partial path now persists the retry
+        counter and, at budget exhaustion, returns a real error +
+        next_phase=None. Prove the permanently-incomplete build no longer
+        loops BUILD forever:
+
+        * Pre-fix state (counter never persisted, next_phase="BUILD",
+          error=None) routes back to BUILD -> livelock.
+        * Terminal state (counter at budget 2, error set, next_phase=None)
+          does NOT route back to BUILD.
+
+        NOTE: with the unchanged route_phase, the terminal state lands on
+        BUILD's forward path (SEED_DATA -> VERIFY gate) rather than the
+        ERROR sink: the counter>=max_loops forward-path guard fires before
+        the error check, so a BUILD state with loop_counts["BUILD"]==2
+        forwards to SEED_DATA. The livelock is broken either way — the
+        cycle advances to the VERIFY gate (which owns its own halt
+        semantics) instead of looping BUILD forever. The ERROR sink is
+        only reachable for BUILD when counter < 2 (e.g. a terminal error
+        on the first failure).
+        Mirrors the OpenHands manifest path (openhands_merge._merge_results)
+        for the counter key, increment, and halt signaling.
+        """
+        from graph.edges import route_phase
+
+        # Terminal D5-partial state: second partial failure persisted
+        # loop_counts["BUILD"]=2 and returned a real error + next_phase=None.
+        terminal = {
+            "phase": "BUILD",
+            "metrics": MagicMock(uat_pass_rate=0.5, security_findings=0,
+                                 review_revisions=0, spec_confidence=0.9,
+                                 arch_uncertainty=0.3),
+            "artifacts": {
+                "build_status": "partial",
+                "loop_counts": {"BUILD": 2},
+            },
+            "error": "BUILD incomplete: 2 items unfinished; retry budget exhausted (2/2)",
+            "next_phase": None,
+        }
+        assert route_phase(terminal) != "BUILD"
+        # The forward-path guard (counter >= 2) routes BUILD -> SEED_DATA.
+        assert route_phase(terminal) == "SEED_DATA"
+
+        # Pre-fix state (counter stays 0, next_phase="BUILD", error=None):
+        # sub-threshold UAT on a partial build routes back to BUILD forever.
+        pre_fix = {
+            "phase": "BUILD",
+            "metrics": MagicMock(uat_pass_rate=0.5, security_findings=0,
+                                 review_revisions=0, spec_confidence=0.9,
+                                 arch_uncertainty=0.3),
+            "artifacts": {
+                "build_status": "partial",
+                "uat_pass_rate": 0.5,  # partial build -> sub-threshold UAT
+                "loop_counts": {},
+            },
+            "error": None,
+            "next_phase": "BUILD",
+        }
+        assert route_phase(pre_fix) == "BUILD"  # the livelock this fix removes
+
+    def test_build_budget_exhausted_d4_hard_fail_halt_no_longer_livelocks(self):
+        """End-to-end (D4): the legacy hard-fail path now persists the retry
+        counter; at budget exhaustion (counter=2, error + next_phase=None)
+        the state no longer routes back to BUILD — same forward-path
+        semantics as the D5 halt above."""
+        from graph.edges import route_phase
+
+        terminal = {
+            "phase": "BUILD",
+            "metrics": MagicMock(uat_pass_rate=0.0, security_findings=0,
+                                 review_revisions=0, spec_confidence=0.9,
+                                 arch_uncertainty=0.3),
+            "artifacts": {
+                "build_status": "fail",
+                "loop_counts": {"BUILD": 2},
+            },
+            "error": "BUILD hard fail: UAT failed; retry budget exhausted (2/2)",
+            "next_phase": None,
+        }
+        assert route_phase(terminal) != "BUILD"
+        assert route_phase(terminal) == "SEED_DATA"
+
+    def test_build_terminal_error_before_budget_routes_to_error(self):
+        """With counter < 2, an error + next_phase=None on BUILD routes to
+        the ERROR sink (the forward-path guard has not fired yet). This is
+        the ERROR landing the task refers to for a terminal build error
+        that occurs before the retry budget is exhausted."""
+        from graph.edges import route_phase
+
+        state = {
+            "phase": "BUILD",
+            "metrics": MagicMock(uat_pass_rate=0.0, security_findings=0,
+                                 review_revisions=0, spec_confidence=0.9,
+                                 arch_uncertainty=0.3),
+            "artifacts": {
+                "build_status": "fail",
+                "loop_counts": {"BUILD": 1},
+            },
+            "error": "BUILD hard fail (terminal)",
+            "next_phase": None,
+        }
+        assert route_phase(state) == "ERROR"
+
     def test_seed_data_to_verify(self):
         from graph.edges import route_phase
         state = self._make_state("SEED_DATA")

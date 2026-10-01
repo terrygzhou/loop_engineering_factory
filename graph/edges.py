@@ -96,7 +96,9 @@ def route_phase(state: WorkflowState) -> str:
         return _forward_paths.get(phase, END)
 
     # If there's an error, route to ERROR terminal for safe landing.
-    # Exception: next_phase is an intentional override (e.g., BUILD fail guard → REFLECT).
+    # Exception: next_phase is an intentional override.
+    # (BUILD no longer routes to REFLECT on retry-budget exhaustion —
+    #  it sets error + next_phase=None and the generic guard routes to ERROR.)
     # VERIFY is exempt: its gate branch below owns the error semantics (a
     # completed-and-failed gate retries via BUILD; only a terminal error
     # that never completed the gate — or an exhausted budget — halts).
@@ -127,7 +129,9 @@ def route_phase(state: WorkflowState) -> str:
 
     # BUILD -> check security, review, and UAT gates (subgraph handles seed+test+UAT)
     if phase == "BUILD":
-        # Respect explicit next_phase override (e.g., REFLECT from build_fail_count guard)
+        # Respect an explicit next_phase override when an error is set.
+        # (Legacy build_fail_count→REFLECT guard removed: an exhausted
+        #  BUILD retry budget now halts to ERROR via the generic guard.)
         if state.get("next_phase") and state.get("error"):
             return state["next_phase"] or "REFLECT"
         if m.security_findings > max_sec_findings:

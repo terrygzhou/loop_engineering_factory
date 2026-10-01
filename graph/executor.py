@@ -477,6 +477,19 @@ class WorkflowRunner:
             else:
                 return self._hil_auto_approve(phase, state, hil_type=hil_type)
 
+        # P2.5 fail-safe: only reach the blocking sync input() path when we
+        # actually have a TTY to prompt on. Headless / CI / non-interactive
+        # invocations without a TTY must not block a threadpool worker
+        # forever on input() — emit a warning and fall through to
+        # auto-approve-style generated defaults instead.
+        if not sys.stdin.isatty():
+            logger.warning(
+                "HIL prompt requested for phase=%s but stdin is not a TTY; "
+                "falling back to auto-approve defaults (headless/CI fail-safe)",
+                phase,
+            )
+            return self._hil_auto_approve(phase, state, hil_type=hil_type)
+
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None, self._hil_cli_sync, phase, state, hil_type

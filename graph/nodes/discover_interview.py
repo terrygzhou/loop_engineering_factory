@@ -55,48 +55,12 @@ def _generate_interview_questions(
     framework, then tailors each category to the project domain via LLM.
     Falls back to generic questions if description is too short or LLM fails.
     """
-    generic_questions = [
-        {
-            "key": "core_behavior",
-            "label": "Core Behavior",
-            "prompt": "What does this feature do? What are the primary user actions?",
-        },
-        {
-            "key": "data_model",
-            "label": "Data Model",
-            "prompt": "What entities and fields are involved? Any relationships between them?",
-        },
-        {
-            "key": "api_surface",
-            "label": "API Surface",
-            "prompt": "What endpoints, HTTP methods, and auth requirements do you need?",
-        },
-        {
-            "key": "integration",
-            "label": "Integration",
-            "prompt": "Does this integrate with external services, databases, or third-party APIs?",
-        },
-        {
-            "key": "ui_template",
-            "label": "UI",
-            "prompt": "Any specific UI requirements, templates, or styling preferences?",
-        },
-        {
-            "key": "validation",
-            "label": "Validation",
-            "prompt": "What input validation rules or data integrity constraints apply?",
-        },
-        {
-            "key": "edge_cases",
-            "label": "Edge Cases",
-            "prompt": "Are there known edge cases, error paths, or failure modes to handle?",
-        },
-        {
-            "key": "non_functional",
-            "label": "Non-Functional",
-            "prompt": "Any performance, security, or monitoring requirements?",
-        },
-    ]
+    # P2.4: generic fallback derived from the shared canonical list
+    # (graph/interview_questions.py) — one source of truth for both the
+    # Web UI fallback and this graph-side generic fallback.
+    from graph.interview_questions import to_graph_schema
+
+    generic_questions = to_graph_schema()
 
     # If description is too short, just use generic questions
     if len(project_description.strip()) < 20:

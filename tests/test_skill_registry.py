@@ -1,16 +1,35 @@
+import pytest
 from config.loader import config
 
-from tools.loader import build_skill_registry
+from tools.loader import LOCAL_SKILLS_DIR, build_skill_registry
 
 
-def test_pre_commit_review_present_and_old_name_absent():
-    registry = build_skill_registry()
+@pytest.fixture()
+def fresh_local_registry():
+    """Reset the module-level registry cache so a local-dir build never
+    returns a registry populated from a different (e.g. tmp) skills dir.
+    """
+    import tools.loader as loader
+
+    orig_registry, orig_mtime = loader._registry, loader._registry_mtime
+    loader._registry, loader._registry_mtime = {}, 0.0
+    try:
+        yield
+    finally:
+        loader._registry, loader._registry_mtime = orig_registry, orig_mtime
+
+
+def test_pre_commit_review_present_and_old_name_absent(fresh_local_registry):
+    # Pass the repo's LOCAL_SKILLS_DIR explicitly so the test exercises the
+    # actual on-disk skill set, not the configured skill_registry_path
+    # (/app/skills in the container, nonexistent on a normal host).
+    registry = build_skill_registry(str(LOCAL_SKILLS_DIR))
     assert "pre-commit-review" in registry
     assert "requesting-code-review" not in registry
 
 
-def test_code_review_and_quality_merged_away():
-    registry = build_skill_registry()
+def test_code_review_and_quality_merged_away(fresh_local_registry):
+    registry = build_skill_registry(str(LOCAL_SKILLS_DIR))
     assert "code-review-and-quality" not in registry
     assert "pre-commit-review" in registry
 

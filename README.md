@@ -4,6 +4,8 @@ AI agent-driven loop-engineering factory to produce software products based on t
 
 ![The UI dashboard](image.png)
 
+> _Screenshot pending: replace `image.png` with a current Web UI capture before publishing._
+
 It is a Self-improving AI-driven software development engine built on LangGraph.
 
 ```
@@ -30,8 +32,8 @@ stateDiagram-v2
     ARCH_REVIEW --> PLAN : rejected
 
     BUILD --> SEED_DATA : gates pass
-    BUILD --> BUILD : security / revisions / UAT gate failed
-    BUILD --> REFLECT : 3 consecutive build failures
+    BUILD --> BUILD : security / revisions / UAT gate failed (retry)
+    BUILD --> ERROR : retry budget (BUILD_MAX_RETRIES=2) exhausted
 
     %% HIL interrupt points (in-node interrupt())
     note right of DISCOVER : interrupt() x2<br/>project_setup + interview
@@ -136,7 +138,7 @@ graph LR
 
         subgraph Tools["Tool Layer"]
             LLM["LLM Tool<br/>(tools/llm.py)"]
-            Skills["Skill Loader<br/>(35 SKILL.md)"]
+            Skills["Skill Loader<br/>(34 SKILL.md)"]
             ChromaC["ChromaDB Client<br/>(feedback/)"]
         end
     end
@@ -234,7 +236,7 @@ graph TB
 
 ## Skills Per Workflow State
 
-Each workflow phase chains specialized skills from `skills/` (35 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
+Each workflow phase chains specialized skills from `skills/` (34 registered). Skills are `SKILL.md` files — context templates that the LLM follows to produce specific outputs. A missing skill is silently skipped.
 
 ### Phase-Specific Skill Chains
 
@@ -245,12 +247,12 @@ Each workflow phase chains specialized skills from `skills/` (35 registered). Sk
 | **PLAN** | `planning-and-task-breakdown` → `doubt-driven-development` → `architecture-diagram-generator` (4 diagrams in parallel) | Implementation plan, architectural doubt resolution, and 4 parallel diagram generations. |
 | **ARCH_REVIEW** | _(human gate — no skills called)_ | User reviews spec, plan, and Mermaid diagrams. Approve → BUILD, Reject → PLAN. |
 | **BUILD** | `incremental-implementation` → `test-driven-development` (per task) → **deploy_gate** (health check) → OpenHands Agent UAT (`agent` mode default) → `security-and-hardening` → `requesting-code-review` → **SECURITY_GATE** | Per-task code gen with TDD (legacy subgraph). Docker build + health check. BUILD phase: OpenHands agent delegation via Gateway API. SECURITY_GATE: aggregate STRIDE security audit + code quality review. |
-| **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Executes seed scripts inside Docker containers. |
-| **VERIFY** | _(placeholder — pass-through to SHIP)_ | Currently a pass-through node. UAT moved to BUILD subgraph. Future: real test execution, linting, security scans, and performance profiling. |
+| **SEED_DATA** | `ai-workflow-data-seeding` | Test data generation. Model-driven when `arckit_data_model` is set (writes `seed_data_model`, deterministic, no LLM); otherwise a pass-through placeholder (`skipped_placeholder`). Forwards to VERIFY. |
+| **VERIFY** | `pre-commit-review` (multi-axis code quality) + machine-checkable acceptance tests | Conditional gate (Decision 2 + W5): writes `verify_status` from `test_errors` / critical LLM findings / parsed acceptance tests. pass → SHIP; fail → BUILD (retry) or ERROR (budget exhausted / terminal gate error). LLM review text stays advisory. |
 | **SHIP** | `observability-and-instrumentation` → `shipping-and-launch` → `production-deployment` → `git-workflow` | Deployment packaging: observability setup, launch checklist, cloud platform configuration (AWS/Azure/GCP), version tagging. |
 | **REFLECT** | Self-improvement via ChromaDB pattern storage | Aggregates cycle metrics, queries historical patterns, generates config/guardrail diff proposals for next cycle. |
 
-### Local Skills Registry (35 skills)
+### Local Skills Registry (34 skills)
 
 ```
 skills/
@@ -259,7 +261,6 @@ skills/
 ├── architecture-diagram-generator/SKILL.md        # PLAN phase
 ├── browser-testing-with-devtools/SKILL.md         # Standalone
 ├── ci-cd-and-automation/SKILL.md                  # Standalone
-├── code-review-and-quality/SKILL.md               # BUILD phase (quality)
 ├── code-simplification/SKILL.md                   # Standalone (future VERIFY)
 ├── coding-principles/SKILL.md                     # DISCOVER phase (context refinement)
 ├── context-engineering/SKILL.md                   # Standalone
@@ -278,9 +279,9 @@ skills/
 ├── observability-and-instrumentation/SKILL.md     # SHIP phase
 ├── performance-optimization/SKILL.md              # Standalone (future VERIFY)
 ├── planning-and-task-breakdown/SKILL.md           # PLAN phase
+├── pre-commit-review/SKILL.md                     # VERIFY phase (multi-axis quality gate)
 ├── production-deployment/SKILL.md                 # SHIP phase
-├── requesting-code-review/SKILL.md                # BUILD phase (SECURITY_GATE)
-├── security-and-hardening/SKILL.md                # BUILD phase (SECURITY_GATE)
+├── security-and-hardening/SKILL.md                # BUILD phase (SECURITY_GATE: STRIDE + quality)
 ├── shipping-and-launch/SKILL.md                   # SHIP phase
 ├── source-driven-development/SKILL.md             # DEFINE phase (parallel)
 ├── spec-driven-development/SKILL.md               # DEFINE phase (parallel)
@@ -308,7 +309,7 @@ All external parameters are centralized in `config/config.yaml`. Override via en
 
 ```bash
 # Quick override — no code changes needed
-export LLM_BASE_URL="http://host.docker.internal:8080/v1"
+export LLM_BASE_URL="http://pop-os:8080/v1"
 export LLM_MODEL="Qwen3.8-27B"
 export LOG_LEVEL="info"
 ```
@@ -318,7 +319,7 @@ Or edit `config/config.yaml` directly:
 ```yaml
 services:
   llm:
-    base_url: http://host.docker.internal:8080/v1
+    base_url: http://pop-os:8080/v1
     model: Qwen3.8-27B
     temperature: 0.1
     max_tokens: 65535
@@ -405,6 +406,51 @@ docker compose up -d --build
 
 ---
 
+## Deployment Guidance
+
+### 1. Start with the CLI
+
+For a first run, **use the CLI entry point (`main.py` headless auto-approve mode) before the Web UI**. The CLI exercises the core LangGraph node chain directly; the Web UI additionally runs the SSE event bridge and HIL-interrupt handling, which have known bugs being fixed in the webhook bridging between the bridge and the LangGraph nodes. Running the CLI first isolates engine issues from bridge issues and avoids chasing UI-layer regressions.
+
+### 2. External LLM Endpoints
+
+LEF talks to any **OpenAI-compatible** endpoint via `LLM_BASE_URL` / `LLM_MODEL` — the default SGLang local server is not a requirement. External providers work out of the box:
+
+```bash
+# OpenAI
+export LLM_BASE_URL="https://api.openai.com/v1"
+export LLM_MODEL="gpt-5"
+export LLM_API_KEY="sk-..."
+
+# Anthropic (via an OpenAI-compatible proxy such as LiteLLM)
+export LLM_BASE_URL="http://localhost:4000/v1"
+export LLM_MODEL="claude-sonnet-4-5"
+```
+
+> Note: Claude and other non-OpenAI providers are OpenAI-compatible only through a proxy layer (e.g., LiteLLM, OpenRouter). Native provider SDKs are not supported.
+
+### 3. Observability
+
+The **built-in observability stack** (OTel Collector → Arize Phoenix :46006, Promtail → host Grafana stack, as shown in the Deployment Architecture diagram) is the recommended default — no external accounts required. If you prefer a cloud provider (e.g., Datadog, Grafana Cloud, Honeycomb, SigNoz), you can point the OTel exporter and log pipeline at your cloud endpoints and omit the built-in containers.
+
+### 4. RAM Requirements
+
+Before deploying, verify that the host has enough RAM for **all** built-in containers simultaneously:
+
+| Container | CPU limit | Memory limit |
+|---|---|---|
+| `loop` (orchestrator + nginx + FastAPI) | 2 | 3G |
+| `openhands` (headless agent server, Gateway API) | 4 | 4G |
+| `canvas` (OpenHands Agent Canvas UI — optional) | 4 | 4G |
+| `chromadb` | _(no limit)_ | 512M |
+| `otel-collector` | _(no limit)_ | 256M |
+| `phoenix` | _(no limit)_ | 1G |
+| `promtail` | _(no limit)_ | 128M |
+
+**Stack total: ~13G** of container memory limits (more if `canvas` runs alongside `openhands` — they are independent agent servers), **plus the LLM server**: a local SGLang inference of a 27B model needs substantial additional RAM/VRAM. Verify the actual figures with `docker compose config` before deployment and size the host accordingly; a memory-constrained host will OOM-kill containers mid-run.
+
+---
+
 ## Configuration
 
 Three-tier priority: **Environment Variables** > **`config/config.yaml`** > **Built-in Defaults**.
@@ -413,7 +459,7 @@ All external parameters are centralized — zero hardcoded URLs, ports, or paths
 
 ```yaml
 paths:
-  project_name: test_discover_fix
+  project_name: test-proj-123
   workspace_dir: ./output
   skills_dir: skills
   storage_dir: ./storage
@@ -421,7 +467,7 @@ paths:
 
 services:
   llm:
-    base_url: http://host.docker.internal:8080/v1
+    base_url: http://pop-os:8080/v1
     model: Qwen3.8-27B
   chroma:
     url: http://chromadb:8000
@@ -441,6 +487,12 @@ superApp:
   openhands_port: 8000
   agent_conversations: 3
   agent_timeout_seconds: 3600
+
+openhands:
+  url: http://openhands-server:8000
+  secret_key: ${OH_SECRET_KEY}
+  workspace_path: /opt/workspace_base/output
+  timeout: 3600
 ```
 
 ---

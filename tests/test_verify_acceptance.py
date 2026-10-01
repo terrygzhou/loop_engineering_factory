@@ -222,6 +222,53 @@ def test_verify_timed_out_check_counts_as_failure(tmp_path, monkeypatch):
     assert out["artifacts"]["verify_status"] == "fail"
 
 
+# ── Check-command hardening — rejections are failures, never exec ──
+
+
+def _validate(check):
+    from graph.nodes.verify_acceptance import _validate_check_command
+
+    return _validate_check_command(check)
+
+
+def test_shell_invocations_rejected():
+    for check in ('bash -c "id"', "sh -c 'id'", "zsh -c 'id'"):
+        argv, reason = _validate(check)
+        assert argv is None, check
+        assert reason.startswith("rejected"), (check, reason)
+
+
+def test_redirection_rejected():
+    argv, reason = _validate("curl http://x > out")
+    assert argv is None
+    assert "metacharacters" in reason
+
+
+def test_legitimate_check_still_validates():
+    argv, reason = _validate("pytest -q")
+    assert reason == ""
+    assert argv == ["pytest", "-q"]
+
+
+def test_rejected_check_recorded_as_failure_not_executed(tmp_path):
+    from graph.nodes.verify_acceptance import _run_acceptance_tests
+
+    def writer(_event):
+        pass
+
+    results = _run_acceptance_tests(
+        [
+            {"id": "AT-SH", "check": "bash -c 'id'", "expect": "no exec"},
+            {"id": "AT-OK", "check": "true", "expect": "ok"},
+        ],
+        str(tmp_path),
+        writer,
+    )
+    assert results["AT-SH"]["passed"] is False
+    assert "rejected" in results["AT-SH"]["output"]
+    assert results["AT-OK"]["passed"] is True
+
+
 # ── Task 2.4 — routing (Decision 2 preserved) ──────────────────────
 
 

@@ -36,14 +36,26 @@ _PROMPT_INJECTION_PATTERNS = re.compile(
 
 
 def _sanitize_user_input(text: str) -> str:
-    """Wrap user-provided text in delimiters and filter injection attempts.
+    """Wrap user-provided text in delimiters and flag injection patterns.
 
-    This wraps content so the model can distinguish instructions from user data,
-    and flags suspicious patterns for the model to reject.
+    SECURITY NOTE: this is a *defense-in-depth telemetry* layer, NOT a
+    security boundary. It (a) wraps user context in explicit delimiters so
+    the model can distinguish instructions from data, and (b) annotates
+    known injection phrases with ``[WARNING: INJECTION_ATTEMPT: ...]`` so
+    the model is explicitly alerted. It does not strip, block, or reject
+    content — the annotation may be bypassed by phrasings outside
+    ``_PROMPT_INJECTION_PATTERNS``. The primary mitigations are the
+    delimiters above and the binary allowlist / shell-metacharacter
+    rejection in ``graph/nodes/verify_acceptance.py`` (which prevents
+    spec-derived commands from reaching a shell at all).
+
+    Behavior contract: empty input is returned unchanged; non-empty input
+    is wrapped between ``<<USER_INPUT_START>>`` / ``<<USER_INPUT_END>>``
+    markers.
     """
     if not text:
         return text
-    # Flag injection patterns by prefixing with a warning
+    # Flag injection patterns by prefixing with a warning (advisory only)
     flagged = _PROMPT_INJECTION_PATTERNS.sub(
         lambda m: f"[WARNING: INJECTION_ATTEMPT: {m.group(0)}]", text
     )
@@ -266,19 +278,17 @@ def invoke_skill(
     prepared = prepare_context_for_llm(contexts, max_tokens=max_tokens)
     headroom_info = prepared["headroom"]
 
-    # Use compressed context from prepare_context_for_llm — not raw contexts
-    compressed_context = _sanitize_user_input(prepared["context"])
+    # Use compressed context from prepare_context_for_llm — not raw contexts.
+    # The user_prompt is wrapped exactly once (avoids double-wrapping the
+    # marker delimiters).
+    raw_user = prepared["context"] if prepared["context"] else contexts["task"]
+    user_prompt = _sanitize_user_input(raw_user)
 
     system_prompt = (
         f"You are an expert following these instructions:\n\n"
         f"{contexts['skill_instructions']}\n\n"
         f"Respond with actionable output. Be specific, include file paths, "
         f"code snippets, and verification steps."
-    )
-    user_prompt = (
-        _sanitize_user_input(compressed_context)
-        if compressed_context
-        else _sanitize_user_input(contexts["task"])
     )
 
     try:
@@ -409,7 +419,8 @@ async def invoke_skill_async(
         f"Respond with actionable output. Be specific, include file paths, "
         f"code snippets, and verification steps."
     )
-    user_prompt = compressed_context if compressed_context else contexts["task"]
+    raw_user = compressed_context if compressed_context else contexts["task"]
+    user_prompt = _sanitize_user_input(raw_user)
 
     def _invoke():
         response = _invoke_with_retry(
