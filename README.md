@@ -148,7 +148,7 @@ graph LR
         Docker["Docker Engine"]
         Chroma["ChromaDB :8000<br/>(internal)"]
         OpenHands["OpenHands<br/>(:8000 in container;<br/>host :43005)"]
-        Canvas["OpenHands Agent Canvas<br/>(:8000 in container;<br/>host :43006)"]
+        Canvas["OpenHands Agent Canvas<br/>(:8000 in container;<br/>host :43006)<br/>(optional)"]
     end
 
     U -->|browser| WebUI
@@ -176,8 +176,10 @@ graph LR
     classDef hil fill:#FFD700,stroke:#B8860B,stroke-width:2px,color:#000
     classDef agent fill:#90EE90,stroke:#2E8B57,stroke-width:2px,color:#000
     classDef router fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
+    classDef optional stroke-dasharray: 5 5,stroke:#E65100,stroke-width:2px,color:#E65100
     class BuildProxy agent
-    class OpenHands,Canvas external
+    class OpenHands external
+    class Canvas optional
     class Router router
 ```
 
@@ -196,7 +198,7 @@ graph TB
             OC[("OTel Collector<br/>:4318")]
             PH[("Phoenix<br/>:46006")]
             OH[("OpenHands<br/>:8000 in container<br/>(host :43005)")]
-            CV[("Agent Canvas<br/>:8000 in container<br/>(host :43006)")]
+            CV[("Agent Canvas<br/>:8000 in container<br/>(host :43006)<br/>(optional)")]
             PT[("Promtail")]
         end
     end
@@ -206,10 +208,14 @@ graph TB
     LC -->|"OTLP :4318"| OC
     LC -->|"HTTP :8080"| LLM_C
     LC -->|"Gateway"| OH
-    LC -->|"Gateway"| CV
+    LC -.-|"Gateway<br/>(optional)"| CV
+    CV -.-|"HTTP :8080"| LLM_C
     OH -->|"HTTP :8080"| LLM_C
     OC -->|"HTTP :46006"| PH
     PT -->|"logs → Loki :3100<br/>(host Grafana stack)"| PH
+
+    classDef optional stroke-dasharray: 5 5,stroke:#E65100,stroke-width:2px,color:#E65100
+    class CV optional
 
 ```
 
