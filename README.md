@@ -33,7 +33,7 @@ stateDiagram-v2
 
     BUILD --> SEED_DATA : gates pass
     BUILD --> BUILD : security / revisions / UAT gate failed (retry)
-    BUILD --> ERROR : retry budget (BUILD_MAX_RETRIES=2) exhausted
+    BUILD --> ERROR : retry budget (max_loops=2) exhausted
 
     %% HIL interrupt points (in-node interrupt())
     note right of DISCOVER : interrupt() x2<br/>project_setup + interview
@@ -43,8 +43,8 @@ stateDiagram-v2
     classDef gate fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
     classDef normal fill:#F0F0F0,stroke:#999,stroke-width:1px,color:#000
     class DISCOVER,ARCH_REVIEW hil
-    class DEFINE,PLAN,BUILD,SHIP gate
-    class SEED_DATA,VERIFY,REFLECT normal
+    class DEFINE,PLAN,BUILD,SHIP,VERIFY gate
+    class SEED_DATA,REFLECT normal
 ```
 
 #### BUILD Phase: OpenHands Agent Delegation
@@ -56,10 +56,10 @@ graph LR
     START([START]) --> OH_CHECK["OpenHands health<br/>check"]
 
     OH_CHECK -->|healthy| CREATE_CONV["Create conversation<br/>POST /api/conversations"]
-    OH_CHECK -->|unhealthy| INLINE["Inline fallback<br/>build logic"]
+    OH_CHECK -->|unhealthy| INLINE["Local BUILD subgraph<br/>build_subgraph_legacy.py"]
 
     CREATE_CONV --> POLL["Poll conversation<br/>GET /api/conversations/{id}"]
-    POLL -->|finished| PARSE["Parse assistant text"]
+    POLL -->|finished| PARSE["Parse build_report.json<br/>manifest (Decision 1)"]
     POLL -->|timeout| INLINE
 
     PARSE --> WRITE_FILES["Write files to disk"]
@@ -67,7 +67,7 @@ graph LR
     GATE -->|pass| END([END])
     GATE -->|fail| START
 
-    INLINE --> INLINE_BUILD["Incremental implementation<br/>per task from backlog"]
+    INLINE --> INLINE_BUILD["8-node subgraph:<br/>IMPL_PLAN → BACKLOG → IMPLEMENT →<br/>UNIT_TEST → INT_TEST → SEED →<br/>DEPLOY_GATE → UAT → SECURITY_GATE"]
     INLINE_BUILD --> GATE
 
     classDef agent fill:#90EE90,stroke:#2E8B57,stroke-width:2px,color:#000
@@ -148,7 +148,7 @@ graph LR
         Docker["Docker Engine"]
         Chroma["ChromaDB :8000<br/>(internal)"]
         OpenHands["OpenHands<br/>(:8000 in container;<br/>host :43005)"]
-        Builder["DELETED<br/>OpenHands Gateway replaces remote builder"]
+        Canvas["OpenHands Agent Canvas<br/>(:8000 in container;<br/>host :43006)"]
     end
 
     U -->|browser| WebUI
@@ -177,7 +177,7 @@ graph LR
     classDef agent fill:#90EE90,stroke:#2E8B57,stroke-width:2px,color:#000
     classDef router fill:#87CEEB,stroke:#4682B4,stroke-width:2px,color:#000
     class BuildProxy agent
-    class OpenHands,Builder external
+    class OpenHands,Canvas external
     class Router router
 ```
 
@@ -192,11 +192,11 @@ graph TB
 
         subgraph DockerStack["Docker Compose Stack"]
             LC[("Loop Container<br/>:4080 / :48011 / :48081")]
-            BLD["DELETED<br/>OpenHands Gateway replaces remote builder"]
             CC[("ChromaDB<br/>:8000 internal")]
             OC[("OTel Collector<br/>:4318")]
             PH[("Phoenix<br/>:46006")]
             OH[("OpenHands<br/>:8000 in container<br/>(host :43005)")]
+            CV[("Agent Canvas<br/>:8000 in container<br/>(host :43006)")]
             PT[("Promtail")]
         end
     end
@@ -206,10 +206,11 @@ graph TB
     LC -->|"OTLP :4318"| OC
     LC -->|"HTTP :8080"| LLM_C
     LC -->|"Gateway"| OH
-    LC -->|"build"| BLD
+    LC -->|"Gateway"| CV
     OH -->|"HTTP :8080"| LLM_C
     OC -->|"HTTP :46006"| PH
-    PT -->|"logs"| PH
+    PT -->|"logs → Loki :3100<br/>(host Grafana stack)"| PH
+
 ```
 
 ### Component Overview
@@ -370,6 +371,7 @@ docker compose up -d --build loop
 | `phoenix` | :46006 | Trace visualization + LLM evaluation UI (Arize Phoenix) |
 | `promtail` | _(internal)_ | Log aggregation |
 | `openhands` | :43005 (host) → :8000 (container) | OpenHands Agent Server — BUILD delegation |
+| `canvas` | :43006 (host) → :8000 (container) | OpenHands Agent Canvas — all-in-one agent dashboard UI (optional) |
 
 > **Note**: Prometheus and Grafana run as a separate Grafana stack on the host (`~/.hermes/grafana-stack/`), not in this Docker Compose file.
 
@@ -398,7 +400,7 @@ docker compose up -d --build
 - **Entry Points**: CLI (`main.py`) for headless auto-approve, or Web UI (FastAPI `:48011`) for HIL workflow
 - **LangGraph Engine**: `StateGraph` with 9 phase nodes, conditional routing via `route_phase()` in `edges.py`, in-node `interrupt()` for HIL pauses
 - **State Management**: `WorkflowState` (~50 top-level keys) + `CycleMetrics` (9 fields) — pruned for token efficiency. All keys initialized in `graph/executor.py`
-- **Skills System**: 35 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
+- **Skills System**: 34 `SKILL.md` files loaded by `tools/loader.py`, invoked via `tools/llm.py` with context optimization
 - **HIL Bridge**: SSE event streaming between LangGraph executor and frontend; uses in-node `interrupt()` calls for DISCOVER double-pause and ARCH_REVIEW approval
 - **Feedback Loop**: ChromaDB stores historical patterns across cycles; REFLECT phase queries and generates config diff proposals
 - **Evaluation**: `service/evaluator.py` runs LLM-as-judge on DISCOVER, PLAN, and REVIEW outputs; results stream to Phoenix UI via OTel spans. Context-aware — the evaluator extracts project domain from the spec before scoring. Graceful degradation: eval failures never block the workflow.
